@@ -48,7 +48,8 @@ Ask the user which AI apps should use FlowState. Known names for the script:
 | Claude Code | `claude-code` | `~/.claude.json` (quit Claude Code first) |
 | Codex CLI | `codex` | `~/.codex/config.toml` |
 | Grok Build | `grok` | `~/.grok/config.toml` |
-| anything else with an `mcpServers` JSON file | `--config <path>` | that file |
+| Cline, or anything else with an `mcpServers` JSON file | `--config <path>` | that file |
+| VS Code (Copilot), Zed | not supported; don't use `--config` | see "Manual config" below |
 
 `--clients auto` picks every app whose config folder exists. Ask the user to fully quit
 the apps you will configure (some apps rewrite their config when they exit).
@@ -194,6 +195,74 @@ through its `search_tool` / `use_tool` meta-tools, so the tools are named
 rules; to make it use FlowState in a project, add a line to that project's `AGENTS.md`:
 "At the start of each task call flowstate__start_here with this project's FlowState name,
 and record decisions, changes and problems with flowstate__log_work."
+
+### VS Code (GitHub Copilot agent mode)
+
+VS Code reads `.vscode/mcp.json` in a workspace, or the user-level `mcp.json` (open it with
+the Command Palette: **MCP: Open User Configuration**). Its top-level key is `servers`, not
+`mcpServers`, so the Claude Desktop snippet does not work as is:
+
+```json
+{
+  "servers": {
+    "flowstate": {
+      "type": "stdio",
+      "command": "<venv python>",
+      "args": ["-m", "flowstate"],
+      "env": {
+        "FLOWSTATE_DB": "<DB>",
+        "PYTHONPATH": "<REPO>/mcp-server"
+      }
+    }
+  }
+}
+```
+
+Don't use `setup_flowstate.py --config <file>` on this file: the script only knows the
+`mcpServers` format and would add an `mcpServers` object that VS Code ignores. Edit it by
+hand. Then start the server from the **MCP: List Servers** view
+and use FlowState from Copilot Chat in Agent mode.
+
+### Cline (VS Code extension)
+
+Cline keeps its servers in `cline_mcp_settings.json` under an `mcpServers` object, so
+the Claude Desktop snippet above works as is. Open it from the Cline panel: **MCP Servers**
+icon, **Configure** tab, **Configure MCP Servers**. With VS Code it is at:
+
+- Windows: `%APPDATA%\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json`
+- macOS: `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json`
+- Linux: `~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json`
+- Cline CLI: `~/.cline/data/settings/cline_mcp_settings.json` (or `CLINE_MCP_SETTINGS_PATH`)
+
+(VS Code Insiders, Cursor and other VS Code forks use their own folder instead of `Code`.)
+Because it is an `mcpServers` file, the script can register it:
+`PY setup_flowstate.py --config "<path to cline_mcp_settings.json>"`.
+
+### Zed
+
+Zed reads MCP servers from `context_servers` in its `settings.json` (open it with the
+`zed: open settings file` action; macOS and Linux `~/.config/zed/settings.json`, Windows
+`%APPDATA%\Zed\settings.json`), or from **Settings > AI > MCP Servers**:
+
+```json
+{
+  "context_servers": {
+    "flowstate": {
+      "command": "<venv python>",
+      "args": ["-m", "flowstate"],
+      "env": {
+        "FLOWSTATE_DB": "<DB>",
+        "PYTHONPATH": "<REPO>/mcp-server"
+      }
+    }
+  }
+}
+```
+
+Merge the `flowstate` entry into any existing `context_servers` object. The shape has
+changed between Zed versions; this is the one in Zed's MCP docs (zed.dev/docs/ai/mcp) as
+of October 2026, so check there if an older Zed rejects it. Don't use the script's `--config` on this
+file (it would add an `mcpServers` object Zed ignores); edit it by hand.
 
 ### Any other MCP client
 

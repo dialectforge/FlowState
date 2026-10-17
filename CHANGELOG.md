@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Getting started
+- AGENTS.md: setup snippets for VS Code (GitHub Copilot), Cline and Zed.
+
+### For contributors
+- CONTRIBUTING.md, and a GitHub Actions workflow that runs the tests on Windows, macOS and
+  Linux with Python 3.11, 3.12 and 3.13.
+- Package metadata: new description, project URLs, keywords and classifiers.
+
 ## 2.0.2 - 2026-10-17
 
 ### Working with your AI
