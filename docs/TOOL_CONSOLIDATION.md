@@ -55,7 +55,7 @@ These are already optimal single-purpose tools:
 - initialize_session_v13, finalize_session_v13 (can use session tool)
 - link_items, find_related, get_cross_references (rarely used, can add back if needed)
 - get_component_history (can use search)
-- generate_project_story, generate_problem_journey, generate_architecture_diagram (GUI-only features)
+- generate_project_story, generate_problem_journey, generate_architecture_diagram (visual-story features)
 
 ## Final Count: 21 tools
 

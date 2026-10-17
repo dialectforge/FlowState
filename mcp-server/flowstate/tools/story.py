@@ -5,7 +5,7 @@ from .utils import get_db
 def generate_project_story(project_id: int) -> dict:
     """
     Generate narrative storyboard data for a project.
-    Returns structured data that GUI renders as visual story.
+    Returns structured data that a client can render as a visual story.
     
     Args:
         project_id: The project ID

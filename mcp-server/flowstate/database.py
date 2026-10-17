@@ -6,7 +6,7 @@ import platform
 import sqlite3
 from pathlib import Path
 from typing import Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from .models import (
     Project, Component, Change, Problem, SolutionAttempt, 
@@ -14,10 +14,13 @@ from .models import (
 )
 
 
-# Default database location - use same path as Tauri GUI
+# Default database location
 # macOS: ~/Library/Application Support/flowstate/flowstate.db
 # Linux: ~/.local/share/flowstate/flowstate.db
 # Windows: %LOCALAPPDATA%/flowstate/flowstate.db
+# Resolution order: FLOWSTATE_DB -> %FLOWSTATE_HOME%/flowstate.db -> per-OS default.
+# (No machine-specific paths here; a Windows box that keeps data on D:\ sets
+# FLOWSTATE_DB or FLOWSTATE_HOME in its launcher.)
 import platform
 if platform.system() == "Darwin":
     DEFAULT_DB_PATH = Path.home() / "Library" / "Application Support" / "flowstate" / "flowstate.db"
@@ -25,6 +28,10 @@ elif platform.system() == "Windows":
     DEFAULT_DB_PATH = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "flowstate" / "flowstate.db"
 else:
     DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "flowstate" / "flowstate.db"
+if os.environ.get("FLOWSTATE_HOME"):
+    DEFAULT_DB_PATH = Path(os.environ["FLOWSTATE_HOME"]).expanduser() / "flowstate.db"
+if os.environ.get("FLOWSTATE_DB"):
+    DEFAULT_DB_PATH = Path(os.environ["FLOWSTATE_DB"]).expanduser()
 SCHEMA_PATH = Path(__file__).parent.parent.parent / "database" / "schema.sql"
 
 
@@ -33,9 +40,11 @@ def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
     path = db_path or DEFAULT_DB_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     
-    conn = sqlite3.connect(str(path))
+    conn = sqlite3.connect(str(path), timeout=5.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # Two processes (stdio desktop app + HTTP server) can share one DB file.
+    conn.execute("PRAGMA busy_timeout = 5000")
     return conn
 
 
@@ -48,6 +57,8 @@ def init_db(db_path: Optional[Path] = None) -> None:
         conn.commit()
     finally:
         conn.close()
+    from .migrations import migrate  # v2 tables (numbered migrations)
+    migrate(db_path or DEFAULT_DB_PATH, backup_first=False)
 
 
 class Database:
@@ -716,7 +727,8 @@ class Database:
                 return None
             
             started = datetime.fromisoformat(row['started_at'])
-            duration = int((datetime.now() - started).total_seconds() / 60)
+            # started_at is CURRENT_TIMESTAMP (UTC); compare against UTC, not local time
+            duration = int((datetime.now(timezone.utc).replace(tzinfo=None) - started).total_seconds() / 60)
             
             conn.execute(
                 """UPDATE sessions 

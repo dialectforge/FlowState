@@ -1,5 +1,6 @@
 """Git operations tools."""
 
+import re
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -148,6 +149,16 @@ def git_status() -> dict:
     }
 
 
+_SECRET_FILE = re.compile(
+    r"(token|secret|credential|password|passwd|\.env($|\.)|\.pem$|\.key$|\.p12$|\.pfx$|"
+    r"^id_(rsa|dsa|ecdsa|ed25519)|\.log$)", re.I)
+
+
+def is_secret_file(path: str) -> bool:
+    """File names that must never be committed from the data folder."""
+    return bool(_SECRET_FILE.search(path.replace("\\", "/").rsplit("/", 1)[-1]))
+
+
 def git_sync(commit_message: Optional[str] = None) -> dict:
     """
     Perform full sync: add all, commit, pull --rebase, push.
@@ -169,7 +180,16 @@ def git_sync(commit_message: Optional[str] = None) -> dict:
     success, stdout, stderr = _run_git_command(["add", "."])
     if not success:
         return {"success": False, "step": "add", "error": stderr}
-    
+
+    # Never commit tokens, keys, .env files or logs, even if .gitignore misses them.
+    _, staged, _ = _run_git_command(["diff", "--cached", "--name-only"])
+    risky = [p for p in staged.splitlines() if p.strip() and is_secret_file(p.strip())]
+    if risky:
+        _run_git_command(["reset", "-q", "--", *risky])
+        return {"success": False, "step": "add", "refused": risky,
+                "error": "These files look like secrets or logs and were not committed. Move "
+                         "them out of the data folder or add them to .gitignore, then sync again."}
+
     # Check if there's anything to commit
     success, stdout, _ = _run_git_command(["status", "--porcelain"])
     has_changes = bool(stdout.strip())

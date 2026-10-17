@@ -1,0 +1,35 @@
+# FlowState
+
+> FlowState is a free, open-source (MIT), local-first project memory for AI apps: an MCP server (Python 3.11+, SQLite) that stores todos, changes, decisions, problems and learnings per project in a file on the user's machine. Agents call `start_here` first for a short project brief (quick / standard / deep), record work with `log_work`, and sessions open and close automatically. Auto-captured summaries and suggested records wait in a review queue for the user's OK; the user sets the review mode (off / auto_only / types / everything). Projects have hard rules, handoff notes, cross-project links with change alerts, priorities, subtasks and blockers, edit history with undo, and an extractive `ask` tool. Every recorded change keeps the app, the AI model (only when the app supplies it, never guessed), the machine or workspace and how the app was identified; a "Who did what" view (review page, and `history(action="who")`) lists them. The local/LAN HTTP server takes per-app keys (`flowstate keys add`), so the app name comes from the key. Writes containing secrets are refused. Transports: stdio, and HTTP with a bearer token; optional remote access for cloud AIs through the user's own Cloudflare Tunnel with OAuth 2.1 and per-app tokens. Nightly local backups and an optional private-only GitHub off-site copy are built in. An Agent Skill (skills/flowstate) teaches the routine.
+
+Repository: https://github.com/dialectforge/FlowStateV1.1
+
+## Start here
+
+- [README.md](README.md): what FlowState is, quick start, features, commands, tools, honest limits, upgrading from v1.1
+- [AGENTS.md](AGENTS.md): step-by-step install for an AI agent (OS and Python check, setup script, which questions to ask the user, config snippets for Claude Desktop, Cursor, Windsurf, Claude Code, Codex CLI, Grok Build and other MCP clients, HTTP server, backups, how agents should use FlowState, settings, working on this repo)
+- [setup_flowstate.py](setup_flowstate.py): idempotent cross-platform setup script, standard library only (venv, database and numbered migrations, client registration with config backups, `--schedule-backups`, opt-in `--offsite-github OWNER/NAME` for private repos only, `--install-skill`, `--verify`, `--dry-run`, `--help`)
+- [CHANGELOG.md](CHANGELOG.md): what changed in each release
+
+## Using it
+
+- [AGENTS.md#how-agents-should-use-flowstate-once-its-connected](AGENTS.md#how-agents-should-use-flowstate-once-its-connected): the rules the server sends every client
+- [skills/flowstate/SKILL.md](skills/flowstate/SKILL.md): the Agent Skill (the FlowState routine for any AI)
+- [skills/flowstate/references/record-types.md](skills/flowstate/references/record-types.md): examples of each record type
+- [mcp-server/flowstate/agent_guide.py](mcp-server/flowstate/agent_guide.py): exact MCP instructions, prompt and tool wording
+- [mcp-server/flowstate/tooldefs.py](mcp-server/flowstate/tooldefs.py): every tool and its arguments
+
+## Docs
+
+- [AGENTS.md#http-server](AGENTS.md#http-server): HTTP server, per-app keys for local/LAN (`flowstate keys add/list/revoke`), headers X-FlowState-Model / X-FlowState-Workspace
+- [docs/REMOTE-ACCESS.md](docs/REMOTE-ACCESS.md): optional remote access for cloud AIs (Cloudflare Tunnel, OAuth 2.1 approval, per-app tokens, security notes, step-by-step setup)
+- [AGENTS.md#6-backups](AGENTS.md#6-backups): nightly local backups, restore, optional private GitHub off-site copy
+- [docs/TOOL_CONSOLIDATION.md](docs/TOOL_CONSOLIDATION.md): history of how the older tools were merged into action-based tools
+
+## Internals
+
+- [mcp-server/flowstate/server.py](mcp-server/flowstate/server.py): tool dispatch, stdio and HTTP transports
+- [mcp-server/flowstate/identity.py](mcp-server/flowstate/identity.py): how app, model, machine and identity source are recorded (migration 012)
+- [mcp-server/flowstate/migrations/](mcp-server/flowstate/migrations/): numbered, additive database migrations
+- [database/schema.sql](database/schema.sql): base SQLite schema
+- [tests/](tests/): pytest suite (temporary databases and fake config folders only)
