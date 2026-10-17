@@ -24,10 +24,8 @@ TOOLS = [
     Tool(
         name="list_projects",
         description=(
-            "List every FlowState project (read-only), newest update first. Use start_here "
-            "to open one project's brief; use this for the structured list or a status filter. "
-            "Returns [{id, name, description, status, created_at, updated_at}]. Does not create "
-            "or change projects."
+            "List projects, newest first (read-only). Use start_here to open a brief. "
+            "Returns id, name, description, status, and timestamps."
         ),
         inputSchema={
             "type": "object",
@@ -35,7 +33,7 @@ TOOLS = [
                 "status": {
                     "type": "string",
                     "enum": ["active", "paused", "completed", "archived"],
-                    "description": "Only this status: active, paused, completed or archived. Omit for all."
+                    "description": "Only this status. Omit for all."
                 }
             }
         }
@@ -43,16 +41,14 @@ TOOLS = [
     Tool(
         name="create_project",
         description=(
-            "Create a new FlowState project (write). Use when the user asks for a project; "
-            "recording work inside one is log_work, and opening it is start_here. name must "
-            "be unique. Returns {id, name, description, status: active, created_at, updated_at}. "
-            "A duplicate name is rejected. No components or records are created with it."
+            "Create a project when the user asks for one. name must be unique. "
+            "Duplicates are rejected. Open it with start_here."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "Unique project name. Required."},
-                "description": {"type": "string", "description": "Optional longer description. Omit to leave it empty."}
+                "name": {"type": "string", "description": "Unique project name."},
+                "description": {"type": "string", "description": "Longer description. Omit to leave empty."}
             },
             "required": ["name"]
         }
@@ -60,19 +56,17 @@ TOOLS = [
     Tool(
         name="update_project",
         description=(
-            "Change an existing project's name, description or status (write). Only fields you "
-            "pass are overwritten. name must stay unique. Returns the project. Restore the "
-            "previous row with history undo (record_type=project, record_id=project_id). Does "
-            "not move that project's records."
+            "Change a project's name, description, or status. history undo restores "
+            "the row."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "project_id": {"type": "integer", "description": "Project id to update. Required."},
-                "name": {"type": "string", "description": "New unique name. Omit to keep the current name."},
+                "project_id": {"type": "integer", "description": "Project id to update."},
+                "name": {"type": "string", "description": "New unique name. Omit to keep the current one."},
                 "description": {"type": "string", "description": "New description. Omit to keep the current one."},
                 "status": {"type": "string", "enum": ["active", "paused", "completed", "archived"],
-                           "description": "active, paused, completed or archived. Omit to keep the current status."}
+                           "description": "New status. Omit to keep the current one."}
             },
             "required": ["project_id"]
         }
@@ -84,20 +78,15 @@ TOOLS = [
     Tool(
         name="get_context",
         description=(
-            "Read a raw context dump for one project by exact name (read-only). Prefer "
-            "start_here to begin work: it includes hard rules and handoffs and opens the "
-            "session. lean=true (default) returns {project: {id, name, status}, stats, "
-            "blocking (up to 3 critical or urgent problems), quick_todos (up to 3 pending titles), "
-            "recent_focus, has_active_session}. lean=false returns the project, components, "
-            "open problems, changes within hours (default 48), pending todos, up to 10 "
-            "learnings, the current session and attachments. An unknown name returns null."
+            "Raw context by exact name. Prefer start_here. lean=true (default) is short; "
+            "false includes the working records."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "project_name": {"type": "string", "description": "Exact project name. Required. Ids are not accepted; use start_here for a name or id."},
-                "lean": {"type": "boolean", "description": "true (default): short counts and titles. false: full objects.", "default": True},
-                "hours": {"type": "integer", "description": "How many hours of changes to include (default 48).", "default": 48}
+                "project_name": {"type": "string", "description": "Exact project name. Required, not an id."},
+                "lean": {"type": "boolean", "description": "Counts and titles (default), or full objects.", "default": True},
+                "hours": {"type": "integer", "description": "Hours of changes when lean is false.", "default": 48}
             },
             "required": ["project_name"]
         }
@@ -109,19 +98,16 @@ TOOLS = [
     Tool(
         name="create_component",
         description=(
-            "Add a component, a named part of a project such as a service or module (write). "
-            "Changes and problems attach to one. name must be unique in the project. Returns "
-            "{id, project_id, name, description, parent_component_id, status: in_progress, "
-            "timestamps}. To record that something changed, use log_work(kind=change), not a "
-            "new component."
+            "Add a named part of a project. name is unique in it. A change is "
+            "log_work(kind=change)."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "project_id": {"type": "integer", "description": "Project that owns the component. Required (or project= name)."},
-                "name": {"type": "string", "description": "Component name, unique within the project. Required."},
-                "description": {"type": "string", "description": "Optional what this component is."},
-                "parent_component_id": {"type": "integer", "description": "Optional parent component id in the same project, to nest it."}
+                "project_id": {"type": "integer", "description": "Owning project id, or pass project=."},
+                "name": {"type": "string", "description": "Name, unique in the project."},
+                "description": {"type": "string", "description": "What this component is."},
+                "parent_component_id": {"type": "integer", "description": "Parent component in the same project."}
             },
             "required": ["project_id", "name"]
         }
@@ -129,15 +115,12 @@ TOOLS = [
     Tool(
         name="list_components",
         description=(
-            "List one project's components by name (read-only). Each item is {id, project_id, "
-            "parent_component_id, name, description, status, created_at, updated_at}. status is "
-            "planning, in_progress, testing, complete or deprecated. Pass an id to log_change "
-            "or problem. For the working brief, call start_here."
+            "List one project's components (read-only). For the working brief, use start_here."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "project_id": {"type": "integer", "description": "Project id whose components to list. Required."}
+                "project_id": {"type": "integer", "description": "Project id whose components to list."}
             },
             "required": ["project_id"]
         }
@@ -145,19 +128,17 @@ TOOLS = [
     Tool(
         name="update_component",
         description=(
-            "Overwrite a component's name, description or status (write). Only fields you pass "
-            "change. Returns the component, or null if the id does not exist. Restore the "
-            "previous row with history undo (record_type=component). This does not write a "
-            "change record; use log_work(kind=change) for that."
+            "Change a component's name, description, or status. history undo restores "
+            "the row."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "component_id": {"type": "integer", "description": "Component id to update. Required."},
-                "name": {"type": "string", "description": "New name. Omit to keep the current name. Must stay unique in the project."},
-                "description": {"type": "string", "description": "New description. Omit to keep the current one."},
+                "component_id": {"type": "integer", "description": "Component id."},
+                "name": {"type": "string", "description": "New name, unique in the project. Omit to keep."},
+                "description": {"type": "string", "description": "New description. Omit to keep."},
                 "status": {"type": "string", "enum": ["planning", "in_progress", "testing", "complete", "deprecated"],
-                           "description": "planning, in_progress, testing, complete or deprecated. Omit to keep the current status."}
+                           "description": "New status. Omit to keep the current one."}
             },
             "required": ["component_id"]
         }
@@ -169,23 +150,20 @@ TOOLS = [
     Tool(
         name="log_learning",
         description=(
-            "Save a lesson on a project (write). Prefer log_work(kind=learning, summary=the "
-            "insight); use this when you want category and context on the row. Returns the "
-            "learning {id, project_id, insight, category, context, source, verified: false}. "
-            "If the review mode holds learnings, it is queued instead of saved. Secrets are "
-            "refused. A new learning is not removed by history undo."
+            "Save a lesson. Prefer log_work(kind=learning). May be queued. Secrets "
+            "are refused. Undo does not remove it."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "project_id": {"type": "integer", "description": "Project id. Required (or project= name)."},
-                "insight": {"type": "string", "description": "The lesson, one or two sentences. Required."},
-                "component_id": {"type": "integer", "description": "Optional component id this lesson is about."},
+                "project_id": {"type": "integer", "description": "Project id, or pass project=."},
+                "insight": {"type": "string", "description": "The lesson, one or two sentences."},
+                "component_id": {"type": "integer", "description": "Component this lesson is about."},
                 "category": {"type": "string", "enum": ["pattern", "gotcha", "best_practice", "tool_tip", "architecture", "performance", "security", "other"],
-                             "description": "pattern, gotcha, best_practice, tool_tip, architecture, performance, security or other. Omit for none."},
-                "context": {"type": "string", "description": "When this lesson applies. Optional."},
+                             "description": "Learning category. Omit for none."},
+                "context": {"type": "string", "description": "When this lesson applies."},
                 "source": {"type": "string", "enum": ["experience", "documentation", "conversation", "error", "research"], "default": "experience",
-                           "description": "experience (default), documentation, conversation, error or research."}
+                           "description": "Where the lesson came from. Default experience."}
             },
             "required": ["project_id", "insight"]
         }
@@ -193,19 +171,17 @@ TOOLS = [
     Tool(
         name="get_learnings",
         description=(
-            "List saved lessons (read-only). Omit filters to list every project. compact=true "
-            "drops empty fields and timestamps and truncates long text to 100 characters. "
-            "Returns learning objects {id, insight, category, context, source, verified, ...}. "
-            "To ask a question, use ask; to search every record type, use search."
+            "List lessons (read-only). compact=true shortens rows. For a question use "
+            "ask; for every record type use search."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "project_id": {"type": "integer", "description": "Only this project's lessons. Omit for all projects."},
+                "project_id": {"type": "integer", "description": "Only this project. Omit for all."},
                 "category": {"type": "string", "enum": ["pattern", "gotcha", "best_practice", "tool_tip", "architecture", "performance", "security", "other"],
-                             "description": "Only this category: pattern, gotcha, best_practice, tool_tip, architecture, performance, security or other."},
+                             "description": "Only this category."},
                 "compact": {"type": "boolean", "default": False,
-                            "description": "true: drop empties and timestamps, truncate long text (default false)."}
+                            "description": "Shorter rows: drop empties and timestamps."}
             }
         }
     ),
@@ -216,23 +192,19 @@ TOOLS = [
     Tool(
         name="log_change",
         description=(
-            "Append a change record on a component (write). Prefer log_work(kind=change, "
-            "summary=what changed, component=name); it alerts linked projects the same way. "
-            "component_id may be omitted; the project's General component is used or created. "
-            "Returns the change {id, component_id, field_name, old_value, new_value, "
-            "change_type, reason}, plus alerted_projects when other projects link to it. "
-            "Review mode may queue it instead. Creating it is not undone by history."
+            "Append a change on a component. Prefer log_work(kind=change). Omit "
+            "component_id for General. Not undone by history."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "component_id": {"type": "integer", "description": "Component that changed. Omit to use or create the project's General component."},
-                "field_name": {"type": "string", "description": "What changed, a short label (the summary). Required."},
-                "old_value": {"type": "string", "description": "Previous value, as text. Optional."},
-                "new_value": {"type": "string", "description": "New value, as text. Optional."},
-                "reason": {"type": "string", "description": "Why it changed. Optional."},
+                "component_id": {"type": "integer", "description": "Component that changed. Omit for General."},
+                "field_name": {"type": "string", "description": "Short label of what changed."},
+                "old_value": {"type": "string", "description": "Previous value, as text."},
+                "new_value": {"type": "string", "description": "New value, as text."},
+                "reason": {"type": "string", "description": "Why it changed."},
                 "change_type": {"type": "string", "enum": ["config", "code", "architecture", "dependency", "documentation", "other"],
-                                "description": "config, code, architecture, dependency, documentation or other. Omit to store none."}
+                                "description": "Kind of change. Omit to store none."}
             },
             "required": ["component_id", "field_name"]
         }
@@ -240,20 +212,17 @@ TOOLS = [
     Tool(
         name="get_recent_changes",
         description=(
-            "List change records from the last hours (default 24), for one project and/or "
-            "component (read-only). This is what was logged as changed, not the edit history "
-            "of FlowState rows. For old/new values of an edit, who changed a row, or undo, "
-            "use history. compact=true shortens text and drops timestamps. Returns changes "
-            "{id, component_id, field_name, old_value, new_value, change_type, reason, created_at}."
+            "Logged changes from the last hours (default 24), read-only. Not row-edit history; "
+            "for old/new values or undo, use history."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "project_id": {"type": "integer", "description": "Only changes in this project. Omit for every project."},
-                "component_id": {"type": "integer", "description": "Only changes on this component. Omit for every component."},
-                "hours": {"type": "integer", "default": 24, "description": "How far back, in hours (default 24)."},
+                "project_id": {"type": "integer", "description": "Only this project. Omit for all."},
+                "component_id": {"type": "integer", "description": "Only this component. Omit for all."},
+                "hours": {"type": "integer", "default": 24, "description": "How far back, in hours. Default 24."},
                 "compact": {"type": "boolean", "default": False,
-                            "description": "true: drop empties and timestamps, truncate long text (default false)."}
+                            "description": "Shorter rows: drop empties and timestamps."}
             }
         }
     ),
@@ -264,24 +233,20 @@ TOOLS = [
     Tool(
         name="search",
         description=(
-            "Find records by words across todos, decisions, changes, learnings, problems and "
-            "solutions (read-only). Word endings match. mode=auto (default) also ranks by "
-            "meaning when a local model is installed; the reply's mode is keywords or "
-            "meaning+keywords. For a quoted answer to a question, use ask. Returns {query, "
-            "mode, count, results: [{content_type, content_id, project, title, snippet, "
-            "matched_by}], note?}. limit default 10, capped at 50."
+            "Find records by words. Word endings match. auto adds meaning if a local "
+            "model exists. For a quoted answer, use ask."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Words to match. Required."},
-                "project": {"type": ["string", "integer"], "description": "Limit to this project name or id. Omit to search all. Prefer this over project_id."},
-                "project_id": {"type": "integer", "description": "Limit to this integer project id. Omit to search all. A project name that matches is used instead."},
+                "query": {"type": "string", "description": "Words to match."},
+                "project": {"type": ["string", "integer"], "description": "Only this project. Omit to search all."},
+                "project_id": {"type": "integer", "description": "Only this project id. A matching name wins."},
                 "content_types": {"type": "array", "items": {"type": "string"},
-                                  "description": "Only these types: todo, decision, change, learning, problem, solution. Omit for all six."},
+                                  "description": "todo, decision, change, learning, problem, or solution."},
                 "mode": {"type": "string", "enum": ["auto", "keyword", "meaning"], "default": "auto",
-                         "description": "auto (default): meaning plus keywords when a local model exists, else keywords. keyword: words only. meaning: meaning, falling back to keywords."},
-                "limit": {"type": "integer", "default": 10, "description": "Max results (default 10, capped at 50)."}
+                         "description": "auto uses meaning when a local model exists; else keywords."},
+                "limit": {"type": "integer", "default": 10, "description": "Max results. Default 10, max 50."}
             },
             "required": ["query"]
         }
@@ -293,35 +258,30 @@ TOOLS = [
     Tool(
         name="problem",
         description=(
-            "Track bugs and blockers. Prefer log_work(kind=problem) to open one. action=log "
-            "(write) stores a problem; component_id may be omitted (General is used or created). "
-            "If review mode holds problems, log is queued instead. action=list (read) returns "
-            "open problems. action=solve (write) sets status to solved and stores a solution; "
-            "history undo (record_type=problem) restores the open problem and drops that "
-            "solution. action=get_tree (read) returns {problem, attempts, solution}, or {} if "
-            "the id is missing."
+            "Bugs and blockers. Prefer log_work(kind=problem) to open one. undo "
+            "reopens a solve. get_tree reads attempts."
         ),
         inputSchema={
             "type": "object",
             "properties": {
                 "action": {"type": "string", "enum": ["log", "list", "solve", "get_tree"],
-                           "description": "log (create), list (read open ones), solve (mark solved) or get_tree (read attempts). Required."},
+                           "description": "log, list, solve, or get_tree."},
                 # For log:
-                "component_id": {"type": "integer", "description": "log: component id. Omit to use or create the project's General component. list: optional filter."},
-                "title": {"type": "string", "description": "log: short problem title. Required for log."},
-                "description": {"type": "string", "description": "log: what is wrong, in more detail. Optional."},
+                "component_id": {"type": "integer", "description": "log: component (General if omitted). list: filter."},
+                "title": {"type": "string", "description": "log: short title. Required for log."},
+                "description": {"type": "string", "description": "log: what is wrong."},
                 "severity": {"type": "string", "enum": list(priority.ACCEPTED), "default": "normal",
-                             "description": "log: critical, urgent, normal (default) or low. Older names high and medium also work."},
+                             "description": "log: severity. high and medium are older names."},
                 # For list:
-                "project_id": {"type": "integer", "description": "list: only this project. Omit to list open problems in every project."},
+                "project_id": {"type": "integer", "description": "list: only this project. Omit for all."},
                 "compact": {"type": "boolean", "default": False,
-                            "description": "list: true drops empties and timestamps and truncates text (default false)."},
+                            "description": "Shorter rows: drop empties and timestamps."},
                 # For solve:
-                "problem_id": {"type": "integer", "description": "solve and get_tree: problem id. Required for those actions."},
+                "problem_id": {"type": "integer", "description": "solve/get_tree: problem id. Required."},
                 "summary": {"type": "string", "description": "solve: what fixed it. Required for solve."},
-                "key_insight": {"type": "string", "description": "solve: the lesson, optional."},
-                "winning_attempt_id": {"type": "integer", "description": "solve: attempt id that worked. Optional."},
-                "code_snippet": {"type": "string", "description": "solve: code that fixed it, as text. Optional. Do not include secrets."}
+                "key_insight": {"type": "string", "description": "solve: the lesson."},
+                "winning_attempt_id": {"type": "integer", "description": "solve: attempt id that worked."},
+                "code_snippet": {"type": "string", "description": "solve: the fix as text. Optional. No secrets."}
             },
             "required": ["action"]
         }
@@ -333,29 +293,25 @@ TOOLS = [
     Tool(
         name="attempt",
         description=(
-            "Record tries against a problem (write). action=log adds an attempt and returns "
-            "{id, problem_id, description, confidence: attempted}; outcome is unset until "
-            "action=outcome. action=outcome overwrites outcome, notes and confidence and "
-            "returns the attempt, or null if the id is missing. That overwrite can be restored "
-            "with history undo (record_type=attempt). Close the problem with problem "
-            "action=solve, not with outcome."
+            "Tries against a problem. log adds one; outcome sets how it ended and can "
+            "be undone. Close it with problem action=solve."
         ),
         inputSchema={
             "type": "object",
             "properties": {
                 "action": {"type": "string", "enum": ["log", "outcome"],
-                           "description": "log (add a try) or outcome (set how it ended). Required."},
+                           "description": "log a try, or set how it ended."},
                 # For log:
-                "problem_id": {"type": "integer", "description": "log: problem id this try is for. Required for log."},
+                "problem_id": {"type": "integer", "description": "log: problem this try is for. Required."},
                 "description": {"type": "string", "description": "log: what was tried. Required for log."},
-                "parent_attempt_id": {"type": "integer", "description": "log: earlier attempt id this branches from. Optional."},
+                "parent_attempt_id": {"type": "integer", "description": "log: earlier attempt this branches from."},
                 # For outcome:
-                "attempt_id": {"type": "integer", "description": "outcome: attempt id to update. Required for outcome."},
+                "attempt_id": {"type": "integer", "description": "outcome: attempt id. Required."},
                 "outcome": {"type": "string", "enum": ["success", "failure", "partial", "abandoned"],
-                            "description": "outcome: success, failure, partial or abandoned. Required for outcome."},
-                "notes": {"type": "string", "description": "outcome: what was learned. Optional."},
+                            "description": "How the try ended. Required for outcome."},
+                "notes": {"type": "string", "description": "outcome: what was learned."},
                 "confidence": {"type": "string", "enum": ["attempted", "worked_once", "verified", "proven", "deprecated"], "default": "attempted",
-                               "description": "outcome: attempted (default), worked_once, verified, proven or deprecated."}
+                               "description": "outcome: how sure. Default attempted."}
             },
             "required": ["action"]
         }
@@ -367,43 +323,38 @@ TOOLS = [
     Tool(
         name="todo",
         description=(
-            "Manage todos. Prefer log_work(kind=todo) to add one. action=add creates a todo "
-            "(optional subtask and blockers). action=update overwrites only the fields you "
-            "pass; history undo (record_type=todo) restores that edit. A new todo is not "
-            "deleted by undo: set status done or cancelled. action=list (read) returns rows "
-            "plus priority_level. action=next (read) returns {next, ready_total, blocked, "
-            "blocked_total} for open, unblocked, highest-priority todos. action=block / "
-            "unblock (write) add or remove wait-on links. Review mode may queue an add."
+            "Todos. Prefer log_work(kind=todo) to add. Undo restores an update, not a new "
+            "todo (set done or cancelled). next is the top unblocked ones. requires project."
         ),
         inputSchema={
             "type": "object",
             "properties": {
                 "action": {"type": "string", "enum": ["add", "update", "list", "next", "block", "unblock"],
-                           "description": "add, update, list, next (what to do next), block or unblock. Required."},
-                "parent_todo_id": {"type": "integer", "description": "add: make this a subtask of this todo id, in the same project."},
+                           "description": "Which operation."},
+                "parent_todo_id": {"type": "integer", "description": "add: parent todo id, in the same project."},
                 "blocked_by": {"type": "array", "items": {"type": "integer"},
-                               "description": "add/block: todo ids it waits on. unblock: remove only these; omit both blocker fields to remove every blocker."},
-                "blocked_by_problem": {"type": "integer", "description": "add/block/unblock: a problem id it waits on."},
-                "limit": {"type": "integer", "default": 5, "description": "next: how many ready todos to return (default 5)."},
+                               "description": "Ids it waits on. Omit both fields to clear all."},
+                "blocked_by_problem": {"type": "integer", "description": "add/block/unblock: problem id it waits on."},
+                "limit": {"type": "integer", "default": 5, "description": "next: how many ready todos. Default 5."},
                 # For add:
-                "project_id": {"type": "integer", "description": "add/list/next: project id, or pass project= name. Required for those actions."},
-                "title": {"type": "string", "description": "add: todo title. Required for add. update: new title."},
-                "description": {"type": "string", "description": "add/update: longer detail. Optional."},
-                "component_id": {"type": "integer", "description": "add: component id this todo is about. Optional."},
+                "project_id": {"type": "integer", "description": "Project id or name. Required for add, list, and next."},
+                "title": {"type": "string", "description": "add: title, required. update: new title."},
+                "description": {"type": "string", "description": "add/update: longer detail."},
+                "component_id": {"type": "integer", "description": "add: component this todo is about."},
                 "priority": {"type": "string", "enum": list(priority.ACCEPTED), "default": "normal",
-                             "description": "add/update: critical, urgent, normal (default) or low (high and medium also work). list: only this level."},
-                "due_date": {"type": "string", "description": "add: due date as text, preferably ISO (2026-10-17). Optional. Not changed by update."},
+                             "description": "Priority. high and medium are older names."},
+                "due_date": {"type": "string", "description": "add: due date, preferably ISO."},
                 "min_priority": {"type": "string", "enum": list(priority.ACCEPTED),
-                                 "description": "list: this level or more urgent (critical, urgent, normal, low)."},
+                                 "description": "list: this level or more urgent."},
                 "sort": {"type": "string", "enum": ["priority", "due", "newest"], "default": "priority",
-                         "description": "list: priority (default), due or newest."},
+                         "description": "list: sort order. Default priority."},
                 # For update:
-                "todo_id": {"type": "integer", "description": "update/block/unblock: todo id. Required for those actions."},
+                "todo_id": {"type": "integer", "description": "Todo id for update, block, or unblock. Required."},
                 "status": {"type": "string", "enum": ["pending", "in_progress", "blocked", "done", "cancelled"],
-                           "description": "update: pending, in_progress, blocked, done or cancelled. list: only this status."},
+                           "description": "update: new status. list: only this status."},
                 # For list:
                 "compact": {"type": "boolean", "default": False,
-                            "description": "list: true drops empties and timestamps and truncates text (default false)."}
+                            "description": "Shorter rows."}
             },
             "required": ["action"]
         }
@@ -415,35 +366,28 @@ TOOLS = [
     Tool(
         name="session",
         description=(
-            "Read or close work sessions. A session opens and closes on its own (idle, or "
-            "when the app quits); do not start one unless you need a manual session. "
-            "action=start returns the automatic session when one is open ({session_id, "
-            "automatic: true}); otherwise it creates one. action=end stores summary and "
-            "outcomes and stops that session from being continued; it is not undone by "
-            "history. action=current returns the open session or null. action=log_conversation "
-            "stores a prompt/response summary; if key_decisions is set and review mode holds "
-            "decisions, a decision is queued instead of the conversation. list_conversations "
-            "and list_sessions return newest first."
+            "Sessions open and close on their own. start reuses the open one or creates "
+            "one. end stops it (not undone)."
         ),
         inputSchema={
             "type": "object",
             "properties": {
                 "action": {"type": "string", "enum": ["start", "end", "current", "log_conversation", "list_conversations", "list_sessions"],
-                           "description": "start, end, current (read), log_conversation, list_conversations or list_sessions. Required."},
+                           "description": "Which operation."},
                 # For start:
-                "project_id": {"type": "integer", "description": "start/current/log_conversation/list_*: project id, or project= name. Required except current, where it filters."},
-                "focus_component_id": {"type": "integer", "description": "start: component id in focus. Optional. Ignored when an automatic session is reused."},
-                "focus_problem_id": {"type": "integer", "description": "start: problem id in focus. Optional. Ignored when an automatic session is reused."},
+                "project_id": {"type": "integer", "description": "Project id or project=. Optional for current."},
+                "focus_component_id": {"type": "integer", "description": "start: component in focus. Ignored if a session is open."},
+                "focus_problem_id": {"type": "integer", "description": "start: problem in focus. Ignored if a session is open."},
                 # For end:
-                "session_id": {"type": "integer", "description": "end: session id. log_conversation/list_conversations: optional; log defaults to the automatic session."},
-                "summary": {"type": "string", "description": "end: what was accomplished. Optional."},
-                "outcomes": {"type": "array", "items": {"type": "string"}, "description": "end: short outcome lines. Optional."},
+                "session_id": {"type": "integer", "description": "Session id. end requires it; log uses the open session."},
+                "summary": {"type": "string", "description": "end: what was accomplished."},
+                "outcomes": {"type": "array", "items": {"type": "string"}, "description": "end: short outcome lines."},
                 # For log_conversation:
-                "user_prompt_summary": {"type": "string", "description": "log_conversation: what was asked. Required for that action."},
-                "assistant_response_summary": {"type": "string", "description": "log_conversation: what was answered. Optional."},
-                "key_decisions": {"type": "array", "items": {"type": "string"}, "description": "log_conversation: decision lines. If set, review mode may queue the first as a decision instead."},
+                "user_prompt_summary": {"type": "string", "description": "log_conversation: what was asked. Required."},
+                "assistant_response_summary": {"type": "string", "description": "log_conversation: what was answered."},
+                "key_decisions": {"type": "array", "items": {"type": "string"}, "description": "Decision lines. Review mode may queue the first."},
                 # For list:
-                "limit": {"type": "integer", "default": 20, "description": "list_conversations and list_sessions: max rows (default 20)."}
+                "limit": {"type": "integer", "default": 20, "description": "Max rows for a list. Default 20."}
             },
             "required": ["action"]
         }
@@ -455,38 +399,32 @@ TOOLS = [
     Tool(
         name="file",
         description=(
-            "Attach files to a project, component or problem. action=attach (write, this "
-            "computer only; remote clients are refused) copies file_path into the project "
-            "bundle when copy_to_bundle is true (default) and returns the attachment row. "
-            "action=list (read) returns attachment rows; omit filters for all. action=remove "
-            "(write) deletes the row. delete_file=true also deletes the bundle copy; that "
-            "file is not restored. The row can be put back with history undo "
-            "(record_type=attachment). action=search (read) matches indexed snippets, not "
-            "file bytes, and returns content locations plus file name and path."
+            "Attach, list, remove, or search local files. Remote attach is refused. "
+            "Copies into the bundle by default. delete_file removes that copy for good."
         ),
         inputSchema={
             "type": "object",
             "properties": {
                 "action": {"type": "string", "enum": ["attach", "list", "remove", "search"],
-                           "description": "attach (copy or reference a file), list (read), remove (delete the row) or search (indexed text). Required."},
+                           "description": "attach, list, remove, or search."},
                 # For attach:
-                "project_id": {"type": "integer", "description": "attach: project id (or project= name). list/search: optional filter."},
-                "file_path": {"type": "string", "description": "attach: path on this computer. Required for attach. Missing files error."},
-                "component_id": {"type": "integer", "description": "attach: component to hang the file on. list: filter. Optional."},
-                "problem_id": {"type": "integer", "description": "attach: problem to hang the file on. list: filter. Optional."},
-                "user_description": {"type": "string", "description": "attach: why this file matters. Optional."},
-                "tags": {"type": "array", "items": {"type": "string"}, "description": "attach: tag strings, stored comma-separated. Optional."},
+                "project_id": {"type": "integer", "description": "attach: project id or project=. list/search may filter."},
+                "file_path": {"type": "string", "description": "attach: path on this computer. Required."},
+                "component_id": {"type": "integer", "description": "Component to attach to, or a list filter."},
+                "problem_id": {"type": "integer", "description": "Problem to attach to, or a list filter."},
+                "user_description": {"type": "string", "description": "attach: why this file matters."},
+                "tags": {"type": "array", "items": {"type": "string"}, "description": "attach: tags, stored comma-separated."},
                 "copy_to_bundle": {"type": "boolean", "default": True,
-                                   "description": "attach: true (default) copies into the project bundle; false stores the external path only."},
+                                   "description": "Copy into the bundle (default), or store the path only."},
                 # For remove:
-                "attachment_id": {"type": "integer", "description": "remove: attachment id. Required for remove."},
+                "attachment_id": {"type": "integer", "description": "remove: attachment id. Required."},
                 "delete_file": {"type": "boolean", "default": False,
-                                "description": "remove: true also deletes the bundle copy from disk (not restored by undo). Default false."},
+                                "description": "Also delete the bundle copy. Undo cannot restore it."},
                 # For search:
-                "query": {"type": "string", "description": "search: substring matched against indexed description and snippet. Required for search."},
+                "query": {"type": "string", "description": "search: text in the index. Required for search."},
                 "file_types": {"type": "array", "items": {"type": "string"},
-                               "description": "search: only these extensions without the dot, e.g. md, py. Optional."},
-                "limit": {"type": "integer", "default": 10, "description": "search: max hits (default 10)."}
+                               "description": "search: extensions without a dot, such as md or py."},
+                "limit": {"type": "integer", "default": 10, "description": "search: max hits. Default 10."}
             },
             "required": ["action"]
         }
@@ -498,29 +436,21 @@ TOOLS = [
     Tool(
         name="git",
         description=(
-            "Git for the FlowState data folder on this computer, not the user's project "
-            "repository. Remote clients are refused. action=init creates the repo, a "
-            ".gitignore and README, and an initial commit, or returns status if it exists. "
-            "action=status (read) returns {initialized, branch, remote_url, pending_changes, "
-            "last_commit}. action=sync commits non-secret files, then pull --rebase and push "
-            "when a remote exists; that push is not undone by history. action=set_remote "
-            "sets or replaces origin. action=clone clones into local_path or the data folder "
-            "and refuses a non-empty directory. action=history (read) returns commits "
-            "{hash, message, date, author}, or [] if there is no repo. This is not "
-            "history (the edit-undo tool) and not the off-site backup."
+            "Git for the FlowState data folder, not the user's repo. Remote clients "
+            "are refused. sync may push (not undone)."
         ),
         inputSchema={
             "type": "object",
             "properties": {
                 "action": {"type": "string", "enum": ["init", "status", "sync", "set_remote", "clone", "history"],
-                           "description": "init, status (read), sync (commit and maybe push), set_remote, clone or history (read commits). Required."},
+                           "description": "Which operation."},
                 # For sync:
-                "commit_message": {"type": "string", "description": "sync: commit subject. Omit for 'FlowState sync' plus a timestamp."},
+                "commit_message": {"type": "string", "description": "sync: commit subject. Omit for an automatic one."},
                 # For set_remote/clone:
-                "remote_url": {"type": "string", "description": "set_remote and clone: git URL for origin. Required for those actions."},
-                "local_path": {"type": "string", "description": "clone: directory to clone into. Omit for the FlowState data folder. Refused if not empty."},
+                "remote_url": {"type": "string", "description": "Git URL for set_remote or clone. Required."},
+                "local_path": {"type": "string", "description": "Clone directory. Must be empty. Default: data folder."},
                 # For history:
-                "limit": {"type": "integer", "default": 20, "description": "history: max commits (default 20)."}
+                "limit": {"type": "integer", "default": 20, "description": "history: max commits. Default 20."}
             },
             "required": ["action"]
         }
@@ -532,28 +462,23 @@ TOOLS = [
     Tool(
         name="variable",
         description=(
-            "Store non-secret project settings such as host names and ports. Do not put "
-            "passwords, tokens or keys here; writes that look like secrets are refused. "
-            "is_secret only flags the row; list still returns value. action=create returns "
-            "the row (name is unique per project and category). action=list (read) returns "
-            "rows. action=update overwrites only fields you pass, or returns null if nothing "
-            "was passed or the id is missing. action=delete returns true, or false if missing. "
-            "update and delete can be restored with history undo (record_type=variable)."
+            "Non-secret settings (hosts, ports). Secrets are refused. is_secret does "
+            "not hide the value. update and delete can be undone."
         ),
         inputSchema={
             "type": "object",
             "properties": {
                 "action": {"type": "string", "enum": ["create", "list", "update", "delete"],
-                           "description": "create, list (read), update or delete. Required."},
-                "project_id": {"type": "integer", "description": "create/list: project id (or project= name). Required for those actions."},
-                "variable_id": {"type": "integer", "description": "update/delete: variable id. Required for those actions."},
-                "name": {"type": "string", "description": "create: name, unique in the project and category. Required for create. update: new name."},
-                "value": {"type": "string", "description": "create/update: the setting as text. Not a place for secrets."},
-                "description": {"type": "string", "description": "create/update: what the variable is for. Optional."},
+                           "description": "create, list, update, or delete."},
+                "project_id": {"type": "integer", "description": "Project id or project=. Required for create and list."},
+                "variable_id": {"type": "integer", "description": "update/delete: variable id. Required."},
+                "name": {"type": "string", "description": "Name, unique per project and category. Required on create."},
+                "value": {"type": "string", "description": "The setting as text. Not for secrets."},
+                "description": {"type": "string", "description": "create/update: what it is for."},
                 "category": {"type": "string", "enum": ["server", "credentials", "config", "environment", "endpoint", "custom"], "default": "custom",
-                             "description": "create: server, credentials, config, environment, endpoint or custom (default). list: filter. The credentials category is still not for real secrets."},
+                             "description": "Category, default custom. Not a place for secrets."},
                 "is_secret": {"type": "boolean", "default": False,
-                              "description": "create/update: flag the row as sensitive (default false). The value is still returned by list."}
+                              "description": "Flag as sensitive. list still returns the value."}
             },
             "required": ["action"]
         }
@@ -565,29 +490,24 @@ TOOLS = [
     Tool(
         name="method",
         description=(
-            "Store a reusable procedure for a project (steps, not a one-off decision). Prefer "
-            "log_work(kind=learning or decision) for a single lesson or choice. action=create "
-            "returns the method with steps as a list; name is unique in the project. "
-            "action=list (read) returns methods. action=update overwrites only fields you "
-            "pass (steps replaces the whole list) or returns null if none were passed. "
-            "action=delete returns true, or false if missing. update and delete undo with "
-            "history (record_type=method)."
+            "A reusable procedure (prefer log_work for one decision). update replaces "
+            "steps. update and delete can be undone."
         ),
         inputSchema={
             "type": "object",
             "properties": {
                 "action": {"type": "string", "enum": ["create", "list", "update", "delete"],
-                           "description": "create, list (read), update or delete. Required."},
-                "project_id": {"type": "integer", "description": "create/list: project id (or project= name). Required for those actions."},
-                "method_id": {"type": "integer", "description": "update/delete: method id. Required for those actions."},
-                "name": {"type": "string", "description": "create: name, unique in the project. Required for create. update: new name."},
-                "description": {"type": "string", "description": "create: what the procedure is. Required for create. update: new text."},
+                           "description": "create, list, update, or delete."},
+                "project_id": {"type": "integer", "description": "Project id or project=. Required for create and list."},
+                "method_id": {"type": "integer", "description": "update/delete: method id. Required."},
+                "name": {"type": "string", "description": "Name, unique in the project. Required on create."},
+                "description": {"type": "string", "description": "What the procedure is. Required on create."},
                 "category": {"type": "string", "enum": ["auth", "deployment", "testing", "architecture", "workflow", "convention", "api", "security", "other"],
-                             "description": "auth, deployment, testing, architecture, workflow, convention, api, security or other. list: filter."},
+                             "description": "Category. list: filter."},
                 "steps": {"type": "array", "items": {"type": "string"},
-                          "description": "create/update: ordered step strings. update replaces the whole list."},
-                "code_example": {"type": "string", "description": "create/update: optional sample code. Do not include secrets."},
-                "related_component_id": {"type": "integer", "description": "create/update: component id this procedure belongs to. Optional."}
+                          "description": "Ordered steps. update replaces the whole list."},
+                "code_example": {"type": "string", "description": "Sample code. Do not include secrets."},
+                "related_component_id": {"type": "integer", "description": "Component this procedure belongs to."}
             },
             "required": ["action"]
         }
@@ -600,47 +520,41 @@ TOOLS = [
     Tool(
         name="self_improve",
         description=(
-            "Record this app's learned skills, a checkpoint, or a quality metric. Not a "
-            "substitute for log_work (that is the user's project memory). action=learn_skill "
-            "(write) inserts a skill row. action=get_skills (read) lists them. "
-            "action=confirm_skill (write) increments the session count and may set promoted "
-            "when sessions are at least 3 and the success rate is at least 0.8; history undo "
-            "restores the skill row. action=save_state (write) stores a checkpoint and returns "
-            "it. action=get_state (read) returns the latest checkpoint or null. "
-            "action=log_metric (write) stores one score. action=get_metrics (read) returns "
-            "recent metric rows. New skills, states and metrics are not deleted by undo."
+            "Skills, checkpoints, and metrics for this app. Use log_work for project "
+            "memory. confirm_skill may promote after 3 sessions at rate 0.8. "
+            "Undo does not delete a new row."
         ),
         inputSchema={
             "type": "object",
             "properties": {
                 "action": {"type": "string", "enum": ["learn_skill", "get_skills", "confirm_skill", "save_state", "get_state", "log_metric", "get_metrics"],
-                           "description": "learn_skill, get_skills (read), confirm_skill, save_state, get_state (read), log_metric or get_metrics (read). Required."},
+                           "description": "Which operation."},
                 # For learn_skill:
-                "skill": {"type": "string", "description": "learn_skill: what was learned. Required for learn_skill."},
+                "skill": {"type": "string", "description": "learn_skill: what was learned. Required."},
                 "skill_type": {"type": "string", "enum": ["tool_capability", "user_preference", "approach", "gotcha", "project_specific"],
-                               "description": "learn_skill: tool_capability, user_preference, approach, gotcha or project_specific. Required for learn_skill. get_skills: optional filter."},
-                "context": {"type": "string", "description": "learn_skill: when this applies. log_metric: where the score was taken. Optional."},
-                "tool_name": {"type": "string", "description": "learn_skill: tool this skill is about. get_skills: optional filter."},
+                               "description": "Skill kind. Required to learn; optional filter."},
+                "context": {"type": "string", "description": "When a skill applies, or where a metric was scored."},
+                "tool_name": {"type": "string", "description": "Related tool, or a get_skills filter."},
                 # For get_skills:
-                "project_id": {"type": "integer", "description": "learn_skill/get_skills/save_state/get_state/log_metric: project id (or project=). get_skills includes global skills. Required for save_state and get_state."},
+                "project_id": {"type": "integer", "description": "Project id or project=. Required to save or get state. get_skills includes global skills."},
                 "promoted_only": {"type": "boolean", "default": False,
-                                  "description": "get_skills: true returns only promoted skills (default false)."},
+                                  "description": "get_skills: only promoted skills."},
                 # For confirm_skill:
-                "skill_id": {"type": "integer", "description": "confirm_skill: skill id. Required for confirm_skill."},
+                "skill_id": {"type": "integer", "description": "confirm_skill: skill id. Required."},
                 # For save_state:
-                "focus_summary": {"type": "string", "description": "save_state: what the session was doing. Optional."},
-                "key_facts": {"type": "array", "items": {"type": "string"}, "description": "save_state: fact lines to keep. Optional."},
-                "pending_decisions": {"type": "array", "items": {"type": "string"}, "description": "save_state: decisions not made yet. Optional."},
-                "active_problem_ids": {"type": "array", "items": {"type": "integer"}, "description": "save_state: problem ids in progress. Optional."},
-                "active_component_ids": {"type": "array", "items": {"type": "integer"}, "description": "save_state: component ids in progress. Optional."},
+                "focus_summary": {"type": "string", "description": "save_state: what the session was doing."},
+                "key_facts": {"type": "array", "items": {"type": "string"}, "description": "save_state: facts to keep."},
+                "pending_decisions": {"type": "array", "items": {"type": "string"}, "description": "save_state: decisions not made yet."},
+                "active_problem_ids": {"type": "array", "items": {"type": "integer"}, "description": "save_state: problem ids in progress."},
+                "active_component_ids": {"type": "array", "items": {"type": "integer"}, "description": "save_state: component ids in progress."},
                 # For get_state:
                 # (uses project_id)
                 # For log_metric:
                 "metric_type": {"type": "string", "enum": ["checkpoint_timing", "tool_choice", "response_quality", "prediction_accuracy", "user_satisfaction"],
-                                "description": "log_metric: checkpoint_timing, tool_choice, response_quality, prediction_accuracy or user_satisfaction. Required for log_metric. get_metrics: optional filter."},
-                "effectiveness_score": {"type": "number", "description": "log_metric: score from 0.0 to 1.0. Optional."},
-                "action_taken": {"type": "string", "description": "log_metric: what was done. Optional."},
-                "outcome": {"type": "string", "description": "log_metric: what happened. Optional. Not the attempt outcome enum."}
+                                "description": "Metric to log, or a get_metrics filter."},
+                "effectiveness_score": {"type": "number", "description": "log_metric: score from 0.0 to 1.0."},
+                "action_taken": {"type": "string", "description": "log_metric: what was done."},
+                "outcome": {"type": "string", "description": "log_metric: what happened."}
             },
             "required": ["action"]
         }
@@ -660,10 +574,10 @@ START_HERE = Tool(
     inputSchema={
         "type": "object",
         "properties": {
-            "project": {"type": ["string", "integer"], "description": "Project name or id. Omit, or pass only folder, to get the project list instead of a brief."},
-            "folder": {"type": "string", "description": "Working folder path. Used only when project is omitted; the folder's name is matched to a project."},
+            "project": {"type": ["string", "integer"], "description": "Name or id. Omit to list projects."},
+            "folder": {"type": "string", "description": "Selects the project when project is omitted."},
             "size": {"type": "string", "enum": list(SIZE_NAMES), "default": "standard",
-                     "description": "quick (about 1,500 characters), standard (default, 4,000) or deep (up to 12,000)."},
+                     "description": "quick ~1,500; standard 4,000; deep 12,000."},
         },
     },
 )
@@ -676,21 +590,20 @@ LOG_WORK = Tool(
         "properties": {
             "project": guide.PROJECT_PROPERTY,
             "kind": {"type": "string", "enum": ["decision", "change", "problem", "learning", "todo"],
-                    "description": "decision, change, problem, learning or todo. Required."},
-            "summary": {"type": "string", "description": "One short line: the decision, change, problem, lesson or todo. Required."},
-            "details": {"type": "string", "description": "Optional longer reason or context. Omit if the summary is enough."},
-            "component": {"type": "string", "description": "Component name. changes and problems default to General, created if missing. Others: optional."},
+                    "description": "Which record to write."},
+            "summary": {"type": "string", "description": "One short line."},
+            "details": {"type": "string", "description": "Longer reason or context."},
+            "component": {"type": "string", "description": "Changes and problems default to General."},
             "priority": {"type": "string", "enum": list(priority.ACCEPTED),
-                         "description": "Todos: priority. Problems: severity. critical, urgent, "
-                                        "normal (default), low; older names high/medium also work."},
+                         "description": "Priority or severity. high and medium are older names."},
             "category": {"type": "string", "enum": ["pattern", "gotcha", "best_practice", "tool_tip", "architecture", "performance", "security", "other"],
-                         "description": "Learnings only: pattern, gotcha, best_practice, tool_tip, architecture, performance, security or other."},
+                         "description": "Learnings only. Omit otherwise."},
             "suggested": {"type": "boolean", "default": False,
-                          "description": "true = put it in the review queue for the user instead of saving it"},
+                          "description": "Queue for review instead of saving."},
             "replaces": {"type": "integer",
-                         "description": "Decisions only: id of the earlier decision this one replaces"},
+                         "description": "Decisions only: id this one replaces."},
             "source": {"type": "string", "enum": list(provenance.SOURCES),
-                       "description": "Where it comes from: user_stated, ai_inferred, from_code"},
+                       "description": "From the user, your inference, or the code."},
         },
         "required": ["project", "kind", "summary"],
     },
@@ -702,16 +615,16 @@ REVIEW_LIST = Tool(
     inputSchema={
         "type": "object",
         "properties": {
-            "project": {"type": ["string", "integer"], "description": "Project name or id (optional: all projects)"},
+            "project": {"type": ["string", "integer"], "description": "Project name or id. Omit for all projects."},
             "status": {"type": "string", "enum": ["pending", "approved", "rejected", "all"], "default": "pending",
-                      "description": "pending (default), approved, rejected, or all."},
-            "limit": {"type": "integer", "default": 20, "description": "Max items (default 20, capped at 100)."},
+                      "description": "Which slice of the queue."},
+            "limit": {"type": "integer", "default": 20, "description": "Max items. Default 20, max 100."},
         },
     },
 )
 
 _USER_REQUEST = {"type": "string",
-                 "description": "The user's own words in this chat asking for this decision"}
+                 "description": "The user's words in this chat."}
 
 REVIEW_APPROVE = Tool(
     name="review_approve",
@@ -720,17 +633,17 @@ REVIEW_APPROVE = Tool(
         "type": "object",
         "properties": {
             "project": guide.PROJECT_PROPERTY,
-            "item_id": {"type": "integer", "description": "Review item id from review_list. Required."},
+            "item_id": {"type": "integer", "description": "Review item id from review_list."},
             "user_request": _USER_REQUEST,
-            "summary": {"type": "string", "description": "Replacement summary. Omit to keep the queued text."},
-            "details": {"type": "string", "description": "Replacement details. Omit to keep the queued details."},
+            "summary": {"type": "string", "description": "New summary. Omit to keep."},
+            "details": {"type": "string", "description": "New details. Omit to keep."},
             "priority": {"type": "string", "enum": list(priority.ACCEPTED),
-                         "description": "For a todo or problem: critical, urgent, normal or low (high and medium also work)."},
+                         "description": "Todo or problem. high and medium still work."},
             "category": {"type": "string", "enum": ["pattern", "gotcha", "best_practice", "tool_tip", "architecture", "performance", "security", "other"],
-                         "description": "For a learning: pattern, gotcha, best_practice, tool_tip, architecture, performance, security or other."},
-            "component": {"type": "string", "description": "Component name to file the approved record under. Optional."},
+                         "description": "For a learning. Omit otherwise."},
+            "component": {"type": "string", "description": "Component to file the approved record under."},
             "move_to": {"type": ["string", "integer"],
-                        "description": "Clean-up 'misfiled' items: the project to move it to, if not the suggested one"},
+                        "description": "Project to move a misfiled item to."},
         },
         "required": ["item_id", "user_request"],  # project: checked by the guard (clear error)
     },
@@ -743,8 +656,8 @@ REVIEW_REJECT = Tool(
         "type": "object",
         "properties": {
             "project": guide.PROJECT_PROPERTY,
-            "item_id": {"type": "integer", "description": "Review item id from review_list. Required."},
-            "reason": {"type": "string", "description": "Why the user rejected it, in their words. Required. Kept on the item; nothing is deleted."},
+            "item_id": {"type": "integer", "description": "Review item id from review_list."},
+            "reason": {"type": "string", "description": "The user's reason. Required. The item is kept."},
             "user_request": _USER_REQUEST,
         },
         "required": ["item_id", "reason", "user_request"],  # project: checked by the guard
@@ -758,24 +671,24 @@ LINK = Tool(
         "type": "object",
         "properties": {
             "action": {"type": "string", "enum": ["add", "remove", "list"],
-                       "description": "add (create a link), remove (delete one) or list (read). Required."},
+                       "description": "add, remove, or list."},
             "project": guide.PROJECT_PROPERTY,
             "link_type": {"type": "string", "enum": list(links.LINK_TYPES),
-                          "description": "uses, depends_on, part_of, same_as, supersedes, subtask_of, blocks, about or url. Required for add."},
-            "component": {"type": "string", "description": "Source: a component of project, by name"},
+                          "description": "Relation to the target."},
+            "component": {"type": "string", "description": "Source: a component of this project, by name."},
             "item_type": {"type": "string", "enum": list(links.ENDPOINTS),
-                          "description": "Source: a record type (with item_id)"},
-            "item_id": {"type": "integer", "description": "Source record id. Use with item_type. remove can use this instead of link_id."},
-            "target_project": {"type": ["string", "integer"], "description": "add: target project name or id, with target_component or alone."},
-            "target_component": {"type": "string", "description": "add: component name in target_project."},
+                          "description": "Source record type. Use with item_id."},
+            "item_id": {"type": "integer", "description": "Source record id. remove can use this instead of link_id."},
+            "target_project": {"type": ["string", "integer"], "description": "add: target project name or id."},
+            "target_component": {"type": "string", "description": "add: component name in the target project."},
             "target_type": {"type": "string", "enum": list(links.ENDPOINTS),
-                            "description": "add: target record type (project, component, decision, change, learning, problem, todo). Use with target_id."},
+                            "description": "add: target record type. Use with target_id."},
             "target_id": {"type": "integer", "description": "add: target record id. Use with target_type."},
-            "url": {"type": "string", "description": "add: https URL (GitHub, Linear or similar) stored on the source record."},
-            "note": {"type": "string", "description": "add: optional short note stored on the link."},
-            "link_id": {"type": "integer", "description": "remove: link id from list. Omit if you repeat the add fields."},
+            "url": {"type": "string", "description": "add: https URL stored on the source record."},
+            "note": {"type": "string", "description": "add: short note stored on the link."},
+            "link_id": {"type": "integer", "description": "remove: link id, or the same fields as add."},
             "include_removed": {"type": "boolean", "default": False,
-                                "description": "list: true also returns removed links (default false)."},
+                                "description": "list: also return removed links."},
         },
         "required": ["action"],  # project: checked by the guard (clear error)
     },
@@ -788,19 +701,19 @@ HISTORY = Tool(
         "type": "object",
         "properties": {
             "action": {"type": "string", "enum": ["list", "undo", "who"],
-                       "description": "list (edits), undo (revert the last edit of one record) or who (who did what). Required."},
+                       "description": "list, undo, or who."},
             "project": guide.PROJECT_PROPERTY,
             "record_type": {"type": "string", "enum": list(history.TABLES),
-                            "description": "list/undo: todo, project, component, problem, solution, attempt, variable, method, attachment, link, learning, decision or change. Required for undo."},
-            "record_id": {"type": "integer", "description": "list: optional, with record_type. undo: the record's id. Required for undo."},
+                            "description": "Record table. Required for undo."},
+            "record_id": {"type": "integer", "description": "Record id. Required for undo."},
             "limit": {"type": "integer", "default": 20,
-                      "description": "list/who: max rows (default 20, capped at 100). who uses it as the page size."},
-            "by_app": {"type": "string", "description": "who: only this app (part of the name)"},
-            "by_model": {"type": "string", "description": "who: only this model (part of the name)"},
-            "by_machine": {"type": "string", "description": "who: only this machine / workspace"},
-            "since": {"type": "string", "description": "who: from this local time, e.g. 2026-10-17"},
-            "until": {"type": "string", "description": "who: up to this local time"},
-            "page": {"type": "integer", "default": 1, "description": "who: page (limit rows each)"},
+                      "description": "list/who: max rows. Default 20, max 100."},
+            "by_app": {"type": "string", "description": "who: only this app (part of the name)."},
+            "by_model": {"type": "string", "description": "who: only this model (part of the name)."},
+            "by_machine": {"type": "string", "description": "who: only this machine or workspace."},
+            "since": {"type": "string", "description": "who: from this local time, such as 2026-10-17."},
+            "until": {"type": "string", "description": "who: up to this local time."},
+            "page": {"type": "integer", "default": 1, "description": "who: page number. Default 1."},
         },
         "required": ["action"],
     },
@@ -814,7 +727,7 @@ CLEANUP_SUGGEST = Tool(
         "properties": {
             "project": guide.PROJECT_PROPERTY,
             "kinds": {"type": "array", "items": {"type": "string", "enum": ["duplicate", "stale", "misfiled"]},
-                     "description": "Which checks: duplicate, stale, misfiled. Omit for all three."},
+                     "description": "Which checks to run. Omit for all three."},
         },
     },
 )
@@ -826,12 +739,12 @@ IMPORT_MEMORY = Tool(
         "type": "object",
         "properties": {
             "project": guide.PROJECT_PROPERTY,
-            "text": {"type": "string", "description": "The export / file contents (max 200,000 characters)"},
+            "text": {"type": "string", "description": "File contents. Max 200,000 characters."},
             "format": {"type": "string", "enum": ["memory", "flowstate_markdown"], "default": "memory",
-                      "description": "memory (default): Claude/ChatGPT export or lines. flowstate_markdown: a flowstate export-md file."},
-            "source": {"type": "string", "description": "Where it came from, e.g. Claude, ChatGPT"},
+                      "description": "memory (default) or flowstate_markdown (export-md)."},
+            "source": {"type": "string", "description": "Where it came from, such as Claude or ChatGPT."},
             "kind": {"type": "string", "enum": ["learning", "decision", "todo", "problem", "change"],
-                     "default": "learning", "description": "format=memory: record kind for the items"},
+                     "default": "learning", "description": "Record kind for a memory import. Default learning."},
         },
         "required": ["text"],
     },
@@ -844,14 +757,14 @@ REVIEW_MODE = Tool(
         "type": "object",
         "properties": {
             "action": {"type": "string", "enum": ["get", "set"],
-                       "description": "get (read the mode) or set (change it; user must ask). Required."},
+                       "description": "get, or set when the user asks."},
             "project": {"type": ["string", "integer"],
-                        "description": "Optional: one project's override (default: whole install)"},
+                        "description": "One project. Omit to change the whole install."},
             "mode": {"type": "string", "enum": list(review_mode.MODES),
-                    "description": "set: off (nothing waits), auto_only (default), types (also kinds) or everything. Ignored when clear=true."},
+                    "description": "off, auto_only (default), types, or everything."},
             "kinds": {"type": "array", "items": {"type": "string", "enum": list(review_mode.KINDS)},
-                      "description": "mode=types: which kinds wait for review"},
-            "clear": {"type": "boolean", "description": "set: remove this project's override"},
+                      "description": "mode=types: which kinds also wait for review."},
+            "clear": {"type": "boolean", "description": "set: remove this project's override."},
             "user_request": _USER_REQUEST,
         },
         "required": ["action"],
@@ -865,13 +778,13 @@ RULES = Tool(
         "type": "object",
         "properties": {
             "action": {"type": "string", "enum": ["add", "list", "remove"],
-                       "description": "add (write a rule), list (read) or remove (mark removed; user must ask). Required."},
+                       "description": "add, list, or remove."},
             "project": guide.PROJECT_PROPERTY,
-            "rule": {"type": "string", "description": "add: the rule, one short sentence"},
-            "rule_id": {"type": "integer", "description": "remove: the rule (R<id> in the brief)"},
+            "rule": {"type": "string", "description": "add: the rule, one short sentence."},
+            "rule_id": {"type": "integer", "description": "remove: rule id (R<id> in the brief)."},
             "user_request": _USER_REQUEST,
             "include_removed": {"type": "boolean", "default": False,
-                                "description": "list: true includes removed rules (default false)."},
+                                "description": "list: include removed rules."},
         },
         "required": ["action"],  # project: checked by the guard (clear error)
     },
@@ -884,14 +797,14 @@ HANDOFF = Tool(
         "type": "object",
         "properties": {
             "action": {"type": "string", "enum": ["leave", "list", "pickup"],
-                       "description": "leave (write a note), list (read) or pickup (stop showing a note). Required."},
+                       "description": "leave, list, or pickup."},
             "project": guide.PROJECT_PROPERTY,
-            "where_i_was": {"type": "string", "description": "leave: what you were doing and how far it got (max 1,000)"},
-            "next_step": {"type": "string", "description": "leave: the very next thing to do (max 500)"},
-            "handoff_id": {"type": "integer", "description": "pickup: the note (H<id> in the brief)"},
+            "where_i_was": {"type": "string", "description": "leave: progress so far. Max 1,000 characters."},
+            "next_step": {"type": "string", "description": "leave: the next step. Max 500 characters."},
+            "handoff_id": {"type": "integer", "description": "pickup: note id (H<id> in the brief)."},
             "include_picked_up": {"type": "boolean", "default": False,
-                                   "description": "list: true includes notes already picked up (default false)."},
-            "limit": {"type": "integer", "default": 20, "description": "list: max notes (default 20)."},
+                                   "description": "list: include notes already picked up."},
+            "limit": {"type": "integer", "default": 20, "description": "list: max notes. Default 20."},
         },
         "required": ["action"],
     },
@@ -904,15 +817,15 @@ VERIFY = Tool(
         "type": "object",
         "properties": {
             "action": {"type": "string", "enum": ["stale", "mark", "source"],
-                       "description": "stale (read facts not re-checked), mark (you confirmed one) or source (set where it came from). Required."},
+                       "description": "stale, mark (you re-checked one), or source."},
             "project": guide.PROJECT_PROPERTY,
             "record_type": {"type": "string", "enum": list(provenance.TABLES),
-                            "description": "mark/source: todo, decision, change, learning, problem, variable or method. Required for those actions."},
-            "record_id": {"type": "integer", "description": "mark/source: id of that record. Required for those actions."},
+                            "description": "mark/source: record type."},
+            "record_id": {"type": "integer", "description": "mark/source: record id."},
             "source": {"type": "string", "enum": list(provenance.SOURCES),
-                       "description": "source: required, user_stated, ai_inferred or from_code. mark: optional, stored only if passed."},
-            "days": {"type": "integer", "description": "stale: not checked for this many days (default 60, or FLOWSTATE_STALE_DAYS)."},
-            "limit": {"type": "integer", "default": 20, "description": "stale: max facts to return (default 20)."},
+                       "description": "Required for source. Optional when you mark."},
+            "days": {"type": "integer", "description": "stale: age in days. Default 60."},
+            "limit": {"type": "integer", "default": 20, "description": "stale: max facts. Default 20."},
         },
         "required": ["action"],
     },
@@ -924,9 +837,9 @@ ASK = Tool(
     inputSchema={
         "type": "object",
         "properties": {
-            "question": {"type": "string", "description": "The question in plain words. Required. Example: which port does the LAN server use?"},
-            "project": {"type": ["string", "integer"], "description": "Project name or id. Omit to search every project."},
-            "limit": {"type": "integer", "default": 5, "description": "Max records to quote (default 5)."},
+            "question": {"type": "string", "description": "The question in plain words."},
+            "project": {"type": ["string", "integer"], "description": "Name or id. Omit to search every project."},
+            "limit": {"type": "integer", "default": 5, "description": "Max records to quote. Default 5."},
         },
         "required": ["question"],
     },

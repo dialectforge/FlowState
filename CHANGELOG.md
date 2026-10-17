@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.0.2 - 2026-10-17
+
+### Working with your AI
+- Shorter MCP tool and parameter descriptions. The `tools/list` payload is about 35% smaller
+  for both the full list (35 tools) and the core list (9 tools). Every tool and every
+  parameter still has a description. No change to tool behavior, names, or argument types.
+
 ## 2.0.1 - 2026-10-17
 
 ### Working with your AI
