@@ -10,37 +10,18 @@ Usage:
     python3 mcp-switch.py only flowstate     # Enable ONLY these, disable rest
     python3 mcp-switch.py preset minimal     # Use a preset configuration
     python3 mcp-switch.py preset ios         # Preset for iOS development
-    python3 mcp-switch.py --config PATH off github   # Use another config file
-
-The Claude Desktop config is found per OS, the same way setup_flowstate.py finds it
-(Windows %APPDATA%\\Claude, including Microsoft Store installs; macOS
-~/Library/Application Support/Claude; Linux ~/.config/Claude). The backup is written
-next to it as <name>.backup.json.
 
 After changes, restart Claude Desktop to apply.
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from setup_flowstate import Places  # noqa: E402
-
-
-def backup_path_for(config_path):
-    return config_path.with_name(config_path.stem + ".backup.json")
-
-
-# Config location (--config PATH overrides it)
-CONFIG_PATH = Places().config_path("claude-desktop")
-BACKUP_PATH = backup_path_for(CONFIG_PATH)
-
-
-def use_config(path):
-    global CONFIG_PATH, BACKUP_PATH
-    CONFIG_PATH = Path(path).expanduser()
-    BACKUP_PATH = backup_path_for(CONFIG_PATH)
+# Config location
+CONFIG_PATH = Path.home() / "Library/Application Support/Claude/claude_desktop_config.json"
+BACKUP_PATH = Path.home() / "Library/Application Support/Claude/claude_desktop_config.backup.json"
 
 # All known MCP configurations (add new ones here)
 ALL_MCPS = {
@@ -79,19 +60,19 @@ ALIASES = {
 
 def load_config():
     if CONFIG_PATH.exists():
-        with open(CONFIG_PATH, encoding="utf-8") as f:
+        with open(CONFIG_PATH) as f:
             return json.load(f)
     return {"mcpServers": {}}
 
 def save_config(config):
     # Backup first
     if CONFIG_PATH.exists():
-        with open(CONFIG_PATH, encoding="utf-8") as f:
+        with open(CONFIG_PATH) as f:
             backup = f.read()
-        with open(BACKUP_PATH, 'w', encoding="utf-8") as f:
+        with open(BACKUP_PATH, 'w') as f:
             f.write(backup)
     
-    with open(CONFIG_PATH, 'w', encoding="utf-8") as f:
+    with open(CONFIG_PATH, 'w') as f:
         json.dump(config, f, indent=2)
     print(f"\n✅ Config saved. Backup at: {BACKUP_PATH}")
     print("⚠️  Restart Claude Desktop to apply changes.")
@@ -179,26 +160,13 @@ def apply_preset(preset_name):
     print(f"\n🎛️  Applying preset: {preset_name}")
     only_mcps(PRESETS[preset_name])
 
-def main(argv=None):
-    argv = list(sys.argv[1:] if argv is None else argv)
-    # The status lines use emoji; don't crash when output is redirected on Windows.
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(errors="replace")
-    if "--config" in argv:
-        i = argv.index("--config")
-        if i + 1 >= len(argv):
-            print("Usage: mcp-switch.py --config PATH [command ...]")
-            return 2
-        use_config(argv[i + 1])
-        del argv[i:i + 2]
-    print(f"Config: {CONFIG_PATH}")
-
-    if not argv:
+def main():
+    if len(sys.argv) < 2:
         show_status()
         return
     
-    cmd = argv[0].lower()
-    args = argv[1:]
+    cmd = sys.argv[1].lower()
+    args = sys.argv[2:]
     
     if cmd == "list":
         print("\n📋 Available MCPs:")
@@ -239,4 +207,4 @@ def main(argv=None):
         print(__doc__)
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
