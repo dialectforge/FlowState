@@ -15,6 +15,12 @@ access through your own Cloudflare Tunnel).
 
 Claude, ChatGPT, Cursor and Grok can all use FlowState at once, on your computer, across your network, or from your phone. When one AI logs a decision or a change, the others see it the next time they check. Hard rules and handoff notes reach every AI, and every change records which AI made it, so you always know who did what. Work across projects is linked too, so a change to something shared shows up in every project that uses it.
 
+## Why I built it
+
+I built FlowState v1 in January 2026 as a gift to the vibe coder community, back when context was a serious bottleneck and every new AI chat started from scratch. This week I updated it, because the bottleneck moved. Now most of us work across several AI platforms at once, and keeping context between them is the new problem. FlowState stays free and local.
+
+*John Martin, DialectForge*
+
 ---
 
 ## Quick start: point your AI at this repo
