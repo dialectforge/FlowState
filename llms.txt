@@ -2,7 +2,7 @@
 
 > FlowState is a free, open-source (MIT), local-first project memory for AI apps: an MCP server (Python 3.11+, SQLite) that stores todos, changes, decisions, problems and learnings per project in a file on the user's machine. Agents call `start_here` first for a short project brief (quick / standard / deep), record work with `log_work`, and sessions open and close automatically. Auto-captured summaries and suggested records wait in a review queue for the user's OK; the user sets the review mode (off / auto_only / types / everything). Projects have hard rules, handoff notes, cross-project links with change alerts, priorities, subtasks and blockers, edit history with undo, and an extractive `ask` tool. Every recorded change keeps the app, the AI model (only when the app supplies it, never guessed), the machine or workspace and how the app was identified; a "Who did what" view (review page, and `history(action="who")`) lists them. The local/LAN HTTP server takes per-app keys (`flowstate keys add`), so the app name comes from the key. Writes containing secrets are refused. Transports: stdio, and HTTP with a bearer token; optional remote access for cloud AIs through the user's own Cloudflare Tunnel with OAuth 2.1 and per-app tokens. Nightly local backups and an optional private-only GitHub off-site copy are built in. An Agent Skill (skills/flowstate) teaches the routine. Many AIs (Claude, ChatGPT, Cursor, Grok) can share one memory at the same time, locally, over the network or from a phone.
 
-Repository: https://github.com/dialectforge/FlowStateV1.1
+Repository: https://github.com/dialectforge/FlowState
 
 ## Start here
 

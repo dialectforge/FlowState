@@ -28,7 +28,7 @@ I built FlowState v1 in January 2026 as a gift to the vibe coder community, back
 Paste this into an AI app that can run commands on your computer (Claude Code, Cursor,
 Windsurf, Codex CLI, Grok Build, ...):
 
-> Set up FlowState for me from https://github.com/dialectforge/FlowStateV1.1 by following its AGENTS.md.
+> Set up FlowState for me from https://github.com/dialectforge/FlowState by following its AGENTS.md.
 
 The AI reads [AGENTS.md](AGENTS.md), asks you which apps to connect and whether you want
 nightly backups and the FlowState skill, shows you a dry run, then runs `setup_flowstate.py`.
@@ -67,7 +67,7 @@ JSON config with an `mcpServers` object), `--db <file>`, `--python <path>`.
 Needs Python 3.11+ and git.
 
 ```bash
-git clone https://github.com/dialectforge/FlowStateV1.1.git FlowState
+git clone https://github.com/dialectforge/FlowState.git FlowState
 cd FlowState
 python -m venv .venv
 # Windows: .venv\Scripts\python   macOS/Linux: .venv/bin/python

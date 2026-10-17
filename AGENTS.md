@@ -30,7 +30,7 @@ Below, `PY` means whichever command worked (`python3`, `python` or `py -3`).
 If you are not already inside a clone of this repository:
 
 ```bash
-git clone https://github.com/dialectforge/FlowStateV1.1.git FlowState
+git clone https://github.com/dialectforge/FlowState.git FlowState
 cd FlowState
 ```
 
