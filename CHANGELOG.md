@@ -4,8 +4,6 @@
 
 ### Getting started
 - AGENTS.md: setup snippets for VS Code (GitHub Copilot), Cline and Zed.
-- `scripts/mcp-switch.py` finds the Claude Desktop config on Windows, macOS and Linux (the
-  same way `setup_flowstate.py` does) and takes `--config PATH` for another file.
 
 ### For contributors
 - CONTRIBUTING.md, and a GitHub Actions workflow that runs the tests on Windows, macOS and
