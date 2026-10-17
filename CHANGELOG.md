@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.0.1 - 2026-10-17
+
+### Working with your AI
+- Clearer tool and parameter descriptions. Every MCP tool says what it does, when to use a
+  sibling tool instead, what a write changes and whether history can undo it, and what it
+  returns. Every input parameter has a description (meaning, valid values, default, and which
+  action uses it). No change to tool behavior, names, or argument types.
+
 ## 2.0.0 - 2026-10-17
 
 FlowState 2 turns the v1.1 MCP server into a shared project memory that any AI app can use

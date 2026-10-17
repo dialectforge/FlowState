@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "flowstate"
-version = "2.0.0"
+version = "2.0.1"
 description = "Development memory system - context that flows between sessions"
 readme = "README.md"
 license = "MIT"
