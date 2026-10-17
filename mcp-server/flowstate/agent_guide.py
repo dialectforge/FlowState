@@ -11,30 +11,36 @@ INSTRUCTIONS = """FlowState is the user's project memory (todos, changes, decisi
 7. If FlowState is slow, errors, or is unavailable, tell the user once and carry on with their task without it. Never retry more than once."""
 
 START_HERE_DESCRIPTION = (
-    "CALL THIS FIRST in every conversation about a project. Returns a brief (max 4,000 "
-    "characters) with the project's hard rules (never break them), any handoff note from the "
-    "last AI, open todos, open problems, recent changes, recent decisions and key learnings, "
-    "and opens a FlowState session automatically. Pass project=\"<name>\" (or id). "
-    "size=quick (short) or deep (longer, up to 12,000) if needed. Unknown project? Call with "
-    "no arguments, or with folder=\"<working folder>\", to get the list of projects."
+    "CALL THIS FIRST in every conversation about a project, before get_context or "
+    "list_projects. Returns a text brief (standard max 4,000 characters; size=quick about "
+    "1,500; size=deep up to 12,000) with hard rules (never break them), any handoff, open "
+    "todos and problems, recent changes, decisions and learnings, and opens a session. "
+    "project is a name or id. With no project, or only folder (its name is matched to a "
+    "project), returns the project list as text instead of a brief. Does not log work; "
+    "use log_work."
 )
 
 LOG_WORK_DESCRIPTION = (
-    "Record work as you go (write; project required). kind: decision (a choice made and why), "
-    "change (something changed), problem (bug or blocker), learning (lesson or gotcha), "
+    "Record work as you go (write; project required). Prefer this over log_learning, "
+    "log_change, problem action=log and todo action=add. kind: decision (a choice made and "
+    "why), change (something changed), problem (bug or blocker), learning (lesson or gotcha), "
     "todo (follow-up). summary: one short line. details: optional. component: optional "
     "component name (changes and problems default to 'General'). suggested=true: you are "
     "not sure the user wants this recorded, so it goes to the review queue instead of being "
     "saved. priority (todos; severity for problems): critical, urgent, normal (default), low. "
     "source: user_stated (the user said it), ai_inferred (your conclusion) or from_code (read "
     "in code or commits). Never include secrets (writes containing keys, tokens or passwords "
-    "are refused)."
+    "are refused). Returns {logged, project_id, record}, or {queued_for_review, kind} when "
+    "suggested or the review mode holds that kind. A new record is not deleted by history undo."
 )
 
 REVIEW_LIST_DESCRIPTION = (
-    "List items waiting in the review queue (auto-captured session summaries and records "
-    "logged with suggested=true). Read-only. Show them to the user; approving or rejecting "
-    "is the user's decision."
+    "List items waiting in the review queue (auto-captured session summaries, records "
+    "logged with suggested=true, and kinds the review mode holds). Read-only. Show them "
+    "to the user; approve or reject only with review_approve / review_reject when they "
+    "ask. status: pending (default), approved, rejected or all. limit default 20 (max 100); "
+    "project optional. Returns {items: [{id, project, kind, status, summary, details, "
+    "source, created_at}], total, status}."
 )
 
 _USER_ONLY = (
@@ -45,14 +51,18 @@ _USER_ONLY = (
 )
 
 REVIEW_APPROVE_DESCRIPTION = (
-    "Approve a review item so it becomes a normal FlowState record. To edit then approve, "
-    "pass the corrected summary/details (or priority/category/component)." + _USER_ONLY
+    "Approve a review item so it becomes a normal FlowState record (a session summary is "
+    "written onto that session instead). To edit then approve, pass the corrected "
+    "summary/details (or priority/category/component). move_to places a misfiled item in "
+    "another project. Returns {approved, kind, edited, record: {table, id}}. Undo later "
+    "edits with history; undo does not delete the new record." + _USER_ONLY
     + " Write: requires project=\"<name>\"."
 )
 
 REVIEW_REJECT_DESCRIPTION = (
     "Reject a review item. It is kept, marked rejected, with the user's reason (nothing is "
-    "deleted)." + _USER_ONLY + " Write: requires project=\"<name>\"."
+    "deleted). Returns {rejected, kind, reason}." + _USER_ONLY
+    + " Write: requires project=\"<name>\"."
 )
 
 LINK_DESCRIPTION = (
@@ -62,10 +72,12 @@ LINK_DESCRIPTION = (
     "is the project, or component=\"<name in project>\", or item_type+item_id (decision, "
     "change, learning, problem, todo). Target: target_project (+ target_component), "
     "target_type+target_id, or url (a GitHub/Linear link to keep on a record). link_type: uses, "
-    "depends_on, part_of, same_as (also supersedes, subtask_of, blocks). Changes logged on a "
+    "depends_on, part_of, same_as, supersedes, subtask_of, blocks, about or url. Changes logged on a "
     "shared component alert every project linked to it (an update todo + a note in its brief). "
     "FlowState only alerts; it does not change other apps' code. remove: link_id (or the add "
-    "fields). list: links of the project or of one item."
+    "fields) deletes the link; history undo (record_type=link) puts it back. list (read) "
+    "returns the project's links. add returns the new link. Record a change to a shared "
+    "component with log_work, not with link."
 )
 
 REVIEW_MODE_DESCRIPTION = (
@@ -87,7 +99,9 @@ HISTORY_DESCRIPTION = (
     "action=who (read): who did what, newest first, across projects or one project: app, "
     "model, machine and how the app was identified, for edits, review decisions, links, "
     "handoffs, rules and new records; filters by_app, by_model, by_machine, since, until "
-    "(local time, e.g. 2026-10-17 or 2026-10-17 14:30), page."
+    "(local time, e.g. 2026-10-17 or 2026-10-17 14:30), page. list returns {history, count} "
+    "with old/new fields; undo returns {undone, rows}; who returns {rows, total, page}. "
+    "For what was logged as a change, use get_recent_changes, not history."
 )
 
 MODEL_PROPERTY = {
@@ -100,7 +114,9 @@ CLEANUP_DESCRIPTION = (
     "in the review queue as suggestions (write; project required; additive: nothing is moved, "
     "closed or deleted). The user approves or rejects each one; approving applies only that "
     "suggestion and it can be undone with history. Suggestions the user rejected are not "
-    "repeated. kinds: any of duplicate, stale, misfiled (default all)."
+    "repeated. kinds: any of duplicate, stale, misfiled (default all). Returns {queued, "
+    "item_ids, already_suggested, found, examples}. Applying one is review_approve, not "
+    "this tool."
 )
 
 IMPORT_DESCRIPTION = (
@@ -108,7 +124,10 @@ IMPORT_DESCRIPTION = (
     "saved as a record until the user approves). format=memory (default): a Claude or ChatGPT "
     "memory export or copy, as text/markdown (one per line) or JSON. format=flowstate_markdown: "
     "a file made by `flowstate export-md`; new lines and edited lines become review items. "
-    "Pass the file's contents as text. Lines that look like secrets are skipped, not stored."
+    "Pass the file's contents as text. Lines that look like secrets are skipped, not stored. "
+    "format=memory returns {found, queued, secrets_skipped, duplicates_skipped}; "
+    "flowstate_markdown returns counts of new, edits, unchanged and secrets_skipped. One new "
+    "note is log_work, not import."
 )
 
 RULES_DESCRIPTION = (
@@ -116,14 +135,18 @@ RULES_DESCRIPTION = (
     "shown first in every start_here brief, in full. action=list (read). action=add (write; "
     "project required): rule = one short sentence (max 300 characters; 2,000 per project); add "
     "one when the user states a rule. action=remove (write): rule_id, ONLY when the user asks "
-    "you in this chat; user_request must quote their words."
+    "you in this chat; user_request must quote their words. remove keeps the text, marked "
+    "removed. list returns {rules, count, characters_used, characters_max}. A one-off choice "
+    "is log_work kind=decision, not a rule."
 )
 
 HANDOFF_DESCRIPTION = (
     "Handoff notes between AIs. Stopping mid-task (out of time, context or tokens, or the user "
     "ends the chat)? action=leave (write; project required) with where_i_was (what was being "
     "done and its state) and next_step. The next AI sees it first in start_here. When you "
-    "continue from a note, action=pickup with handoff_id so it stops showing. action=list (read)."
+    "continue from a note, action=pickup with handoff_id so it stops showing (returns "
+    "{picked_up: true}). action=list (read) returns {handoffs, count}. leave returns "
+    "{handoff_id}. This is not a session summary; sessions close on their own."
 )
 
 VERIFY_DESCRIPTION = (
@@ -131,7 +154,8 @@ VERIFY_DESCRIPTION = (
     "project not checked for 60+ days; check them. action=mark (write): you confirmed a record "
     "still holds (record_type + record_id; optional source). action=source (write): set where a "
     "record came from: user_stated, ai_inferred or from_code. If a fact changed, log the "
-    "change instead."
+    "change with log_work instead. stale returns {stale, total, stale_after_days} and writes "
+    "nothing. mark and source return that record's provenance."
 )
 
 ASK_DESCRIPTION = (
@@ -139,7 +163,8 @@ ASK_DESCRIPTION = (
     "use?\". Returns a short answer quoted from the best-matching records, with their ids "
     "(type #id), plus matching hard rules and handoff notes. Local only (meaning search if a "
     "local model is installed, keywords otherwise). If nothing matches it says so; it never "
-    "guesses. project optional (default: all projects)."
+    "guesses. project optional (default: all projects). Returns {question, answer, sources: "
+    "[{type, id, project, text}], mode}. To list matches without an answer, use search."
 )
 
 WRITE_NOTE = " Write: requires project=\"<name>\" (or project_id)."

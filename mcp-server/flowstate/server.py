@@ -44,7 +44,7 @@ from .guard import GuardError, WRITES, check_write, explicit_project, is_write, 
 log = logging.getLogger("flowstate")
 
 # Create server instance; instructions reach every client at initialize.
-server = Server("flowstate", version="2.0.0", instructions=guide.INSTRUCTIONS)
+server = Server("flowstate", version="2.0.1", instructions=guide.INSTRUCTIONS)
 
 
 from .tooldefs import (  # noqa: E402,F401 - re-exported for callers and tests
