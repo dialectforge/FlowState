@@ -414,7 +414,7 @@ CREATE TABLE IF NOT EXISTS session_state (
     
     -- What needs to continue
     pending_decisions TEXT,       -- JSON: ["Whether to use BLOB or TEXT for embeddings"]
-    key_facts TEXT,               -- JSON: ["User prefers explicit over implicit", "Project uses Tauri 2.0"]
+    key_facts TEXT,               -- JSON: ["User prefers explicit over implicit", "Project uses SQLite WAL mode"]
     
     -- Chain for history
     previous_state_id INTEGER REFERENCES session_state(id),
@@ -687,3 +687,27 @@ AFTER UPDATE ON behavior_patterns
 BEGIN
     UPDATE behavior_patterns SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 END;
+
+-- ============================================================
+-- v2 PHASE A: IMPLICIT (AUTO) SESSIONS
+-- ============================================================
+-- Newer v2 tables are NOT added here: they come from the numbered migrations in
+-- mcp-server/flowstate/migrations/ (applied on server start, by setup_flowstate.py and
+-- by `flowstate migrate`). This block equals migration 001.
+
+-- One row per FlowState session the server opened on its own, keyed by MCP client
+-- name + project. Closed after an idle timeout, on server shutdown, or explicitly.
+-- Additive only: nothing existing is altered.
+CREATE TABLE IF NOT EXISTS auto_sessions (
+    session_id INTEGER PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    client TEXT NOT NULL,
+    server_instance TEXT NOT NULL,
+    opened_at TEXT NOT NULL,      -- UTC, 'YYYY-MM-DD HH:MM:SS'
+    last_activity TEXT NOT NULL,  -- UTC
+    call_count INTEGER NOT NULL DEFAULT 0,
+    events TEXT NOT NULL DEFAULT '[]', -- JSON list of short event labels (capped)
+    closed_at TEXT,
+    close_reason TEXT             -- idle | shutdown | stale | explicit
+);
+CREATE INDEX IF NOT EXISTS idx_auto_sessions_open ON auto_sessions(closed_at, client, project_id);

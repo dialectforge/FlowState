@@ -1,0 +1,18 @@
+# cloudflared config for FlowState (TEMPLATE, not in use). See docs/REMOTE-ACCESS.md.
+# Copy to %USERPROFILE%\.cloudflared\config.yml and fill in the two <...> values that
+# `cloudflared tunnel create flowstate` prints. The credentials JSON it creates is a
+# secret: keep it in %USERPROFILE%\.cloudflared, never in a synced or git folder.
+#
+# The tunnel only makes OUTBOUND connections to Cloudflare; no router port is opened.
+tunnel: <TUNNEL-UUID>
+credentials-file: C:\Users\<you>\.cloudflared\<TUNNEL-UUID>.json
+
+ingress:
+  # FlowState's public listener (scripts/windows/start-flowstate-public.cmd), loopback only.
+  - hostname: flowstate.example.com
+    service: http://127.0.0.1:8767
+    originRequest:
+      httpHostHeader: flowstate.example.com   # FlowState checks the Host header
+      connectTimeout: 10s
+  # Anything else on this tunnel: refuse.
+  - service: http_status:404

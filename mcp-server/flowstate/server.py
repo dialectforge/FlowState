@@ -1,867 +1,1148 @@
-"""FlowState MCP Server v1.5 - Consolidated Tools Edition.
+﻿"""FlowState MCP Server - v2 Phase A.
 
-Reduces 79 tools → 21 tools while preserving all functionality.
+Any MCP client (Claude Desktop, Grok Build, Cursor, Codex, Claude Code, ...) gets:
+initialize instructions, a `start_here` brief (<= 4,000 chars), implicit sessions that
+open on first use and close when idle, a project check on every write, and fail-safe
+behaviour (timeouts and errors come back as tool errors, never as broken connections).
+Transports: stdio (default) and streamable HTTP with a bearer token.
 """
 
 import asyncio
 import json
+import logging
+import os
+import sqlite3
+import sys
+import time
 from pathlib import Path
 from typing import Any, Optional
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
+from mcp import types
 from mcp.types import Tool, TextContent
 
 from . import tools
-from .database import Database, init_db
+from . import agent_guide as guide
+from . import activity
+from . import cleanup
+from . import history
+from . import identity
+from . import links
+from . import review
+from . import review_mode
+from . import tasks
+from . import extras
+from . import priority
+from . import provenance
+from . import secrets_scan
+from .autosession import AutoSessions, ensure_schema
+from .brief import build_brief, candidates_text, resolve_project
+from .database import Database, DEFAULT_DB_PATH
+from .guard import GuardError, WRITES, check_write, explicit_project, is_write, writes_text
+
+log = logging.getLogger("flowstate")
+
+# Create server instance; instructions reach every client at initialize.
+server = Server("flowstate", version="2.0.0", instructions=guide.INSTRUCTIONS)
 
 
-# Create server instance
-server = Server("flowstate")
+from .tooldefs import (  # noqa: E402,F401 - re-exported for callers and tests
+    ALL_TOOLS, CLEANUP_SUGGEST, HISTORY, IMPORT_MEMORY, LINK, LOG_WORK, REVIEW_APPROVE,
+    REVIEW_LIST, REVIEW_MODE, REVIEW_REJECT, START_HERE, TOOLS, _NEW_TOOLS, _USER_REQUEST,
+    _WRITE_TOOLS, _decorate_tools)
+from . import tool_labels  # noqa: E402
+from .routing import route_tool  # noqa: E402
 
 
-# ============================================================
-# TOOL DEFINITIONS - v1.5 Consolidated
-# ============================================================
+def _route_tool(name: str, args: dict) -> Any:
+    return route_tool(name, args, backend.db_path)
 
-TOOLS = [
-    # ----------------------------------------
-    # PROJECT TOOLS (3 tools)
-    # ----------------------------------------
-    Tool(
-        name="list_projects",
-        description="List all projects with their status.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "status": {
-                    "type": "string",
-                    "enum": ["active", "paused", "completed", "archived"],
-                    "description": "Filter by status"
-                }
-            }
-        }
-    ),
-    Tool(
-        name="create_project",
-        description="Create a new project.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "name": {"type": "string", "description": "Project name (unique)"},
-                "description": {"type": "string", "description": "Project description"}
-            },
-            "required": ["name"]
-        }
-    ),
-    Tool(
-        name="update_project",
-        description="Update project details.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "project_id": {"type": "integer"},
-                "name": {"type": "string"},
-                "description": {"type": "string"},
-                "status": {"type": "string", "enum": ["active", "paused", "completed", "archived"]}
-            },
-            "required": ["project_id"]
-        }
-    ),
-    
-    # ----------------------------------------
-    # CONTEXT TOOL (1 tool - replaces 2)
-    # ----------------------------------------
-    Tool(
-        name="get_context",
-        description="Get project context. Use lean=True (default) for minimal tokens at session start. Use lean=False for full details when needed.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "project_name": {"type": "string", "description": "Project name"},
-                "lean": {"type": "boolean", "description": "Minimal tokens (default True)", "default": True},
-                "hours": {"type": "integer", "description": "Hours back for changes", "default": 48}
-            },
-            "required": ["project_name"]
-        }
-    ),
-    
-    # ----------------------------------------
-    # COMPONENT TOOLS (3 tools)
-    # ----------------------------------------
-    Tool(
-        name="create_component",
-        description="Create a component within a project.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "project_id": {"type": "integer"},
-                "name": {"type": "string"},
-                "description": {"type": "string"},
-                "parent_component_id": {"type": "integer", "description": "For nesting"}
-            },
-            "required": ["project_id", "name"]
-        }
-    ),
-    Tool(
-        name="list_components",
-        description="List components in a project.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "project_id": {"type": "integer"}
-            },
-            "required": ["project_id"]
-        }
-    ),
-    Tool(
-        name="update_component",
-        description="Update a component.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "component_id": {"type": "integer"},
-                "name": {"type": "string"},
-                "description": {"type": "string"},
-                "status": {"type": "string", "enum": ["planning", "in_progress", "testing", "complete", "deprecated"]}
-            },
-            "required": ["component_id"]
-        }
-    ),
-    
-    # ----------------------------------------
-    # LEARNING TOOLS (2 tools) - Core memory!
-    # ----------------------------------------
-    Tool(
-        name="log_learning",
-        description="Capture an insight or learning. This is your memory - use it!",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "project_id": {"type": "integer"},
-                "insight": {"type": "string", "description": "The learning/insight"},
-                "component_id": {"type": "integer"},
-                "category": {"type": "string", "enum": ["pattern", "gotcha", "best_practice", "tool_tip", "architecture", "performance", "security", "other"]},
-                "context": {"type": "string", "description": "When this applies"},
-                "source": {"type": "string", "enum": ["experience", "documentation", "conversation", "error", "research"], "default": "experience"}
-            },
-            "required": ["project_id", "insight"]
-        }
-    ),
-    Tool(
-        name="get_learnings",
-        description="Get learnings. Use compact=True to save tokens.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "project_id": {"type": "integer"},
-                "category": {"type": "string", "enum": ["pattern", "gotcha", "best_practice", "tool_tip", "architecture", "performance", "security", "other"]},
-                "compact": {"type": "boolean", "default": False}
-            }
-        }
-    ),
-    
-    # ----------------------------------------
-    # CHANGE TOOLS (2 tools)
-    # ----------------------------------------
-    Tool(
-        name="log_change",
-        description="Log a change to a component.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "component_id": {"type": "integer"},
-                "field_name": {"type": "string", "description": "What changed"},
-                "old_value": {"type": "string"},
-                "new_value": {"type": "string"},
-                "reason": {"type": "string"},
-                "change_type": {"type": "string", "enum": ["config", "code", "architecture", "dependency", "documentation", "other"]}
-            },
-            "required": ["component_id", "field_name"]
-        }
-    ),
-    Tool(
-        name="get_recent_changes",
-        description="Get recent changes. Use compact=True to save tokens.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "project_id": {"type": "integer"},
-                "component_id": {"type": "integer"},
-                "hours": {"type": "integer", "default": 24},
-                "compact": {"type": "boolean", "default": False}
-            }
-        }
-    ),
-    
-    # ----------------------------------------
-    # SEARCH TOOL (1 tool)
-    # ----------------------------------------
-    Tool(
-        name="search",
-        description="Search across problems, solutions, learnings, changes.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "query": {"type": "string"},
-                "project_id": {"type": "integer"},
-                "content_types": {"type": "array", "items": {"type": "string"}, "description": "Filter: problem, solution, learning, change"},
-                "limit": {"type": "integer", "default": 10}
-            },
-            "required": ["query"]
-        }
-    ),
-    
-    # ----------------------------------------
-    # CONSOLIDATED: PROBLEM (1 tool replaces 4)
-    # ----------------------------------------
-    Tool(
-        name="problem",
-        description="Manage problems. Actions: log, list, solve, get_tree",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "action": {"type": "string", "enum": ["log", "list", "solve", "get_tree"]},
-                # For log:
-                "component_id": {"type": "integer"},
-                "title": {"type": "string"},
-                "description": {"type": "string"},
-                "severity": {"type": "string", "enum": ["low", "medium", "high", "critical"], "default": "medium"},
-                # For list:
-                "project_id": {"type": "integer"},
-                "compact": {"type": "boolean", "default": False},
-                # For solve:
-                "problem_id": {"type": "integer"},
-                "summary": {"type": "string"},
-                "key_insight": {"type": "string"},
-                "winning_attempt_id": {"type": "integer"},
-                "code_snippet": {"type": "string"}
-            },
-            "required": ["action"]
-        }
-    ),
-    
-    # ----------------------------------------
-    # CONSOLIDATED: ATTEMPT (1 tool replaces 2)
-    # ----------------------------------------
-    Tool(
-        name="attempt",
-        description="Manage solution attempts. Actions: log, outcome",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "action": {"type": "string", "enum": ["log", "outcome"]},
-                # For log:
-                "problem_id": {"type": "integer"},
-                "description": {"type": "string"},
-                "parent_attempt_id": {"type": "integer"},
-                # For outcome:
-                "attempt_id": {"type": "integer"},
-                "outcome": {"type": "string", "enum": ["success", "failure", "partial", "abandoned"]},
-                "notes": {"type": "string"},
-                "confidence": {"type": "string", "enum": ["attempted", "worked_once", "verified", "proven", "deprecated"], "default": "attempted"}
-            },
-            "required": ["action"]
-        }
-    ),
-    
-    # ----------------------------------------
-    # CONSOLIDATED: TODO (1 tool replaces 3)
-    # ----------------------------------------
-    Tool(
-        name="todo",
-        description="Manage todos. Actions: add, update, list",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "action": {"type": "string", "enum": ["add", "update", "list"]},
-                # For add:
-                "project_id": {"type": "integer"},
-                "title": {"type": "string"},
-                "description": {"type": "string"},
-                "component_id": {"type": "integer"},
-                "priority": {"type": "string", "enum": ["low", "medium", "high", "critical"], "default": "medium"},
-                "due_date": {"type": "string"},
-                # For update:
-                "todo_id": {"type": "integer"},
-                "status": {"type": "string", "enum": ["pending", "in_progress", "blocked", "done", "cancelled"]},
-                # For list:
-                "compact": {"type": "boolean", "default": False}
-            },
-            "required": ["action"]
-        }
-    ),
-    
-    # ----------------------------------------
-    # CONSOLIDATED: SESSION (1 tool replaces 6)
-    # ----------------------------------------
-    Tool(
-        name="session",
-        description="Manage sessions. Actions: start, end, current, log_conversation, list_conversations, list_sessions",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "action": {"type": "string", "enum": ["start", "end", "current", "log_conversation", "list_conversations", "list_sessions"]},
-                # For start:
-                "project_id": {"type": "integer"},
-                "focus_component_id": {"type": "integer"},
-                "focus_problem_id": {"type": "integer"},
-                # For end:
-                "session_id": {"type": "integer"},
-                "summary": {"type": "string"},
-                "outcomes": {"type": "array", "items": {"type": "string"}},
-                # For log_conversation:
-                "user_prompt_summary": {"type": "string"},
-                "assistant_response_summary": {"type": "string"},
-                "key_decisions": {"type": "array", "items": {"type": "string"}},
-                # For list:
-                "limit": {"type": "integer", "default": 20}
-            },
-            "required": ["action"]
-        }
-    ),
-    
-    # ----------------------------------------
-    # CONSOLIDATED: FILE (1 tool replaces 4)
-    # ----------------------------------------
-    Tool(
-        name="file",
-        description="Manage file attachments. Actions: attach, list, remove, search",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "action": {"type": "string", "enum": ["attach", "list", "remove", "search"]},
-                # For attach:
-                "project_id": {"type": "integer"},
-                "file_path": {"type": "string"},
-                "component_id": {"type": "integer"},
-                "problem_id": {"type": "integer"},
-                "user_description": {"type": "string"},
-                "tags": {"type": "array", "items": {"type": "string"}},
-                "copy_to_bundle": {"type": "boolean", "default": True},
-                # For remove:
-                "attachment_id": {"type": "integer"},
-                "delete_file": {"type": "boolean", "default": False},
-                # For search:
-                "query": {"type": "string"},
-                "file_types": {"type": "array", "items": {"type": "string"}},
-                "limit": {"type": "integer", "default": 10}
-            },
-            "required": ["action"]
-        }
-    ),
-    
-    # ----------------------------------------
-    # CONSOLIDATED: GIT (1 tool replaces 6)
-    # ----------------------------------------
-    Tool(
-        name="git",
-        description="Git operations. Actions: init, status, sync, set_remote, clone, history",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "action": {"type": "string", "enum": ["init", "status", "sync", "set_remote", "clone", "history"]},
-                # For sync:
-                "commit_message": {"type": "string"},
-                # For set_remote/clone:
-                "remote_url": {"type": "string"},
-                "local_path": {"type": "string"},
-                # For history:
-                "limit": {"type": "integer", "default": 20}
-            },
-            "required": ["action"]
-        }
-    ),
-    
-    # ----------------------------------------
-    # CONSOLIDATED: VARIABLE (1 tool replaces 4)
-    # ----------------------------------------
-    Tool(
-        name="variable",
-        description="Manage project variables (servers, credentials, config). Actions: create, list, update, delete",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "action": {"type": "string", "enum": ["create", "list", "update", "delete"]},
-                "project_id": {"type": "integer"},
-                "variable_id": {"type": "integer"},
-                "name": {"type": "string"},
-                "value": {"type": "string"},
-                "description": {"type": "string"},
-                "category": {"type": "string", "enum": ["server", "credentials", "config", "environment", "endpoint", "custom"], "default": "custom"},
-                "is_secret": {"type": "boolean", "default": False}
-            },
-            "required": ["action"]
-        }
-    ),
-    
-    # ----------------------------------------
-    # CONSOLIDATED: METHOD (1 tool replaces 4)
-    # ----------------------------------------
-    Tool(
-        name="method",
-        description="Manage project methods (auth flows, deployment steps, patterns). Actions: create, list, update, delete",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "action": {"type": "string", "enum": ["create", "list", "update", "delete"]},
-                "project_id": {"type": "integer"},
-                "method_id": {"type": "integer"},
-                "name": {"type": "string"},
-                "description": {"type": "string"},
-                "category": {"type": "string", "enum": ["auth", "deployment", "testing", "architecture", "workflow", "convention", "api", "security", "other"]},
-                "steps": {"type": "array", "items": {"type": "string"}},
-                "code_example": {"type": "string"},
-                "related_component_id": {"type": "integer"}
-            },
-            "required": ["action"]
-        }
-    ),
-    
-    # ----------------------------------------
-    # CONSOLIDATED: SELF_IMPROVE (1 tool replaces 23!)
-    # The living skill system - keeps Claude learning
-    # ----------------------------------------
-    Tool(
-        name="self_improve",
-        description="Manage Claude's learned skills and session state. Actions: learn_skill, get_skills, confirm_skill, save_state, get_state, log_metric, get_metrics",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "action": {"type": "string", "enum": ["learn_skill", "get_skills", "confirm_skill", "save_state", "get_state", "log_metric", "get_metrics"]},
-                # For learn_skill:
-                "skill": {"type": "string", "description": "What was learned"},
-                "skill_type": {"type": "string", "enum": ["tool_capability", "user_preference", "approach", "gotcha", "project_specific"]},
-                "context": {"type": "string", "description": "When this applies"},
-                "tool_name": {"type": "string"},
-                # For get_skills:
-                "project_id": {"type": "integer"},
-                "promoted_only": {"type": "boolean", "default": False},
-                # For confirm_skill:
-                "skill_id": {"type": "integer"},
-                # For save_state:
-                "focus_summary": {"type": "string"},
-                "key_facts": {"type": "array", "items": {"type": "string"}},
-                "pending_decisions": {"type": "array", "items": {"type": "string"}},
-                "active_problem_ids": {"type": "array", "items": {"type": "integer"}},
-                "active_component_ids": {"type": "array", "items": {"type": "integer"}},
-                # For get_state:
-                # (uses project_id)
-                # For log_metric:
-                "metric_type": {"type": "string", "enum": ["checkpoint_timing", "tool_choice", "response_quality", "prediction_accuracy", "user_satisfaction"]},
-                "effectiveness_score": {"type": "number", "description": "0.0-1.0"},
-                "action_taken": {"type": "string"},
-                "outcome": {"type": "string"}
-            },
-            "required": ["action"]
-        }
-    ),
-]
 
-# Total: 21 tools (down from 79!)
 
 
 # ============================================================
-# TOOL HANDLER - Routes consolidated tools to implementations
+# BACKEND STATE (fail-safe: a broken DB never stops the server)
+# ============================================================
+
+class _Backend:
+    db_path: Optional[Path] = None
+    error: Optional[str] = None
+    tracker: Optional[AutoSessions] = None
+    migration_error: Optional[str] = None
+
+
+backend = _Backend()
+
+
+def init_backend(db_path: Optional[Path] = None) -> None:
+    """Open the DB and the session tracker. Failures are remembered, not raised."""
+    path = Path(db_path) if db_path else DEFAULT_DB_PATH
+    backend.db_path, backend.error, backend.tracker = path, None, None
+    backend.migration_error = None
+    try:
+        db = Database(path)
+        conn = sqlite3.connect(str(path), timeout=5.0)
+        try:  # fail now, not on the first call, if the file isn't a usable DB
+            conn.execute("SELECT 1 FROM projects LIMIT 1").fetchall()
+        finally:
+            conn.close()
+        _migrate(path)
+        ensure_schema(path)  # Phase A table, in case the migrations could not run
+        tools.set_db(db)
+        backend.tracker = AutoSessions(path)
+    except Exception as e:  # noqa: BLE001 - any failure means "unavailable"
+        backend.error = f"{type(e).__name__}: {e}"
+        log.error("FlowState database unavailable (%s): %s", path, backend.error)
+
+
+def _migrate(path: Path) -> None:
+    """Additive numbered migrations (backup first). A failure leaves the server running
+    without the newer features; it never stops FlowState from starting."""
+    from .migrations import migrate
+    try:
+        res = migrate(path, log=log.info)
+        if res["applied"]:
+            log.info("migrations applied: %s (backup: %s)", ", ".join(res["applied"]), res["backup"])
+    except Exception as e:  # noqa: BLE001
+        backend.migration_error = f"{type(e).__name__}: {e}"
+        log.error("database migration skipped: %s", backend.migration_error)
+
+
+def call_timeout() -> float:
+    try:
+        return float(os.environ.get("FLOWSTATE_CALL_TIMEOUT", "15"))
+    except ValueError:
+        return 15.0
+
+
+def _client_name() -> str:
+    try:
+        cp = server.request_context.session.client_params
+        if cp and cp.clientInfo and cp.clientInfo.name:
+            return cp.clientInfo.name
+    except (LookupError, AttributeError):
+        pass
+    return "unknown"
+
+
+def _caller() -> tuple[str, Optional[list[str]]]:
+    """(client id, scopes) of an HTTP caller, as set by remote_auth.Gate; scopes None for
+    stdio (the app that started this process) = no limits."""
+    try:
+        req = server.request_context.request
+    except LookupError:
+        return "stdio", None
+    user = getattr(req, "scope", {}).get("user") if req is not None else None
+    tok = getattr(user, "access_token", None)
+    if tok is None:
+        return ("stdio", None) if req is None else ("unknown", [])
+    return tok.client_id, list(tok.scopes)
+
+
+def _identity(client: str, args: dict) -> identity.Identity:
+    """Who this call is (identity.py): the app as the user knows it (a per-app key's or
+    token's name over HTTP, else the MCP client name the app sends: Claude Desktop, Grok
+    Build, Cursor, ...), the model if the caller gave it, the machine, and how the app name
+    was established."""
+    try:
+        req = server.request_context.request
+    except LookupError:
+        req = None
+    if req is None:
+        return identity.resolve(client, model_arg=args.get("model"))
+    tok = getattr(getattr(req, "scope", {}).get("user"), "access_token", None)
+    try:
+        headers = {k.lower(): v for k, v in req.headers.items()}
+    except AttributeError:
+        headers = {}
+    return identity.resolve(client, http=True, token=tok, headers=headers,
+                            model_arg=args.get("model"))
+
+
+# A write that creates a record: (tool, action) -> record type, for the activity log.
+_CREATES = {("todo", "add"): "todo", ("log_learning", None): "learning",
+            ("log_change", None): "change", ("problem", "log"): "problem",
+            ("attempt", "log"): "attempt", ("variable", "create"): "variable",
+            ("method", "create"): "method", ("create_component", None): "component",
+            ("create_project", None): "project", ("session", "log_conversation"): "decision"}
+
+
+PAUSED = ("The user has paused FlowState writes from this app ({app}). Nothing was saved. "
+          "Tell the user; they can resume it with `flowstate apps resume` or on the review page.")
+
+
+def _error(code: str, message: str, **extra) -> types.CallToolResult:
+    payload = {"error": code, "message": message, **extra}
+    return types.CallToolResult(
+        content=[TextContent(type="text", text=json.dumps(payload, indent=2, default=str))],
+        isError=True)
+
+
+def _ok(result: Any) -> types.CallToolResult:
+    if isinstance(result, dict) and "error" in result and len(result) <= 3:
+        return types.CallToolResult(
+            content=[TextContent(type="text", text=json.dumps(result, indent=2, default=str))],
+            isError=True)
+    text = result if isinstance(result, str) else json.dumps(result, indent=2, default=str)
+    return types.CallToolResult(content=[TextContent(type="text", text=text)], isError=False)
+
+
+UNAVAILABLE = ("FlowState's database is unavailable right now ({}). Tell the user once and "
+               "carry on with the task without FlowState.")
+
+
+# ============================================================
+# TOOL HANDLER
 # ============================================================
 
 @server.list_tools()
 async def list_tools() -> list[Tool]:
-    """Return available tools."""
-    return TOOLS
+    """Return available tools (all, or the core list with FLOWSTATE_TOOLS=core)."""
+    return tool_labels.visible(ALL_TOOLS)
 
 
 @server.call_tool()
-async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-    """Handle tool calls with routing for consolidated tools."""
+async def call_tool(name: str, arguments: dict) -> types.CallToolResult:
+    """Every call: guard, run in a worker thread with a timeout, track the session."""
+    if backend.error:
+        return _error("flowstate_unavailable", UNAVAILABLE.format(backend.error))
+    from .remote_auth import refusal
+    who, scopes = _caller()
+    denied = refusal(name, arguments or {}, scopes)
+    if denied:
+        log.info("refused %s for %s: %s", name, who, denied[0])
+        return _error(*denied)
+    client = _client_name()
+    ident = _identity(client, arguments or {})
+    app = ident.app
+    write = writes_text(name, arguments or {})
+    meta: dict = {}
+    t0 = time.monotonic()
+    out = None
+    id_token = identity.set_current(ident)   # read by every recording path (identity.py)
     try:
-        result = await _route_tool(name, arguments)
-        return [TextContent(type="text", text=json.dumps(result, indent=2, default=str))]
-    except Exception as e:
-        return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
+        if write and await asyncio.to_thread(_safe_bool, activity.is_paused, backend.db_path, app):
+            out = _error("paused_by_user", PAUSED.format(app=app))
+            return out
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(handle_call, name, dict(arguments or {}), client, meta),
+                timeout=call_timeout())
+        except asyncio.TimeoutError:
+            out = _error("flowstate_timeout",
+                         f"FlowState took longer than {call_timeout():g}s and was skipped. Carry on "
+                         f"with the task; if this was a write it may or may not have been saved.")
+            return out
+        except GuardError as g:
+            out = _error(g.payload["error"], g.payload["message"],
+                         **{k: v for k, v in g.payload.items() if k not in ("error", "message")})
+            return out
+        except Exception as e:  # noqa: BLE001
+            out = _error("tool_failed", f"{type(e).__name__}: {e}")
+            return out
+        out = _ok(result)
+        return out
+    finally:
+        err = None
+        if out is not None and out.isError:
+            try:
+                err = json.loads(out.content[0].text).get("error")
+            except (ValueError, AttributeError, IndexError):
+                err = "error"
+        try:
+            await asyncio.to_thread(
+                _safe_call, activity.record, backend.db_path, app, name,
+                (arguments or {}).get("action"), meta.get("project_id"), write,
+                out is not None and not out.isError, err, int((time.monotonic() - t0) * 1000),
+                who, meta.get("record"))
+        finally:
+            identity.reset(id_token)
 
 
-async def _route_tool(name: str, args: dict) -> Any:
-    """Route tool calls to implementations."""
-    
-    # Direct tools (no action routing needed)
-    if name == "list_projects":
-        return tools.list_projects(args.get("status"))
-    
-    elif name == "create_project":
-        return tools.create_project(args["name"], args.get("description"))
-    
-    elif name == "update_project":
-        return tools.update_project(
-            args["project_id"],
-            args.get("name"),
-            args.get("description"),
-            args.get("status")
-        )
-    
-    elif name == "get_context":
-        lean = args.get("lean", True)
-        if lean:
-            return tools.get_project_context_lean(args["project_name"], args.get("hours", 48))
-        else:
-            return tools.get_project_context(args["project_name"], args.get("hours", 48))
-    
-    elif name == "create_component":
-        return tools.create_component(
-            args["project_id"],
-            args["name"],
-            args.get("description"),
-            args.get("parent_component_id")
-        )
-    
-    elif name == "list_components":
-        return tools.list_components(args["project_id"])
-    
-    elif name == "update_component":
-        return tools.update_component(
-            args["component_id"],
-            args.get("name"),
-            args.get("description"),
-            args.get("status")
-        )
-    
-    elif name == "log_learning":
-        return tools.log_learning(
-            args["project_id"],
-            args["insight"],
-            args.get("category"),
-            args.get("context"),
-            args.get("component_id"),
-            args.get("source", "experience")
-        )
-    
-    elif name == "get_learnings":
-        return tools.get_learnings(
-            args.get("project_id"),
-            args.get("category"),
-            args.get("verified_only", False),
-            args.get("compact", False)
-        )
-    
-    elif name == "log_change":
-        return tools.log_change(
-            args["component_id"],
-            args["field_name"],
-            args.get("old_value"),
-            args.get("new_value"),
-            args.get("change_type"),
-            args.get("reason")
-        )
-    
-    elif name == "get_recent_changes":
-        return tools.get_recent_changes(
-            args.get("project_id"),
-            args.get("component_id"),
-            args.get("hours", 24),
-            args.get("compact", False)
-        )
-    
-    elif name == "search":
-        return tools.search(
-            args["query"],
-            args.get("project_id"),
-            args.get("content_types"),
-            args.get("limit", 10)
-        )
-    
-    # ----------------------------------------
-    # CONSOLIDATED TOOL ROUTING
-    # ----------------------------------------
-    
-    elif name == "problem":
-        action = args["action"]
-        if action == "log":
-            return tools.log_problem(
-                args["component_id"],
-                args["title"],
-                args.get("description"),
-                args.get("severity", "medium")
-            )
-        elif action == "list":
-            return tools.get_open_problems(
-                args.get("project_id"),
-                args.get("component_id"),
-                args.get("compact", False)
-            )
-        elif action == "solve":
-            return tools.mark_problem_solved(
-                args["problem_id"],
-                args.get("winning_attempt_id"),
-                args["summary"],
-                args.get("key_insight"),
-                args.get("code_snippet")
-            )
-        elif action == "get_tree":
-            return tools.get_problem_tree(args["problem_id"])
-    
-    elif name == "attempt":
-        action = args["action"]
-        if action == "log":
-            return tools.log_attempt(
-                args["problem_id"],
-                args["description"],
-                args.get("parent_attempt_id")
-            )
-        elif action == "outcome":
-            return tools.mark_attempt_outcome(
-                args["attempt_id"],
-                args["outcome"],
-                args.get("notes"),
-                args.get("confidence", "attempted")
-            )
-    
-    elif name == "todo":
-        action = args["action"]
-        if action == "add":
-            return tools.add_todo(
-                args["project_id"],
-                args["title"],
-                args.get("description"),
-                args.get("priority", "medium"),
-                args.get("component_id"),
-                args.get("due_date")
-            )
-        elif action == "update":
-            return tools.update_todo(
-                args["todo_id"],
-                args.get("status"),
-                args.get("priority"),
-                args.get("title"),
-                args.get("description")
-            )
-        elif action == "list":
-            return tools.get_todos(
-                args["project_id"],
-                args.get("status"),
-                args.get("priority"),
-                args.get("compact", False)
-            )
-    
-    elif name == "session":
-        action = args["action"]
-        if action == "start":
-            return tools.start_session(
-                args["project_id"],
-                args.get("focus_component_id"),
-                args.get("focus_problem_id")
-            )
-        elif action == "end":
-            return tools.end_session(
-                args["session_id"],
-                args.get("summary"),
-                args.get("outcomes")
-            )
-        elif action == "current":
-            return tools.get_current_session(args.get("project_id"))
-        elif action == "log_conversation":
-            return tools.log_conversation(
-                args["project_id"],
-                args["user_prompt_summary"],
-                args.get("assistant_response_summary"),
-                args.get("key_decisions"),
-                args.get("session_id")
-            )
-        elif action == "list_conversations":
-            return tools.get_conversations(
-                args["project_id"],
-                args.get("session_id"),
-                args.get("limit", 20)
-            )
-        elif action == "list_sessions":
-            return tools.get_sessions(
-                args["project_id"],
-                args.get("limit", 20)
-            )
-    
-    elif name == "file":
-        action = args["action"]
-        if action == "attach":
-            return tools.attach_file(
-                args["project_id"],
-                args["file_path"],
-                args.get("component_id"),
-                args.get("problem_id"),
-                args.get("user_description"),
-                args.get("tags"),
-                args.get("copy_to_bundle", True)
-            )
-        elif action == "list":
-            return tools.get_attachments(
-                args.get("project_id"),
-                args.get("component_id"),
-                args.get("problem_id")
-            )
-        elif action == "remove":
-            return tools.remove_attachment(
-                args["attachment_id"],
-                args.get("delete_file", False)
-            )
-        elif action == "search":
-            return tools.search_file_content(
-                args["query"],
-                args.get("project_id"),
-                args.get("file_types"),
-                args.get("limit", 10)
-            )
-    
-    elif name == "git":
-        action = args["action"]
-        if action == "init":
-            return tools.git_init()
-        elif action == "status":
-            return tools.git_status()
-        elif action == "sync":
-            return tools.git_sync(args.get("commit_message"))
-        elif action == "set_remote":
-            return tools.git_set_remote(args["remote_url"])
-        elif action == "clone":
-            return tools.git_clone(args["remote_url"], args.get("local_path"))
-        elif action == "history":
-            return tools.git_history(args.get("limit", 20))
-    
-    elif name == "variable":
-        action = args["action"]
-        if action == "create":
-            return tools.create_project_variable(
-                args["project_id"],
-                args["name"],
-                args.get("value"),
-                args.get("description"),
-                args.get("category", "custom"),
-                args.get("is_secret", False)
-            )
-        elif action == "list":
-            return tools.get_project_variables(
-                args["project_id"],
-                args.get("category")
-            )
-        elif action == "update":
-            return tools.update_project_variable(
-                args["variable_id"],
-                args.get("name"),
-                args.get("value"),
-                args.get("description"),
-                args.get("category"),
-                args.get("is_secret")
-            )
-        elif action == "delete":
-            return tools.delete_project_variable(args["variable_id"])
-    
-    elif name == "method":
-        action = args["action"]
-        if action == "create":
-            return tools.create_project_method(
-                args["project_id"],
-                args["name"],
-                args["description"],
-                args.get("category"),
-                args.get("steps"),
-                args.get("code_example"),
-                args.get("related_component_id")
-            )
-        elif action == "list":
-            return tools.get_project_methods(
-                args["project_id"],
-                args.get("category")
-            )
-        elif action == "update":
-            return tools.update_project_method(
-                args["method_id"],
-                args.get("name"),
-                args.get("description"),
-                args.get("category"),
-                args.get("steps"),
-                args.get("code_example"),
-                args.get("related_component_id")
-            )
-        elif action == "delete":
-            return tools.delete_project_method(args["method_id"])
-    
-    elif name == "self_improve":
-        action = args["action"]
-        if action == "learn_skill":
-            return tools.learn_skill(
-                args["skill"],
-                args["skill_type"],
-                args.get("context"),
-                args.get("tool_name"),
-                args.get("project_id"),
-                args.get("source_session_id"),
-                args.get("source_type", "learned")
-            )
-        elif action == "get_skills":
-            return tools.get_skills(
-                args.get("project_id"),
-                args.get("skill_type"),
-                args.get("tool_name"),
-                args.get("min_confidence", 0),
-                args.get("promoted_only", False)
-            )
-        elif action == "confirm_skill":
-            return tools.confirm_skill(args["skill_id"], args.get("increment_session", True))
-        elif action == "save_state":
-            return tools.save_state(
-                args["project_id"],
-                "checkpoint",  # state_type
-                args.get("focus_summary"),
-                args.get("key_facts"),
-                args.get("pending_decisions"),
-                args.get("active_problem_ids"),
-                args.get("active_component_ids"),
-                args.get("previous_state_id"),
-                args.get("tool_calls_this_session", 0),
-                args.get("estimated_tokens")
-            )
-        elif action == "get_state":
-            return tools.get_latest_state(args["project_id"])
-        elif action == "log_metric":
-            return tools.log_metric(
-                args["metric_type"],
-                args.get("project_id"),
-                args.get("session_state_id"),
-                args.get("context"),
-                args.get("action_taken"),
-                args.get("outcome"),
-                args.get("effectiveness_score"),
-                args.get("should_adjust"),
-                args.get("suggested_adjustment"),
-                args.get("user_feedback")
-            )
-        elif action == "get_metrics":
-            return tools.get_metrics(
-                args.get("project_id"),
-                args.get("metric_type"),
-                args.get("session_state_id"),
-                args.get("limit", 100)
-            )
-    
+def _safe_track(fn, *a):
+    """Session tracking must never break a call."""
+    if backend.tracker is None:
+        return None
+    try:
+        return fn(*a)
+    except Exception as e:  # noqa: BLE001
+        log.warning("session tracking skipped: %s", e)
+        return None
+
+
+def _label(name: str, args: dict) -> str:
+    what = args.get("kind") or (f"{name}/{args['action']}" if args.get("action") else name)
+    if args.get("suggested"):
+        what = f"suggested {what}"
+    text = next((args[k] for k in ("summary", "title", "insight", "field_name", "skill", "name",
+                                    "user_prompt_summary", "description")
+                 if isinstance(args.get(k), str) and args[k].strip()), "")
+    for k in ("todo_id", "problem_id", "attempt_id", "component_id", "session_id"):
+        if not text and args.get(k) is not None:
+            text = f"{k[:-3]} #{args[k]}"
+    text = " ".join(text.split())
+    return f"{what}: {text[:70]}" if text else what
+
+
+def handle_call(name: str, args: dict, client: str = "unknown", meta: Optional[dict] = None) -> Any:
+    """Synchronous core used by both transports (runs in a worker thread). `meta` receives
+    the resolved project id (for the activity log)."""
+    db_path = backend.db_path
+    tracker = backend.tracker
+    meta = meta if meta is not None else {}
+
+    if name == "start_here":
+        return _start_here(args, client, meta)
+
+    # No secret is ever stored: refuse before anything touches the database.
+    if writes_text(name, args):
+        # import_memory checks each memory itself (a secret line is skipped, not stored)
+        hit = secrets_scan.scan_args(args, skip=_SCAN_PER_ITEM.get(name, ()))
+        if hit:
+            raise GuardError(secrets_scan.refusal(*hit))
+
+    if name == "review_list":
+        return _review_list(args)
+    try:  # priority names: critical/urgent/normal/low (old high/medium too) -> stored values
+        _priority_args(name, args)
+    except priority.PriorityError as e:
+        return priority.error_payload(e)
+
+    pid = None
+    if is_write(name, args):
+        pid = check_write(db_path, name, args)
+        args["project_id"] = pid  # the resolved id (callers may pass a name or "12")
     else:
-        return {"error": f"Unknown tool: {name}"}
+        named = explicit_project(args)
+        if named is not None:
+            res = resolve_project(db_path, named, fuzzy=False)
+            if "project" in res:
+                pid = res["project"]["id"]
+                args["project_id"] = pid  # reads too: tools take the id, callers may give a name
+
+    meta["project_id"] = pid
+    sid =_safe_track(tracker.touch, client, pid, None) if (pid and tracker) else None
+
+    # Session tool: adopt / end the automatic session instead of duplicating it.
+    if name == "session" and args.get("action") == "start" and sid:
+        result = {"session_id": sid, "project_id": pid, "automatic": True,
+                  "note": "FlowState already opened this session for you; it closes itself when idle."}
+    elif name == "log_work" and review_mode.should_queue(
+            db_path, pid, args.get("kind"), suggested=bool(args.get("suggested"))):
+        result = _suggest(pid, args, client)
+    elif name == "log_work":
+        result = _log_work(pid, args, sid)
+        if isinstance(result, dict) and isinstance(result.get("record"), dict) \
+                and result["record"].get("id") is not None:
+            meta["record"] = (result["logged"], result["record"]["id"])
+        if args.get("suggested") and isinstance(result, dict) and "error" not in result:
+            result["note"] = "Review mode is off, so this was saved directly."
+    elif name in ("review_approve", "review_reject"):
+        result = _review_decide(name, pid, args, client)
+    elif name == "link":
+        result = _link(pid, args, client)
+    elif name == "review_mode":
+        result = _review_mode(args, client)
+    elif name == "history":
+        result = _history(pid, args, client)
+    elif name == "cleanup_suggest":
+        result = _cleanup_suggest(pid, args, client)
+    elif name == "import_memory":
+        result = _import_memory(pid, args, client)
+    elif name == "todo" and args.get("action") in ("next", "block", "unblock"):
+        result = _todo_extra(pid, args, client)
+    elif name == "todo" and args.get("action") == "list" and pid is not None:
+        try:
+            result = tasks.list_todos(pid, args.get("status"), args.get("priority"),
+                                      args.get("min_priority"), args.get("sort"),
+                                      bool(args.get("compact")))
+        except tasks.TaskError as e:
+            result = e.payload
+    elif name in extras.TOOLS:
+        result = extras.handle(name, pid, args, client, db_path)
+    elif (legacy := _legacy_record(name, args, pid)) is not None and \
+            review_mode.should_queue(db_path, pid, legacy["kind"]):
+        result = _suggest(pid, legacy, client)
+        if isinstance(result, dict) and "note" in result:
+            result["note"] += " (the user's review mode holds new records of this kind)"
+    else:
+        if name == "session" and args.get("action") == "log_conversation" and not args.get("session_id") and sid:
+            args["session_id"] = str(sid)
+        if name in ("log_change",) or (name == "problem" and args.get("action") == "log"):
+            if args.get("component_id") is None:
+                args["component_id"] = _component_id(pid, None)
+        if name == "todo" and args.get("action") == "add":
+            bad = _check_new_todo(pid, args)
+            if bad:
+                return bad
+        edit = _history_begin(name, args)
+        result = _route_tool(name, args)
+        ok = not (isinstance(result, dict) and "error" in result) and result is not None
+        if edit is not None and ok:
+            _safe_call(edit.finish, client)
+        created = _CREATES.get((name, args.get("action"))) or _CREATES.get((name, None))
+        if created and ok and isinstance(result, dict) and isinstance(result.get("id"), int):
+            meta["record"] = (created, result["id"])
+        if name == "todo" and args.get("action") == "add" and ok and isinstance(result, dict):
+            result = _link_new_todo(pid, args, result, client)
+        if name == "session" and args.get("action") == "end" and tracker and args.get("session_id"):
+            _safe_track(tracker.mark_explicit_end, int(args["session_id"]))
+        if name == "log_change" and isinstance(result, dict) and "error" not in result:
+            alerted = _alert_watchers(pid, int(args["component_id"]), "change", result.get("id"),
+                                      args.get("field_name") or "")
+            if alerted:
+                result = {**result, "alerted_projects": alerted}
+
+    if sid and tracker:
+        failed = isinstance(result, dict) and "error" in result
+        if pid and not failed:
+            event = _label(name, args) if is_write(name, args) else f"read:{name}"
+            _safe_track(tracker.note, sid, event)
+    return result
+
+
+def _start_here(args: dict, client: str, meta: Optional[dict] = None) -> str:
+    db_path, tracker = backend.db_path, backend.tracker
+    res = resolve_project(db_path, args.get("project"), args.get("folder"))
+    if "project" not in res:
+        return candidates_text(res)
+    project = res["project"]
+    if meta is not None:
+        meta["project_id"] = project["id"]
+    _capture_git(project["id"])
+    sid = _safe_track(tracker.touch, client, project["id"], "read:start_here") if tracker else None
+    session = _safe_track(tracker.current, client, project["id"]) if (sid and tracker) else None
+    try:
+        text = build_brief(db_path, project, session, size=args.get("size") or "standard")
+    except Exception as e:  # noqa: BLE001 - brief problems must not break the agent
+        return (f"FlowState: project '{project['name']}' (#{project['id']}) found, but the brief "
+                f"could not be built ({type(e).__name__}). Carry on; use get_context if needed.")
+    try:  # "changed since you last looked" is relative to this moment
+        links.mark_looked(db_path, project["id"], client)
+    except Exception as e:  # noqa: BLE001
+        log.warning("could not record start_here time: %s", e)
+    return text
+
+
+def _capture_git(pid: int) -> None:
+    """Opt-in (flowstate git-capture enable): new commit subjects become changes."""
+    from . import git_capture
+    try:
+        if git_capture.is_on(backend.db_path, pid):
+            res = git_capture.run(backend.db_path, pid, _save_commit)
+            if res.get("captured"):
+                log.info("git capture: %s new commit(s) for project %s", res["captured"], pid)
+    except Exception as e:  # noqa: BLE001 - never stops the brief
+        log.warning("git capture skipped for project %s: %s", pid, e)
+
+
+def _save_commit(pid: int, summary: str, details: str):
+    args = {"kind": "change", "summary": summary, "details": details, "component": "Git",
+            "source": "from_code"}
+    if review_mode.should_queue(backend.db_path, pid, "change"):
+        return review.add_item(backend.db_path, pid, "change", summary, details,
+                               {"component": "Git", "source": "from_code"}, "git-capture")
+    return _log_work(pid, args, None)
+
+
+def _component_id(pid: int, name: Optional[str]) -> int:
+    """Component by name within the project (case-insensitive); created if missing."""
+    wanted = (name or "General").strip() or "General"
+    conn = links.connect(backend.db_path)
+    try:
+        row = conn.execute(
+            "SELECT id FROM components WHERE project_id = ? AND lower(name) = lower(?) ORDER BY id LIMIT 1",
+            (pid, wanted)).fetchone()
+        if row is None and name:
+            shared = links.shared_component_by_name(conn, pid, wanted)
+            if shared is not None:
+                return shared  # a component another project owns and this one links to
+    finally:
+        conn.close()
+    if row:
+        return row[0]
+    return tools.create_component(pid, wanted, "Created by FlowState log_work" if wanted == "General" else None)["id"]
+
+
+def _log_work(pid: int, args: dict, sid: Optional[int]) -> Any:
+    kind, summary = args.get("kind"), (args.get("summary") or "").strip()
+    details = args.get("details") or None
+    if not summary:
+        return {"error": "summary_required", "message": "log_work needs a one-line summary."}
+    try:  # also reached from review approve, whose payload may carry a new-style name
+        prio = priority.store(args.get("priority"))
+    except priority.PriorityError as e:
+        return priority.error_payload(e)
+    source = args.get("source") or None
+    if source is not None and source not in provenance.SOURCES:
+        return {"error": "bad_source", "message": "source must be one of "
+                + ", ".join(provenance.SOURCES) + "."}
+    replaces = args.get("replaces")
+    if replaces is not None and kind != "decision":
+        return {"error": "bad_request", "message": "replaces only applies to kind=decision."}
+    if replaces is not None:
+        conn = links.connect(backend.db_path)
+        try:
+            if links.owner(conn, "decision", replaces) is None:
+                return {"error": "record_not_found", "message": f"No decision with id {replaces}."}
+        finally:
+            conn.close()
+    comp_id = None
+    if kind == "decision":
+        r = tools.log_conversation(pid, f"Decision: {summary}", details, [summary],
+                                   str(sid) if sid else None)
+        if args.get("component"):
+            comp_id = _component_id(pid, args["component"])
+            _safe_link(pid, "about", item_type="decision", item_id=r["id"],
+                       target_type="component", target_id=comp_id)
+        if replaces is not None:
+            _safe_link(pid, "supersedes", item_type="decision", item_id=r["id"],
+                       target_type="decision", target_id=int(replaces))
+    elif kind == "change":
+        comp_id = _component_id(pid, args.get("component"))
+        r = tools.log_change(comp_id, summary, None, None, "other", details)
+    elif kind == "problem":
+        r = tools.log_problem(_component_id(pid, args.get("component")), summary, details, prio)
+    elif kind == "learning":
+        comp = _component_id(pid, args["component"]) if args.get("component") else None
+        r = tools.log_learning(pid, summary, args.get("category") or "other", details, comp, "experience")
+    elif kind == "todo":
+        comp = _component_id(pid, args["component"]) if args.get("component") else None
+        r = tools.add_todo(pid, summary, details, prio, comp, None)
+    else:
+        return {"error": "bad_kind", "message": "kind must be decision, change, problem, learning or todo."}
+    out = {"logged": kind, "project_id": pid, "record": r}
+    if source and isinstance(r, dict) and r.get("id") is not None:
+        _safe_call(provenance.set_source, backend.db_path, kind, r["id"], source, None)
+        out["source"] = source
+    if comp_id is not None and kind in ("change", "decision"):
+        alerted = _alert_watchers(pid, comp_id, kind, r.get("id") if isinstance(r, dict) else None,
+                                  summary)
+        if alerted:
+            out["alerted_projects"] = alerted
+    if replaces is not None:
+        out["replaces"] = int(replaces)
+    return out
+
+
+def _safe_link(pid: int, link_type: str, **kw) -> None:
+    try:
+        links.add(backend.db_path, pid, link_type, **kw)
+    except Exception as e:  # noqa: BLE001 - the record itself is saved
+        log.warning("link %s not recorded: %s", link_type, e)
+
+
+def _alert_task(project_id: int, title: str, details: str):
+    """The update todo for a shared-component alert, following the review mode."""
+    if review_mode.should_queue(backend.db_path, project_id, "todo"):
+        item = review.add_item(backend.db_path, project_id, "todo", title, details,
+                               {"priority": "medium", "link_alert": True}, "link-alert")
+        return None, item
+    return tools.add_todo(project_id, title, details, "medium", None, None)["id"], None
+
+
+def _alert_watchers(pid: int, comp_id: int, kind: str, record_id, summary: str) -> list:
+    """A change/decision on a component other projects link to: alert them."""
+    try:
+        res = links.on_component_event(backend.db_path, pid, comp_id, kind, record_id, summary,
+                                       _alert_task)
+    except Exception as e:  # noqa: BLE001 - never break the write that triggered it
+        log.warning("shared-component alerts skipped: %s", e)
+        return []
+    conn = links.connect(backend.db_path)
+    try:
+        return [{"project": links.project_name(conn, a["project_id"]), "todo_id": a["todo_id"],
+                 **({"review_item_id": a["review_item_id"]} if a["review_item_id"] else {})}
+                for a in res]
+    finally:
+        conn.close()
+
+
+# ============================================================
+# LINKS AND REVIEW MODE
+# ============================================================
+
+_LINK_SPEC = ("item_type", "item_id", "component", "target_project", "target_component",
+              "target_type", "target_id", "url")
+
+
+def _link(pid: Optional[int], args: dict, client: str) -> Any:
+    action = args.get("action")
+    spec = {k: args.get(k) for k in _LINK_SPEC if args.get(k) not in (None, "")}
+    try:
+        if action == "add":
+            return links.add(backend.db_path, pid, args.get("link_type"), note=args.get("note"),
+                             client=client, **spec)
+        if action == "remove":
+            link_id = args.get("link_id")
+            if link_id is None:
+                link_id = links.find_id(backend.db_path, pid, args.get("link_type"), **spec)
+            with history.tracked(backend.db_path, [("record_links", "id", int(link_id))],
+                                 "link/remove", client):
+                return links.remove(backend.db_path, pid, int(link_id), client)
+        if action == "list":
+            if pid is None:
+                return {"error": "project_required", "message": "link list needs project=\"<name>\"."}
+            return links.list_links(backend.db_path, pid, spec.get("item_type"), spec.get("item_id"),
+                                    spec.get("component"), bool(args.get("include_removed")))
+        return {"error": "bad_action", "message": "action must be add, remove or list."}
+    except links.LinkError as e:
+        return e.payload
+
+
+def _review_mode(args: dict, client: str) -> Any:
+    pid = None
+    named = explicit_project(args)
+    if named is not None:
+        res = resolve_project(backend.db_path, named, fuzzy=False)
+        if "project" not in res:
+            return {"error": "project_not_found", "message": f"No single project matches {named!r}.",
+                    "candidates": res.get("candidates", [])}
+        pid = res["project"]["id"]
+    if args.get("action") == "set":
+        who, _scopes = _caller()
+        try:
+            return review_mode.set_mode(backend.db_path, args.get("mode"), args.get("kinds"), pid,
+                                        args.get("user_request") or "", client, who,
+                                        clear=bool(args.get("clear")))
+        except review_mode.ModeError as e:
+            return e.payload
+    m = review_mode.get(backend.db_path, pid)
+    return {**m, "text": review_mode.describe(m), "modes": list(review_mode.MODES),
+            "note": "Only change this when the user asks you to in this chat."}
+
+
+def _safe_bool(fn, *a) -> bool:
+    try:
+        return bool(fn(*a))
+    except Exception as e:  # noqa: BLE001 - a broken switch never blocks the user's app
+        log.warning("pause check skipped: %s", e)
+        return False
+
+
+def _safe_call(fn, *a):
+    try:
+        return fn(*a)
+    except Exception as e:  # noqa: BLE001 - bookkeeping never breaks a call
+        log.warning("%s skipped: %s", getattr(fn, "__name__", "bookkeeping"), e)
+        return None
+
+
+def _history_begin(name: str, args: dict):
+    """Copy the rows an edit is about to change (None if this call isn't an edit)."""
+    return _safe_call(history.begin, backend.db_path, name, args)
+
+
+def _history(pid: Optional[int], args: dict, client: str) -> Any:
+    if args.get("action") == "who":
+        return _who(pid, args)
+    if pid is None:
+        return {"error": "project_required", "message": "history needs project=\"<name>\"."}
+    try:
+        if args.get("action") == "undo":
+            if not args.get("record_type") or args.get("record_id") is None:
+                return {"error": "record_required",
+                        "message": "undo needs record_type and record_id (see history list)."}
+            return history.undo(backend.db_path, pid, args["record_type"], int(args["record_id"]),
+                                client)
+        return history.list_history(backend.db_path, pid, args.get("record_type"),
+                                    args.get("record_id"), args.get("limit") or 20)
+    except history.HistoryError as e:
+        return e.payload
+
+
+def _who(pid: Optional[int], args: dict) -> Any:
+    """history(action="who"): read-only "who did what" (who.py), the review page's list."""
+    from . import who
+    if pid is None and explicit_project(args) is not None:
+        return {"error": "project_not_found",
+                "message": f"No single project matches {explicit_project(args)!r}."}
+    try:
+        res = who.recent(backend.db_path, args.get("by_app"), args.get("by_model"),
+                         args.get("by_machine"), pid, args.get("since"), args.get("until"),
+                         args.get("page") or 1, args.get("limit") or 20)
+    except who.WhoError as e:
+        return e.payload
+    for r in res["rows"]:   # keep it short for the model's context
+        for k in ("at_utc", "project_id", "identity_source"):
+            r.pop(k, None)
+        if r["undo"] is None:
+            r.pop("undo")
+        else:
+            r["undo"].pop("project_id", None)
+    return {**res, "note": "model is shown only when the app supplied it; identity says how "
+                           "the app name was established (only per-app keys, remote tokens and "
+                           "OAuth apps can't pick their own name)."}
+
+
+def _check_new_todo(pid: int, args: dict) -> Optional[dict]:
+    """Refuse a subtask/blocker that points nowhere before the todo is created."""
+    conn = links.connect(backend.db_path)
+    try:
+        par = args.get("parent_todo_id")
+        if par is not None:
+            owner = links.owner(conn, "todo", par)
+            if owner is None:
+                return {"error": "record_not_found", "message": f"No todo with id {par}."}
+            if owner != pid:
+                return {"error": "project_mismatch",
+                        "message": f"Parent todo #{par} is in another project; subtasks stay in one project."}
+        for b in args.get("blocked_by") or []:
+            if links.owner(conn, "todo", b) is None:
+                return {"error": "record_not_found", "message": f"No todo with id {b}."}
+        p = args.get("blocked_by_problem")
+        if p is not None and links.owner(conn, "problem", p) is None:
+            return {"error": "record_not_found", "message": f"No problem with id {p}."}
+    finally:
+        conn.close()
+    return None
+
+
+def _link_new_todo(pid: int, args: dict, result: dict, client: str) -> dict:
+    if args.get("parent_todo_id") is None and not args.get("blocked_by") \
+            and args.get("blocked_by_problem") is None:
+        return result
+    try:
+        extra = tasks.link_new_todo(backend.db_path, pid, result["id"], args.get("parent_todo_id"),
+                                    args.get("blocked_by"), args.get("blocked_by_problem"), client)
+    except links.LinkError as e:
+        return {**result, "link_error": e.payload}
+    return {**result, **extra}
+
+
+def _todo_extra(pid: Optional[int], args: dict, client: str) -> Any:
+    act = args.get("action")
+    try:
+        if act == "next":
+            if pid is None:
+                return {"error": "project_required", "message": "todo next needs project=\"<name>\"."}
+            return tasks.what_next(backend.db_path, pid, args.get("limit") or 5)
+        tid = args.get("todo_id")
+        if tid is None:
+            return {"error": "todo_id_required", "message": f"todo {act} needs todo_id."}
+        if act == "block":
+            return tasks.block(backend.db_path, pid, int(tid), args.get("blocked_by"),
+                               args.get("blocked_by_problem"), client)
+        ids = tasks.blocker_links(backend.db_path, int(tid), args.get("blocked_by"),
+                                  args.get("blocked_by_problem"))
+        for lid in ids:
+            with history.tracked(backend.db_path, [("record_links", "id", lid)], "todo/unblock",
+                                 client):
+                row = links.get_row(backend.db_path, lid)
+                links.remove(backend.db_path, row["from_project_id"], lid, client)
+        return {"todo_id": int(tid), "unblocked_links": ids,
+                "note": "Nothing was blocking it." if not ids else "Blockers removed."}
+    except links.LinkError as e:
+        return e.payload
+
+
+_SCAN_PER_ITEM = {"import_memory": ("text",)}
+MAX_IMPORT = 200_000
+
+
+def _import_memory(pid: int, args: dict, client: str) -> Any:
+    text = args.get("text") or ""
+    if not text.strip():
+        return {"error": "text_required", "message": "Pass the export or file contents as text."}
+    if len(text) > MAX_IMPORT:
+        return {"error": "too_large", "message": f"Import at most {MAX_IMPORT:,} characters at a time."}
+    source = (args.get("source") or "").strip()[:40] or None
+    if args.get("format") == "flowstate_markdown":
+        from . import markdown_io
+        res = markdown_io.import_text(backend.db_path, pid, text, source or "markdown")
+    else:
+        from . import memory_import
+        try:
+            res = memory_import.import_memories(backend.db_path, pid, text, source or f"{client} import",
+                                                args.get("kind") or "learning")
+        except ValueError as e:
+            return {"error": "bad_request", "message": str(e)}
+    return {**res, "project_id": pid,
+            "note": "Everything waits in the review queue for the user; nothing was saved as a record."}
+
+
+def _cleanup_suggest(pid: int, args: dict, client: str) -> Any:
+    kinds = tuple(args.get("kinds") or ("duplicate", "stale", "misfiled"))
+    found = cleanup.suggest(backend.db_path, pid, kinds)
+    try:
+        q = cleanup.queue(backend.db_path, found, source=f"cleanup ({client})"[:80])
+    except review.ReviewError as e:
+        return e.payload
+    return {**q, "found": len(found), "project_id": pid,
+            "examples": [s["summary"] for s in found[:8]],
+            "note": "Suggestions only; they wait in the review queue for the user."}
+
+
+def _component_name(cid) -> Optional[str]:
+    if cid is None:
+        return None
+    conn = links.connect(backend.db_path)
+    try:
+        row = conn.execute("SELECT name FROM components WHERE id = ?", (cid,)).fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
+
+
+def _priority_args(name: str, args: dict) -> None:
+    """Accept both priority vocabularies; the tools below see the stored (old) names."""
+    act = args.get("action")
+    keys = ()
+    if name == "todo" and act in ("add", "update", "list"):
+        keys = ("priority",)
+    elif name in ("log_work", "review_approve"):
+        keys = ("priority",)
+    elif name == "problem" and act == "log":
+        keys = ("severity",)
+    for k in keys:
+        if args.get(k) not in (None, ""):
+            args[k] = priority.store(args[k])
+    if name == "todo" and args.get("min_priority") not in (None, ""):
+        priority.store(args["min_priority"])   # validate; tasks.list_todos filters
+
+
+def _legacy_record(name: str, args: dict, pid: Optional[int]) -> Optional[dict]:
+    """The older create tools as log_work arguments, so the review mode can hold them."""
+    if pid is None:
+        return None
+    act = args.get("action")
+    if name not in ("todo", "log_learning", "log_change", "problem", "session"):
+        return None
+    if name == "todo" and act == "add" and args.get("title"):
+        d = {"kind": "todo", "summary": args["title"], "details": args.get("description"),
+             "priority": args.get("priority")}
+    elif name == "log_learning" and args.get("insight"):
+        d = {"kind": "learning", "summary": args["insight"], "details": args.get("context"),
+             "category": args.get("category")}
+    elif name == "log_change" and args.get("field_name"):
+        extra = "; ".join(f"{k}: {args[k]}" for k in ("reason", "old_value", "new_value")
+                          if args.get(k))
+        d = {"kind": "change", "summary": args["field_name"], "details": extra or None}
+    elif name == "problem" and act == "log" and args.get("title"):
+        d = {"kind": "problem", "summary": args["title"], "details": args.get("description"),
+             "priority": args.get("severity")}
+    elif name == "session" and act == "log_conversation" and args.get("key_decisions"):
+        d = {"kind": "decision", "summary": str(args["key_decisions"][0]),
+             "details": args.get("assistant_response_summary") or args.get("user_prompt_summary")}
+    else:
+        return None
+    d.update(project=pid, component=_component_name(args.get("component_id")))
+    return {k: v for k, v in d.items() if v not in (None, "")}
+
+
+# ============================================================
+# REVIEW QUEUE
+# ============================================================
+
+_RECORD_TABLE = {"decision": "conversations", "change": "changes", "problem": "problems",
+                 "learning": "learnings", "todo": "todos"}
+
+
+def _suggest(pid: int, args: dict, client: str) -> Any:
+    kind, summary = args.get("kind"), (args.get("summary") or "").strip()
+    if kind not in review.RECORD_KINDS:
+        return {"error": "bad_kind", "message": "kind must be decision, change, problem, learning or todo."}
+    if not summary:
+        return {"error": "summary_required", "message": "log_work needs a one-line summary."}
+    payload = {k: args[k] for k in ("component", "priority", "category", "replaces", "source")
+               if args.get(k) not in (None, "")}
+    item = review.add_item(backend.db_path, pid, kind, summary, args.get("details") or None,
+                           payload, client)
+    if item is None:
+        return {"error": "review_queue_unavailable",
+                "message": "The review queue isn't set up yet; log it without suggested=true "
+                           "if the user wants it recorded."}
+    return {"queued_for_review": item, "kind": kind, "project_id": pid,
+            "note": "Saved to the review queue, not as a record. The user decides."}
+
+
+def _review_list(args: dict) -> Any:
+    pid = None
+    named = explicit_project(args)
+    if named is not None:
+        res = resolve_project(backend.db_path, named, fuzzy=False)
+        if "project" not in res:
+            return {"error": "project_not_found", "message": f"No single project matches {named!r}.",
+                    "candidates": res.get("candidates", [])}
+        pid = res["project"]["id"]
+    try:
+        return review.list_items(backend.db_path, pid, args.get("status") or "pending",
+                                 args.get("limit") or 20)
+    except review.ReviewError as e:
+        return e.payload
+
+
+def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
+    if args.get("item_id") is None:
+        return {"error": "item_id_required", "message": "Name the review item (item_id)."}
+    user_request = (args.get("user_request") or "").strip()
+    if not user_request:
+        return {"error": "user_request_required",
+                "message": "Only the user can approve or reject review items. Ask them; pass "
+                           "their words as user_request."}
+    try:
+        if name == "review_reject":
+            return review.reject(backend.db_path, int(args["item_id"]), args.get("reason") or "",
+                                 user_request, client)
+
+        def apply(item: dict, payload: dict):
+            r = _log_work(item["project_id"], payload, None)
+            if isinstance(r, dict) and "error" in r:
+                raise review.ReviewError(r["error"], r.get("message", "could not create the record"))
+            rec = r.get("record") if isinstance(r, dict) else None
+            rid = rec.get("id") if isinstance(rec, dict) else None
+            return _RECORD_TABLE[payload["kind"]], rid
+
+        move_to = None
+        if args.get("move_to") not in (None, ""):
+            res = resolve_project(backend.db_path, args["move_to"], fuzzy=False)
+            if "project" not in res:
+                return {"error": "project_not_found", "message": f"No single project matches "
+                        f"{args['move_to']!r}.", "candidates": res.get("candidates", [])}
+            move_to = res["project"]["id"]
+
+        def apply_cleanup(item: dict, _edits: dict):
+            return cleanup.apply(backend.db_path, item, client, move_to)
+
+        def apply_edit(item: dict, _edits: dict):
+            from .markdown_io import apply_edit as do
+            return do(backend.db_path, item, client)
+
+        edits = {k: args.get(k) for k in ("summary", "details", "priority", "category", "component")}
+        return review.approve(backend.db_path, int(args["item_id"]), user_request, client, apply, edits,
+                              others={"cleanup": apply_cleanup, "edit": apply_edit})
+    except review.ReviewError as e:
+        return e.payload
+
+
+# ============================================================
+# PROMPT: the same guidance as a user-selectable prompt
+# ============================================================
+
+@server.list_prompts()
+async def list_prompts() -> list[types.Prompt]:
+    return [types.Prompt(
+        name=guide.PROMPT_NAME, description=guide.PROMPT_DESCRIPTION,
+        arguments=[types.PromptArgument(name="project", description="Project name (optional)",
+                                        required=False)])]
+
+
+@server.get_prompt()
+async def get_prompt(name: str, arguments: Optional[dict]) -> types.GetPromptResult:
+    if name != guide.PROMPT_NAME:
+        raise ValueError(f"Unknown prompt: {name}")
+    project = (arguments or {}).get("project") or ""
+    brief = ""
+    if project and not backend.error:
+        try:
+            text = await asyncio.wait_for(
+                asyncio.to_thread(_start_here, {"project": project}, _client_name()),
+                timeout=call_timeout())
+            brief = text if text.startswith("FlowState brief:") else ""
+        except Exception:  # noqa: BLE001 - prompt still works without the brief
+            brief = ""
+    return types.GetPromptResult(
+        description=guide.PROMPT_DESCRIPTION,
+        messages=[types.PromptMessage(role="user", content=TextContent(
+            type="text", text=guide.prompt_text(project, brief)))])
 
 
 # ============================================================
 # SERVER STARTUP
 # ============================================================
 
-async def run_server():
-    """Run the MCP server."""
-    # Initialize database
-    db = init_db()
-    tools.set_db(db)
-    
-    # Run server
-    async with stdio_server() as (read_stream, write_stream):
-        await server.run(read_stream, write_stream, server.create_initialization_options())
+def reap_interval() -> float:
+    try:
+        return max(0.2, float(os.environ.get("FLOWSTATE_REAP_SECONDS", "60")))
+    except ValueError:
+        return 60.0
+
+
+async def _reaper() -> None:
+    """Close idle automatic sessions (any process's) every FLOWSTATE_REAP_SECONDS."""
+    while True:
+        if backend.tracker is not None:
+            try:
+                await asyncio.to_thread(backend.tracker.close_idle)
+            except Exception as e:  # noqa: BLE001
+                log.warning("idle reaper skipped: %s", e)
+        await asyncio.sleep(reap_interval())
+
+
+def _close_own_sessions(reason: str = "shutdown") -> None:
+    if backend.tracker is not None:
+        try:
+            backend.tracker.close_instance(reason)
+        except Exception as e:  # noqa: BLE001
+            log.warning("closing sessions on shutdown failed: %s", e)
+
+
+async def run_server(db_path: Optional[Path] = None):
+    """Run the MCP server over stdio (desktop apps)."""
+    init_backend(db_path)
+    reaper = asyncio.create_task(_reaper())
+    try:
+        async with stdio_server() as (read_stream, write_stream):
+            await server.run(read_stream, write_stream, server.create_initialization_options())
+    finally:
+        reaper.cancel()
+        _close_own_sessions("shutdown")
+
+
+def _load_token(args) -> str:
+    """Bearer token: FLOWSTATE_TOKEN, else --token-file (legacy), else the OS credential
+    store (Credential Manager / Keychain / 0600 file). Never logged."""
+    from .secret_store import load_token
+    tok, source = load_token(args.token_file, warn=lambda m: log.warning("token: %s", m),
+                             fallback_file=args.token_fallback_file)
+    if tok:
+        log.info("HTTP bearer token loaded from %s", source)
+    return tok
+
+
+def create_http_app(token: Optional[str], path: str = "/mcp", db_path: Optional[Path] = None,
+                    public_url: Optional[str] = None, allow_master_token: bool = False,
+                    auth_db: Optional[Path] = None):
+    """Starlette app: bearer-protected streamable HTTP MCP at `path`, plus GET /health.
+
+    LAN mode (no public_url): the owner token, per-app keys from `flowstate keys add`, plus
+    per-client tokens from `flowstate remote add-client`. Public mode (public_url = the tunnel's https URL; bind
+    127.0.0.1): per-client tokens and OAuth 2.1 (consent page + owner passphrase), Host
+    allow-list, CF-Connecting-IP for rate limits; the owner token only with
+    allow_master_token. See remote_auth.py and docs/REMOTE-ACCESS.md."""
+    import contextlib
+    from starlette.applications import Starlette
+    from starlette.responses import JSONResponse
+    from starlette.routing import Mount, Route
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+    from . import remote_auth as RA
+
+    path = "/" + path.strip("/")
+    store = RA.AuthStore(auth_db)
+    if public_url:
+        public_url = public_url.rstrip("/")
+        master = token if allow_master_token else None
+    else:
+        if len(token or "") < 16:
+            raise ValueError("HTTP transport requires a bearer token of at least 16 characters")
+        master = token
+    manager = StreamableHTTPSessionManager(app=server, json_response=False, stateless=False)
+
+    async def health(request):
+        # Deliberately says nothing about the data; safe to expose through a tunnel.
+        return JSONResponse({"ok": True, "service": "flowstate"})
+
+    routes = [Route("/health", health, methods=["GET"])]
+    provider = rmd = None
+    allowed_hosts = None
+    if public_url:
+        from pydantic import AnyHttpUrl
+        from mcp.server.auth.routes import (build_resource_metadata_url, create_auth_routes,
+                                            create_protected_resource_routes)
+        from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
+        resource = public_url + path
+        provider = RA.FlowStateOAuthProvider(store, public_url, resource)
+        routes += create_auth_routes(
+            provider, AnyHttpUrl(public_url),
+            client_registration_options=ClientRegistrationOptions(
+                enabled=True, valid_scopes=RA.SCOPES, default_scopes=RA.SCOPES),
+            revocation_options=RevocationOptions(enabled=True))
+        prm = create_protected_resource_routes(AnyHttpUrl(resource), [AnyHttpUrl(public_url)],
+                                               scopes_supported=RA.SCOPES, resource_name="FlowState")
+        # also at the bare well-known path, for clients that don't add the resource path
+        routes += prm + [Route("/.well-known/oauth-protected-resource", prm[0].endpoint,
+                               methods=["GET", "OPTIONS"])]
+        routes += RA.consent_routes(provider)
+        rmd = str(build_resource_metadata_url(AnyHttpUrl(resource)))
+        allowed_hosts = {urlparse_host(public_url), "127.0.0.1", "localhost"}
+    # per-app LAN keys (app_keys.py) on the LAN listener only, never on the public one
+    checker = RA.TokenChecker(store, master, provider, app_keys=not public_url)
+
+    async def mcp_asgi(scope, receive, send):
+        if scope["type"] == "http" and scope.get("path", "").rstrip("/") != path:
+            await JSONResponse({"error": "not found"}, status_code=404)(scope, receive, send)
+            return
+        await manager.handle_request(scope, receive, send)
+
+    @contextlib.asynccontextmanager
+    async def lifespan(app):
+        init_backend(db_path)
+        reaper = asyncio.create_task(_reaper())
+        try:
+            async with manager.run():
+                yield
+        finally:
+            reaper.cancel()
+            _close_own_sessions("shutdown")
+
+    app = Starlette(routes=routes + [Mount("/", app=mcp_asgi)], lifespan=lifespan)
+    return RA.Gate(app, checker, path, allowed_hosts=allowed_hosts,
+                   trust_proxy=bool(public_url), resource_metadata_url=rmd)
+
+
+def urlparse_host(url: str) -> str:
+    from urllib.parse import urlparse
+    return (urlparse(url).hostname or "").lower()
+
+
+def run_http(host: str, port: int, token: Optional[str], path: str = "/mcp",
+             db_path: Optional[Path] = None, public_url: Optional[str] = None,
+             allow_master_token: bool = False):
+    """Serve MCP over streamable HTTP. uvicorn's own access log is off (it would log query
+    strings); remote_auth.Gate logs one line per request without query or body."""
+    import uvicorn
+    app = create_http_app(token, path, db_path, public_url=public_url,
+                          allow_master_token=allow_master_token)
+    uvicorn.run(app, host=host, port=port, log_level="info", access_log=False,
+                proxy_headers=False)
 
 
 def main():
-    """Entry point."""
-    asyncio.run(run_server())
+    """Entry point. Default: stdio. Optional: --transport http."""
+    import argparse
+    from . import cli
+    if len(sys.argv) > 1 and sys.argv[1] in cli.COMMANDS:
+        raise SystemExit(cli.main(sys.argv[1:]))
+    logging.basicConfig(stream=sys.stderr, level=logging.INFO,
+                        format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    ap = argparse.ArgumentParser(prog="flowstate", epilog="Commands: " + ", ".join(cli.COMMANDS)
+                                 + " (flowstate <command> -h for each)")
+    ap.add_argument("--transport", choices=["stdio", "http"],
+                    default=os.environ.get("FLOWSTATE_TRANSPORT", "stdio"))
+    ap.add_argument("--host", default=os.environ.get("FLOWSTATE_HOST", "127.0.0.1"))
+    ap.add_argument("--port", type=int, default=int(os.environ.get("FLOWSTATE_PORT", "8765")))
+    ap.add_argument("--token-file", default=None)
+    ap.add_argument("--token-fallback-file", default=None,
+                    help="read only if FLOWSTATE_TOKEN and the credential store have no token")
+    ap.add_argument("--db", default=None, help="database file (default: FLOWSTATE_DB / per-OS)")
+    ap.add_argument("--public-url", default=os.environ.get("FLOWSTATE_PUBLIC_URL"),
+                    help="https URL the tunnel serves (turns on OAuth + public-mode checks)")
+    ap.add_argument("--allow-master-token", action="store_true",
+                    help="public mode: also accept the owner's LAN token")
+    ap.add_argument("--tools", choices=["all", "core"], default=None,
+                    help="core = list only the core tools (also FLOWSTATE_TOOLS=core)")
+    args = ap.parse_args()
+    if args.tools:
+        os.environ["FLOWSTATE_TOOLS"] = args.tools
+    db_path = Path(args.db).expanduser() if args.db else None
+    if args.transport == "http":
+        token = _load_token(args)
+        if args.public_url:
+            # (the MCP SDK refuses a non-https public URL unless it is 127.0.0.1/localhost)
+            if args.host not in ("127.0.0.1", "localhost", "::1"):
+                log.warning("public mode is meant to listen on 127.0.0.1 behind the tunnel")
+        elif len(token) < 16:
+            raise SystemExit("HTTP transport requires a bearer token of 16+ characters: set "
+                             "FLOWSTATE_TOKEN, or store one with `flowstate token migrate --from <file>`")
+        run_http(args.host, args.port, token, db_path=db_path, public_url=args.public_url,
+                 allow_master_token=args.allow_master_token)
+    else:
+        asyncio.run(run_server(db_path))
+
+
+def run():
+    main()
 
 
 if __name__ == "__main__":

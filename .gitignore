@@ -11,14 +11,6 @@ dist/
 .venv/
 venv/
 
-# Node
-node_modules/
-npm-debug.log*
-
-# Rust / Tauri
-target/
-gui/src-tauri/target/
-
 # IDE
 .idea/
 .vscode/
@@ -40,9 +32,19 @@ gui/src-tauri/target/
 *.sqlite-wal
 *.sqlite-shm
 
-# Build artifacts
-gui/dist/
-
 # Backups
 *.bak
 *.backup.json
+
+# Local test data and scratch (never commit DB copies)
+testdata/
+playground/
+.pytest_cache/
+
+# Local FlowState runtime files (never commit)
+*.log
+logs/
+http-token.txt
+*token*.txt
+*.pem
+*.key

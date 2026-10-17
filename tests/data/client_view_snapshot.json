@@ -1,0 +1,2105 @@
+{
+ "instructions": "FlowState is the user's project memory (todos, changes, decisions, problems, learnings).\n1. At the start of every conversation about a project, call start_here(project=\"<name>\") first and read the brief. If you don't know the project, call start_here() with no arguments (or with folder=\"<working folder>\") to see the list, then pick one.\n2. As you work, record what matters with log_work(project=\"<name>\", kind=..., summary=...): kind=decision for choices made, change for things changed, problem for bugs/blockers, learning for lessons, todo for follow-ups. One short line each; add details only when useful.\n3. Every write must name the project. Never put passwords, tokens or keys in any text. If you know your model name, pass it as model=\"<name>\" on writes; never guess or invent it (leave it out).\n4. A session is opened and closed for you automatically; you don't need to manage it. Its auto-captured summary, and anything you log with suggested=true, waits in a review queue for the user. Never approve or reject review items unless the user explicitly asks you to in this chat. The user's review mode (shown in the brief) decides what else waits; never change it unless the user asks you to in this chat.\n5. Things shared between projects (a protocol, a library) are linked with the link tool; log changes to a shared component by its name and the other projects are alerted.\n6. The brief starts with the project's HARD RULES: never break them. If it shows a HANDOFF note, continue from it and mark it picked up (handoff action=pickup). If you must stop mid-task, leave one: handoff(action=\"leave\", project=..., where_i_was=..., next_step=...).\n7. If FlowState is slow, errors, or is unavailable, tell the user once and carry on with their task without it. Never retry more than once.",
+ "prompts": [
+  {
+   "arguments": [
+    {
+     "description": "Project name (optional)",
+     "name": "project",
+     "required": false
+    }
+   ],
+   "description": "Load FlowState project memory and work with it for this conversation.",
+   "name": "flowstate-start"
+  }
+ ],
+ "tools": [
+  {
+   "annotations": {
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Project brief (start here)"
+   },
+   "description": "CALL THIS FIRST in every conversation about a project. Returns a brief (max 4,000 characters) with the project's hard rules (never break them), any handoff note from the last AI, open todos, open problems, recent changes, recent decisions and key learnings, and opens a FlowState session automatically. Pass project=\"<name>\" (or id). size=quick (short) or deep (longer, up to 12,000) if needed. Unknown project? Call with no arguments, or with folder=\"<working folder>\", to get the list of projects.",
+   "inputSchema": {
+    "properties": {
+     "folder": {
+      "description": "Working folder; its name is matched to a project if project is not given",
+      "type": "string"
+     },
+     "project": {
+      "description": "Project name or id",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "size": {
+      "default": "standard",
+      "description": "quick (about 1,500 characters), standard (4,000) or deep (up to 12,000)",
+      "enum": [
+       "quick",
+       "standard",
+       "deep"
+      ],
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "name": "start_here"
+  },
+  {
+   "annotations": {
+    "destructiveHint": false,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Log work"
+   },
+   "description": "Record work as you go (write; project required). kind: decision (a choice made and why), change (something changed), problem (bug or blocker), learning (lesson or gotcha), todo (follow-up). summary: one short line. details: optional. component: optional component name (changes and problems default to 'General'). suggested=true: you are not sure the user wants this recorded, so it goes to the review queue instead of being saved. priority (todos; severity for problems): critical, urgent, normal (default), low. source: user_stated (the user said it), ai_inferred (your conclusion) or from_code (read in code or commits). Never include secrets (writes containing keys, tokens or passwords are refused).",
+   "inputSchema": {
+    "properties": {
+     "category": {
+      "description": "Learnings only",
+      "enum": [
+       "pattern",
+       "gotcha",
+       "best_practice",
+       "tool_tip",
+       "architecture",
+       "performance",
+       "security",
+       "other"
+      ],
+      "type": "string"
+     },
+     "component": {
+      "description": "Optional component name (default 'General')",
+      "type": "string"
+     },
+     "details": {
+      "description": "Optional detail / reason / context",
+      "type": "string"
+     },
+     "kind": {
+      "enum": [
+       "decision",
+       "change",
+       "problem",
+       "learning",
+       "todo"
+      ],
+      "type": "string"
+     },
+     "model": {
+      "description": "Your model name, if you know it (optional; never guessed)",
+      "type": "string"
+     },
+     "priority": {
+      "description": "Todos: priority. Problems: severity. critical, urgent, normal (default), low; older names high/medium also work.",
+      "enum": [
+       "critical",
+       "urgent",
+       "high",
+       "normal",
+       "medium",
+       "low"
+      ],
+      "type": "string"
+     },
+     "project": {
+      "description": "Project name or id. Required for every write.",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "replaces": {
+      "description": "Decisions only: id of the earlier decision this one replaces",
+      "type": "integer"
+     },
+     "source": {
+      "description": "Where it comes from: user_stated, ai_inferred, from_code",
+      "enum": [
+       "user_stated",
+       "ai_inferred",
+       "from_code"
+      ],
+      "type": "string"
+     },
+     "suggested": {
+      "default": false,
+      "description": "true = put it in the review queue for the user instead of saving it",
+      "type": "boolean"
+     },
+     "summary": {
+      "description": "One short line",
+      "type": "string"
+     }
+    },
+    "required": [
+     "project",
+     "kind",
+     "summary"
+    ],
+    "type": "object"
+   },
+   "name": "log_work"
+  },
+  {
+   "annotations": {
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Review queue"
+   },
+   "description": "List items waiting in the review queue (auto-captured session summaries and records logged with suggested=true). Read-only. Show them to the user; approving or rejecting is the user's decision.",
+   "inputSchema": {
+    "properties": {
+     "limit": {
+      "default": 20,
+      "type": "integer"
+     },
+     "project": {
+      "description": "Project name or id (optional: all projects)",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "status": {
+      "default": "pending",
+      "enum": [
+       "pending",
+       "approved",
+       "rejected",
+       "all"
+      ],
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "name": "review_list"
+  },
+  {
+   "annotations": {
+    "destructiveHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Approve review item (user only)"
+   },
+   "description": "Approve a review item so it becomes a normal FlowState record. To edit then approve, pass the corrected summary/details (or priority/category/component). ONLY call this when the user has explicitly told you, in this chat, to approve or reject this specific item. Never decide on your own initiative, and never approve your own suggestions unless the user explicitly says so. user_request must quote the user's words. Write: requires project=\"<name>\".",
+   "inputSchema": {
+    "properties": {
+     "category": {
+      "enum": [
+       "pattern",
+       "gotcha",
+       "best_practice",
+       "tool_tip",
+       "architecture",
+       "performance",
+       "security",
+       "other"
+      ],
+      "type": "string"
+     },
+     "component": {
+      "type": "string"
+     },
+     "details": {
+      "description": "Edited details (optional)",
+      "type": "string"
+     },
+     "item_id": {
+      "type": "integer"
+     },
+     "model": {
+      "description": "Your model name, if you know it (optional; never guessed)",
+      "type": "string"
+     },
+     "move_to": {
+      "description": "Clean-up 'misfiled' items: the project to move it to, if not the suggested one",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "priority": {
+      "enum": [
+       "critical",
+       "urgent",
+       "high",
+       "normal",
+       "medium",
+       "low"
+      ],
+      "type": "string"
+     },
+     "project": {
+      "description": "Project name or id. Required for every write.",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "summary": {
+      "description": "Edited text (optional)",
+      "type": "string"
+     },
+     "user_request": {
+      "description": "The user's own words in this chat asking for this decision",
+      "type": "string"
+     }
+    },
+    "required": [
+     "item_id",
+     "user_request"
+    ],
+    "type": "object"
+   },
+   "name": "review_approve"
+  },
+  {
+   "annotations": {
+    "destructiveHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Reject review item (user only)"
+   },
+   "description": "Reject a review item. It is kept, marked rejected, with the user's reason (nothing is deleted). ONLY call this when the user has explicitly told you, in this chat, to approve or reject this specific item. Never decide on your own initiative, and never approve your own suggestions unless the user explicitly says so. user_request must quote the user's words. Write: requires project=\"<name>\".",
+   "inputSchema": {
+    "properties": {
+     "item_id": {
+      "type": "integer"
+     },
+     "model": {
+      "description": "Your model name, if you know it (optional; never guessed)",
+      "type": "string"
+     },
+     "project": {
+      "description": "Project name or id. Required for every write.",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "reason": {
+      "description": "Why the user rejected it",
+      "type": "string"
+     },
+     "user_request": {
+      "description": "The user's own words in this chat asking for this decision",
+      "type": "string"
+     }
+    },
+    "required": [
+     "item_id",
+     "reason",
+     "user_request"
+    ],
+    "type": "object"
+   },
+   "name": "review_reject"
+  },
+  {
+   "annotations": {
+    "destructiveHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Cross-project links"
+   },
+   "description": "Link things across projects (write for add/remove; project required). Use when projects share something, e.g. several apps use one protocol: link(action=\"add\", project=\"App A\", link_type=\"uses\", target_project=\"Owner\", target_component=\"Wire Protocol\"). Source is the project, or component=\"<name in project>\", or item_type+item_id (decision, change, learning, problem, todo). Target: target_project (+ target_component), target_type+target_id, or url (a GitHub/Linear link to keep on a record). link_type: uses, depends_on, part_of, same_as (also supersedes, subtask_of, blocks). Changes logged on a shared component alert every project linked to it (an update todo + a note in its brief). FlowState only alerts; it does not change other apps' code. remove: link_id (or the add fields). list: links of the project or of one item.",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "enum": [
+       "add",
+       "remove",
+       "list"
+      ],
+      "type": "string"
+     },
+     "component": {
+      "description": "Source: a component of project, by name",
+      "type": "string"
+     },
+     "include_removed": {
+      "default": false,
+      "type": "boolean"
+     },
+     "item_id": {
+      "type": "integer"
+     },
+     "item_type": {
+      "description": "Source: a record type (with item_id)",
+      "enum": [
+       "project",
+       "component",
+       "decision",
+       "change",
+       "learning",
+       "problem",
+       "todo"
+      ],
+      "type": "string"
+     },
+     "link_id": {
+      "description": "remove: the link",
+      "type": "integer"
+     },
+     "link_type": {
+      "enum": [
+       "uses",
+       "depends_on",
+       "part_of",
+       "same_as",
+       "supersedes",
+       "subtask_of",
+       "blocks",
+       "about",
+       "url"
+      ],
+      "type": "string"
+     },
+     "model": {
+      "description": "Your model name, if you know it (optional; never guessed)",
+      "type": "string"
+     },
+     "note": {
+      "type": "string"
+     },
+     "project": {
+      "description": "Project name or id. Required for every write.",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "target_component": {
+      "description": "Target: a component of target_project, by name",
+      "type": "string"
+     },
+     "target_id": {
+      "type": "integer"
+     },
+     "target_project": {
+      "description": "Target project name or id",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "target_type": {
+      "enum": [
+       "project",
+       "component",
+       "decision",
+       "change",
+       "learning",
+       "problem",
+       "todo"
+      ],
+      "type": "string"
+     },
+     "url": {
+      "description": "Target: a GitHub / Linear / other https URL",
+      "type": "string"
+     }
+    },
+    "required": [
+     "action"
+    ],
+    "type": "object"
+   },
+   "name": "link"
+  },
+  {
+   "annotations": {
+    "destructiveHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Review mode (user only)"
+   },
+   "description": "Read or change the review mode: which new records wait in the review queue for the user's OK. Modes: off (nothing waits), auto_only (default: only auto-captured items), types (also the listed kinds), everything. action=get is read-only. action=set ONLY when the user has explicitly asked you, in this chat, to change the review mode; never change it on your own initiative or to get your writes saved. user_request must quote the user's words; every change is logged with them. project=... sets an override for one project (clear=true removes it); no project = the whole install.",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "enum": [
+       "get",
+       "set"
+      ],
+      "type": "string"
+     },
+     "clear": {
+      "description": "set: remove this project's override",
+      "type": "boolean"
+     },
+     "kinds": {
+      "description": "mode=types: which kinds wait for review",
+      "items": {
+       "enum": [
+        "decision",
+        "change",
+        "problem",
+        "learning",
+        "todo"
+       ],
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "mode": {
+      "enum": [
+       "off",
+       "auto_only",
+       "types",
+       "everything"
+      ],
+      "type": "string"
+     },
+     "model": {
+      "description": "Your model name, if you know it (optional; never guessed)",
+      "type": "string"
+     },
+     "project": {
+      "description": "Optional: one project's override (default: whole install)",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "user_request": {
+      "description": "The user's own words in this chat asking for this decision",
+      "type": "string"
+     }
+    },
+    "required": [
+     "action"
+    ],
+    "type": "object"
+   },
+   "name": "review_mode"
+  },
+  {
+   "annotations": {
+    "destructiveHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Edit history and undo"
+   },
+   "description": "Edit history of FlowState records, and undo. action=list (read): recent edits and deletes in a project, or of one record (record_type + record_id), with old and new values. action=undo (write; project required): put back the last change to that record (a deleted record comes back); recorded too, so undoing again redoes it. Refused if the record changed again since. New records are not undone here (set them done/cancelled). action=who (read): who did what, newest first, across projects or one project: app, model, machine and how the app was identified, for edits, review decisions, links, handoffs, rules and new records; filters by_app, by_model, by_machine, since, until (local time, e.g. 2026-10-17 or 2026-10-17 14:30), page.",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "enum": [
+       "list",
+       "undo",
+       "who"
+      ],
+      "type": "string"
+     },
+     "by_app": {
+      "description": "who: only this app (part of the name)",
+      "type": "string"
+     },
+     "by_machine": {
+      "description": "who: only this machine / workspace",
+      "type": "string"
+     },
+     "by_model": {
+      "description": "who: only this model (part of the name)",
+      "type": "string"
+     },
+     "limit": {
+      "default": 20,
+      "type": "integer"
+     },
+     "model": {
+      "description": "Your model name, if you know it (optional; never guessed)",
+      "type": "string"
+     },
+     "page": {
+      "default": 1,
+      "description": "who: page (limit rows each)",
+      "type": "integer"
+     },
+     "project": {
+      "description": "Project name or id. Required for every write.",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "record_id": {
+      "type": "integer"
+     },
+     "record_type": {
+      "enum": [
+       "todo",
+       "project",
+       "component",
+       "problem",
+       "solution",
+       "attempt",
+       "variable",
+       "method",
+       "attachment",
+       "link",
+       "learning",
+       "decision",
+       "change"
+      ],
+      "type": "string"
+     },
+     "since": {
+      "description": "who: from this local time, e.g. 2026-10-17",
+      "type": "string"
+     },
+     "until": {
+      "description": "who: up to this local time",
+      "type": "string"
+     }
+    },
+    "required": [
+     "action"
+    ],
+    "type": "object"
+   },
+   "name": "history"
+  },
+  {
+   "annotations": {
+    "destructiveHint": false,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Suggest clean-ups (to review)"
+   },
+   "description": "Find likely duplicates, stale todos and records filed in the wrong project, and put them in the review queue as suggestions (write; project required; additive: nothing is moved, closed or deleted). The user approves or rejects each one; approving applies only that suggestion and it can be undone with history. Suggestions the user rejected are not repeated. kinds: any of duplicate, stale, misfiled (default all).",
+   "inputSchema": {
+    "properties": {
+     "kinds": {
+      "items": {
+       "enum": [
+        "duplicate",
+        "stale",
+        "misfiled"
+       ],
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "model": {
+      "description": "Your model name, if you know it (optional; never guessed)",
+      "type": "string"
+     },
+     "project": {
+      "description": "Project name or id. Required for every write.",
+      "type": [
+       "string",
+       "integer"
+      ]
+     }
+    },
+    "type": "object"
+   },
+   "name": "cleanup_suggest"
+  },
+  {
+   "annotations": {
+    "destructiveHint": false,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Import memories to review"
+   },
+   "description": "Bring memories or notes into a project's REVIEW QUEUE (write; project required; nothing is saved as a record until the user approves). format=memory (default): a Claude or ChatGPT memory export or copy, as text/markdown (one per line) or JSON. format=flowstate_markdown: a file made by `flowstate export-md`; new lines and edited lines become review items. Pass the file's contents as text. Lines that look like secrets are skipped, not stored.",
+   "inputSchema": {
+    "properties": {
+     "format": {
+      "default": "memory",
+      "enum": [
+       "memory",
+       "flowstate_markdown"
+      ],
+      "type": "string"
+     },
+     "kind": {
+      "default": "learning",
+      "description": "format=memory: record kind for the items",
+      "enum": [
+       "learning",
+       "decision",
+       "todo",
+       "problem",
+       "change"
+      ],
+      "type": "string"
+     },
+     "model": {
+      "description": "Your model name, if you know it (optional; never guessed)",
+      "type": "string"
+     },
+     "project": {
+      "description": "Project name or id. Required for every write.",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "source": {
+      "description": "Where it came from, e.g. Claude, ChatGPT",
+      "type": "string"
+     },
+     "text": {
+      "description": "The export / file contents (max 200,000 characters)",
+      "type": "string"
+     }
+    },
+    "required": [
+     "text"
+    ],
+    "type": "object"
+   },
+   "name": "import_memory"
+  },
+  {
+   "annotations": {
+    "destructiveHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Hard rules"
+   },
+   "description": "A project's HARD RULES: things never to do in it (e.g. \"Never push to main\"). They are shown first in every start_here brief, in full. action=list (read). action=add (write; project required): rule = one short sentence (max 300 characters; 2,000 per project); add one when the user states a rule. action=remove (write): rule_id, ONLY when the user asks you in this chat; user_request must quote their words.",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "enum": [
+       "add",
+       "list",
+       "remove"
+      ],
+      "type": "string"
+     },
+     "include_removed": {
+      "default": false,
+      "type": "boolean"
+     },
+     "model": {
+      "description": "Your model name, if you know it (optional; never guessed)",
+      "type": "string"
+     },
+     "project": {
+      "description": "Project name or id. Required for every write.",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "rule": {
+      "description": "add: the rule, one short sentence",
+      "type": "string"
+     },
+     "rule_id": {
+      "description": "remove: the rule (R<id> in the brief)",
+      "type": "integer"
+     },
+     "user_request": {
+      "description": "The user's own words in this chat asking for this decision",
+      "type": "string"
+     }
+    },
+    "required": [
+     "action"
+    ],
+    "type": "object"
+   },
+   "name": "rules"
+  },
+  {
+   "annotations": {
+    "destructiveHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Handoff notes"
+   },
+   "description": "Handoff notes between AIs. Stopping mid-task (out of time, context or tokens, or the user ends the chat)? action=leave (write; project required) with where_i_was (what was being done and its state) and next_step. The next AI sees it first in start_here. When you continue from a note, action=pickup with handoff_id so it stops showing. action=list (read).",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "enum": [
+       "leave",
+       "list",
+       "pickup"
+      ],
+      "type": "string"
+     },
+     "handoff_id": {
+      "description": "pickup: the note (H<id> in the brief)",
+      "type": "integer"
+     },
+     "include_picked_up": {
+      "default": false,
+      "type": "boolean"
+     },
+     "limit": {
+      "default": 20,
+      "type": "integer"
+     },
+     "model": {
+      "description": "Your model name, if you know it (optional; never guessed)",
+      "type": "string"
+     },
+     "next_step": {
+      "description": "leave: the very next thing to do (max 500)",
+      "type": "string"
+     },
+     "project": {
+      "description": "Project name or id. Required for every write.",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "where_i_was": {
+      "description": "leave: what you were doing and how far it got (max 1,000)",
+      "type": "string"
+     }
+    },
+    "required": [
+     "action"
+    ],
+    "type": "object"
+   },
+   "name": "handoff"
+  },
+  {
+   "annotations": {
+    "destructiveHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Verify facts and sources"
+   },
+   "description": "Keep facts current. action=stale (read): facts (paths, ports, hosts, URLs, config) in a project not checked for 60+ days; check them. action=mark (write): you confirmed a record still holds (record_type + record_id; optional source). action=source (write): set where a record came from: user_stated, ai_inferred or from_code. If a fact changed, log the change instead.",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "enum": [
+       "stale",
+       "mark",
+       "source"
+      ],
+      "type": "string"
+     },
+     "days": {
+      "description": "stale: not checked for this many days (default 60)",
+      "type": "integer"
+     },
+     "limit": {
+      "default": 20,
+      "type": "integer"
+     },
+     "model": {
+      "description": "Your model name, if you know it (optional; never guessed)",
+      "type": "string"
+     },
+     "project": {
+      "description": "Project name or id. Required for every write.",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "record_id": {
+      "type": "integer"
+     },
+     "record_type": {
+      "enum": [
+       "todo",
+       "decision",
+       "change",
+       "learning",
+       "problem",
+       "variable",
+       "method"
+      ],
+      "type": "string"
+     },
+     "source": {
+      "enum": [
+       "user_stated",
+       "ai_inferred",
+       "from_code"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "action"
+    ],
+    "type": "object"
+   },
+   "name": "verify"
+  },
+  {
+   "annotations": {
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Ask a question"
+   },
+   "description": "Ask FlowState a question in plain words (read-only), e.g. \"which port does the LAN server use?\". Returns a short answer quoted from the best-matching records, with their ids (type #id), plus matching hard rules and handoff notes. Local only (meaning search if a local model is installed, keywords otherwise). If nothing matches it says so; it never guesses. project optional (default: all projects).",
+   "inputSchema": {
+    "properties": {
+     "limit": {
+      "default": 5,
+      "type": "integer"
+     },
+     "project": {
+      "description": "Project name or id (optional)",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "question": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "question"
+    ],
+    "type": "object"
+   },
+   "name": "ask"
+  },
+  {
+   "annotations": {
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "List projects"
+   },
+   "description": "List all projects with their status.",
+   "inputSchema": {
+    "properties": {
+     "status": {
+      "description": "Filter by status",
+      "enum": [
+       "active",
+       "paused",
+       "completed",
+       "archived"
+      ],
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "name": "list_projects"
+  },
+  {
+   "annotations": {
+    "destructiveHint": false,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Create project"
+   },
+   "description": "Create a new project.",
+   "inputSchema": {
+    "properties": {
+     "description": {
+      "description": "Project description",
+      "type": "string"
+     },
+     "model": {
+      "description": "Your model name, if you know it (optional; never guessed)",
+      "type": "string"
+     },
+     "name": {
+      "description": "Project name (unique)",
+      "type": "string"
+     }
+    },
+    "required": [
+     "name"
+    ],
+    "type": "object"
+   },
+   "name": "create_project"
+  },
+  {
+   "annotations": {
+    "destructiveHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Update project"
+   },
+   "description": "Update project details. Write: requires project=\"<name>\" (or project_id).",
+   "inputSchema": {
+    "properties": {
+     "description": {
+      "type": "string"
+     },
+     "model": {
+      "description": "Your model name, if you know it (optional; never guessed)",
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     },
+     "project": {
+      "description": "Project name or id. Required for every write.",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "project_id": {
+      "type": "integer"
+     },
+     "status": {
+      "enum": [
+       "active",
+       "paused",
+       "completed",
+       "archived"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [],
+    "type": "object"
+   },
+   "name": "update_project"
+  },
+  {
+   "annotations": {
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Project context"
+   },
+   "description": "Get project context. Use lean=True (default) for minimal tokens at session start. Use lean=False for full details when needed.",
+   "inputSchema": {
+    "properties": {
+     "hours": {
+      "default": 48,
+      "description": "Hours back for changes",
+      "type": "integer"
+     },
+     "lean": {
+      "default": true,
+      "description": "Minimal tokens (default True)",
+      "type": "boolean"
+     },
+     "project_name": {
+      "description": "Project name",
+      "type": "string"
+     }
+    },
+    "required": [
+     "project_name"
+    ],
+    "type": "object"
+   },
+   "name": "get_context"
+  },
+  {
+   "annotations": {
+    "destructiveHint": false,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Create component"
+   },
+   "description": "Create a component within a project. Write: requires project=\"<name>\" (or project_id).",
+   "inputSchema": {
+    "properties": {
+     "description": {
+      "type": "string"
+     },
+     "model": {
+      "description": "Your model name, if you know it (optional; never guessed)",
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     },
+     "parent_component_id": {
+      "description": "For nesting",
+      "type": "integer"
+     },
+     "project": {
+      "description": "Project name or id. Required for every write.",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "project_id": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "name"
+    ],
+    "type": "object"
+   },
+   "name": "create_component"
+  },
+  {
+   "annotations": {
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "List components"
+   },
+   "description": "List components in a project.",
+   "inputSchema": {
+    "properties": {
+     "project_id": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "project_id"
+    ],
+    "type": "object"
+   },
+   "name": "list_components"
+  },
+  {
+   "annotations": {
+    "destructiveHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Update component"
+   },
+   "description": "Update a component. Write: requires project=\"<name>\" (or project_id).",
+   "inputSchema": {
+    "properties": {
+     "component_id": {
+      "type": "integer"
+     },
+     "description": {
+      "type": "string"
+     },
+     "model": {
+      "description": "Your model name, if you know it (optional; never guessed)",
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     },
+     "project": {
+      "description": "Project name or id. Required for every write.",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "status": {
+      "enum": [
+       "planning",
+       "in_progress",
+       "testing",
+       "complete",
+       "deprecated"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "component_id"
+    ],
+    "type": "object"
+   },
+   "name": "update_component"
+  },
+  {
+   "annotations": {
+    "destructiveHint": false,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Log learning"
+   },
+   "description": "Capture an insight or learning. This is your memory - use it! Write: requires project=\"<name>\" (or project_id).",
+   "inputSchema": {
+    "properties": {
+     "category": {
+      "enum": [
+       "pattern",
+       "gotcha",
+       "best_practice",
+       "tool_tip",
+       "architecture",
+       "performance",
+       "security",
+       "other"
+      ],
+      "type": "string"
+     },
+     "component_id": {
+      "type": "integer"
+     },
+     "context": {
+      "description": "When this applies",
+      "type": "string"
+     },
+     "insight": {
+      "description": "The learning/insight",
+      "type": "string"
+     },
+     "model": {
+      "description": "Your model name, if you know it (optional; never guessed)",
+      "type": "string"
+     },
+     "project": {
+      "description": "Project name or id. Required for every write.",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "project_id": {
+      "type": "integer"
+     },
+     "source": {
+      "default": "experience",
+      "enum": [
+       "experience",
+       "documentation",
+       "conversation",
+       "error",
+       "research"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "insight"
+    ],
+    "type": "object"
+   },
+   "name": "log_learning"
+  },
+  {
+   "annotations": {
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Get learnings"
+   },
+   "description": "Get learnings. Use compact=True to save tokens.",
+   "inputSchema": {
+    "properties": {
+     "category": {
+      "enum": [
+       "pattern",
+       "gotcha",
+       "best_practice",
+       "tool_tip",
+       "architecture",
+       "performance",
+       "security",
+       "other"
+      ],
+      "type": "string"
+     },
+     "compact": {
+      "default": false,
+      "type": "boolean"
+     },
+     "project_id": {
+      "type": "integer"
+     }
+    },
+    "type": "object"
+   },
+   "name": "get_learnings"
+  },
+  {
+   "annotations": {
+    "destructiveHint": false,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Log change"
+   },
+   "description": "Log a change to a component. Write: requires project=\"<name>\" (or project_id).",
+   "inputSchema": {
+    "properties": {
+     "change_type": {
+      "enum": [
+       "config",
+       "code",
+       "architecture",
+       "dependency",
+       "documentation",
+       "other"
+      ],
+      "type": "string"
+     },
+     "component_id": {
+      "type": "integer"
+     },
+     "field_name": {
+      "description": "What changed",
+      "type": "string"
+     },
+     "model": {
+      "description": "Your model name, if you know it (optional; never guessed)",
+      "type": "string"
+     },
+     "new_value": {
+      "type": "string"
+     },
+     "old_value": {
+      "type": "string"
+     },
+     "project": {
+      "description": "Project name or id. Required for every write.",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "reason": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "field_name"
+    ],
+    "type": "object"
+   },
+   "name": "log_change"
+  },
+  {
+   "annotations": {
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Recent changes"
+   },
+   "description": "Get recent changes. Use compact=True to save tokens.",
+   "inputSchema": {
+    "properties": {
+     "compact": {
+      "default": false,
+      "type": "boolean"
+     },
+     "component_id": {
+      "type": "integer"
+     },
+     "hours": {
+      "default": 24,
+      "type": "integer"
+     },
+     "project_id": {
+      "type": "integer"
+     }
+    },
+    "type": "object"
+   },
+   "name": "get_recent_changes"
+  },
+  {
+   "annotations": {
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Search"
+   },
+   "description": "Search todos, decisions, changes, learnings, problems and solutions. Matches words (and word endings); also by meaning when a local model is installed (the reply's mode says which was used).",
+   "inputSchema": {
+    "properties": {
+     "content_types": {
+      "description": "Filter: todo, decision, change, learning, problem, solution",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "limit": {
+      "default": 10,
+      "type": "integer"
+     },
+     "mode": {
+      "default": "auto",
+      "enum": [
+       "auto",
+       "keyword",
+       "meaning"
+      ],
+      "type": "string"
+     },
+     "project": {
+      "description": "Project name or id (optional)",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "project_id": {
+      "type": "integer"
+     },
+     "query": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ],
+    "type": "object"
+   },
+   "name": "search"
+  },
+  {
+   "annotations": {
+    "destructiveHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Problems"
+   },
+   "description": "Manage problems. Actions: log, list, solve, get_tree Write: requires project=\"<name>\" (or project_id).",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "enum": [
+       "log",
+       "list",
+       "solve",
+       "get_tree"
+      ],
+      "type": "string"
+     },
+     "code_snippet": {
+      "type": "string"
+     },
+     "compact": {
+      "default": false,
+      "type": "boolean"
+     },
+     "component_id": {
+      "type": "integer"
+     },
+     "description": {
+      "type": "string"
+     },
+     "key_insight": {
+      "type": "string"
+     },
+     "model": {
+      "description": "Your model name, if you know it (optional; never guessed)",
+      "type": "string"
+     },
+     "problem_id": {
+      "type": "integer"
+     },
+     "project": {
+      "description": "Project name or id. Required for every write.",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "project_id": {
+      "type": "integer"
+     },
+     "severity": {
+      "default": "normal",
+      "description": "critical, urgent, normal, low (older names high, medium also work)",
+      "enum": [
+       "critical",
+       "urgent",
+       "high",
+       "normal",
+       "medium",
+       "low"
+      ],
+      "type": "string"
+     },
+     "summary": {
+      "type": "string"
+     },
+     "title": {
+      "type": "string"
+     },
+     "winning_attempt_id": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "action"
+    ],
+    "type": "object"
+   },
+   "name": "problem"
+  },
+  {
+   "annotations": {
+    "destructiveHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Solution attempts"
+   },
+   "description": "Manage solution attempts. Actions: log, outcome Write: requires project=\"<name>\" (or project_id).",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "enum": [
+       "log",
+       "outcome"
+      ],
+      "type": "string"
+     },
+     "attempt_id": {
+      "type": "integer"
+     },
+     "confidence": {
+      "default": "attempted",
+      "enum": [
+       "attempted",
+       "worked_once",
+       "verified",
+       "proven",
+       "deprecated"
+      ],
+      "type": "string"
+     },
+     "description": {
+      "type": "string"
+     },
+     "model": {
+      "description": "Your model name, if you know it (optional; never guessed)",
+      "type": "string"
+     },
+     "notes": {
+      "type": "string"
+     },
+     "outcome": {
+      "enum": [
+       "success",
+       "failure",
+       "partial",
+       "abandoned"
+      ],
+      "type": "string"
+     },
+     "parent_attempt_id": {
+      "type": "integer"
+     },
+     "problem_id": {
+      "type": "integer"
+     },
+     "project": {
+      "description": "Project name or id. Required for every write.",
+      "type": [
+       "string",
+       "integer"
+      ]
+     }
+    },
+    "required": [
+     "action"
+    ],
+    "type": "object"
+   },
+   "name": "attempt"
+  },
+  {
+   "annotations": {
+    "destructiveHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Todos"
+   },
+   "description": "Manage todos. Actions: add, update, list, next (what to do next: open, unblocked, highest priority), block / unblock (todo_id waits on blocked_by todos or blocked_by_problem). add takes parent_todo_id for a subtask. Priority: critical, urgent, normal (default), low (older names high and medium also work). list filters by priority or min_priority and sorts by priority (default), due or newest. Write: requires project=\"<name>\" (or project_id).",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "enum": [
+       "add",
+       "update",
+       "list",
+       "next",
+       "block",
+       "unblock"
+      ],
+      "type": "string"
+     },
+     "blocked_by": {
+      "description": "add/block/unblock: todo ids it waits on",
+      "items": {
+       "type": "integer"
+      },
+      "type": "array"
+     },
+     "blocked_by_problem": {
+      "description": "add/block/unblock: a problem it waits on",
+      "type": "integer"
+     },
+     "compact": {
+      "default": false,
+      "type": "boolean"
+     },
+     "component_id": {
+      "type": "integer"
+     },
+     "description": {
+      "type": "string"
+     },
+     "due_date": {
+      "type": "string"
+     },
+     "limit": {
+      "default": 5,
+      "description": "next: how many",
+      "type": "integer"
+     },
+     "min_priority": {
+      "description": "list: this level or more urgent",
+      "enum": [
+       "critical",
+       "urgent",
+       "high",
+       "normal",
+       "medium",
+       "low"
+      ],
+      "type": "string"
+     },
+     "model": {
+      "description": "Your model name, if you know it (optional; never guessed)",
+      "type": "string"
+     },
+     "parent_todo_id": {
+      "description": "add: make it a subtask of this todo",
+      "type": "integer"
+     },
+     "priority": {
+      "default": "normal",
+      "description": "add/update: the priority; list: only this level",
+      "enum": [
+       "critical",
+       "urgent",
+       "high",
+       "normal",
+       "medium",
+       "low"
+      ],
+      "type": "string"
+     },
+     "project": {
+      "description": "Project name or id. Required for every write.",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "project_id": {
+      "type": "integer"
+     },
+     "sort": {
+      "default": "priority",
+      "description": "list: order",
+      "enum": [
+       "priority",
+       "due",
+       "newest"
+      ],
+      "type": "string"
+     },
+     "status": {
+      "enum": [
+       "pending",
+       "in_progress",
+       "blocked",
+       "done",
+       "cancelled"
+      ],
+      "type": "string"
+     },
+     "title": {
+      "type": "string"
+     },
+     "todo_id": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "action"
+    ],
+    "type": "object"
+   },
+   "name": "todo"
+  },
+  {
+   "annotations": {
+    "destructiveHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Sessions"
+   },
+   "description": "Manage sessions. Actions: start, end, current, log_conversation, list_conversations, list_sessions Write: requires project=\"<name>\" (or project_id).",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "enum": [
+       "start",
+       "end",
+       "current",
+       "log_conversation",
+       "list_conversations",
+       "list_sessions"
+      ],
+      "type": "string"
+     },
+     "assistant_response_summary": {
+      "type": "string"
+     },
+     "focus_component_id": {
+      "type": "integer"
+     },
+     "focus_problem_id": {
+      "type": "integer"
+     },
+     "key_decisions": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "limit": {
+      "default": 20,
+      "type": "integer"
+     },
+     "model": {
+      "description": "Your model name, if you know it (optional; never guessed)",
+      "type": "string"
+     },
+     "outcomes": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "project": {
+      "description": "Project name or id. Required for every write.",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "project_id": {
+      "type": "integer"
+     },
+     "session_id": {
+      "type": "integer"
+     },
+     "summary": {
+      "type": "string"
+     },
+     "user_prompt_summary": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "action"
+    ],
+    "type": "object"
+   },
+   "name": "session"
+  },
+  {
+   "annotations": {
+    "destructiveHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "File attachments"
+   },
+   "description": "Manage file attachments. Actions: attach, list, remove, search Write: requires project=\"<name>\" (or project_id).",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "enum": [
+       "attach",
+       "list",
+       "remove",
+       "search"
+      ],
+      "type": "string"
+     },
+     "attachment_id": {
+      "type": "integer"
+     },
+     "component_id": {
+      "type": "integer"
+     },
+     "copy_to_bundle": {
+      "default": true,
+      "type": "boolean"
+     },
+     "delete_file": {
+      "default": false,
+      "type": "boolean"
+     },
+     "file_path": {
+      "type": "string"
+     },
+     "file_types": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "limit": {
+      "default": 10,
+      "type": "integer"
+     },
+     "model": {
+      "description": "Your model name, if you know it (optional; never guessed)",
+      "type": "string"
+     },
+     "problem_id": {
+      "type": "integer"
+     },
+     "project": {
+      "description": "Project name or id. Required for every write.",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "project_id": {
+      "type": "integer"
+     },
+     "query": {
+      "type": "string"
+     },
+     "tags": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "user_description": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "action"
+    ],
+    "type": "object"
+   },
+   "name": "file"
+  },
+  {
+   "annotations": {
+    "destructiveHint": true,
+    "openWorldHint": true,
+    "readOnlyHint": false,
+    "title": "Data folder git"
+   },
+   "description": "Git operations. Actions: init, status, sync, set_remote, clone, history",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "enum": [
+       "init",
+       "status",
+       "sync",
+       "set_remote",
+       "clone",
+       "history"
+      ],
+      "type": "string"
+     },
+     "commit_message": {
+      "type": "string"
+     },
+     "limit": {
+      "default": 20,
+      "type": "integer"
+     },
+     "local_path": {
+      "type": "string"
+     },
+     "remote_url": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "action"
+    ],
+    "type": "object"
+   },
+   "name": "git"
+  },
+  {
+   "annotations": {
+    "destructiveHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Project variables"
+   },
+   "description": "Manage project variables (servers, credentials, config). Actions: create, list, update, delete Write: requires project=\"<name>\" (or project_id).",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "enum": [
+       "create",
+       "list",
+       "update",
+       "delete"
+      ],
+      "type": "string"
+     },
+     "category": {
+      "default": "custom",
+      "enum": [
+       "server",
+       "credentials",
+       "config",
+       "environment",
+       "endpoint",
+       "custom"
+      ],
+      "type": "string"
+     },
+     "description": {
+      "type": "string"
+     },
+     "is_secret": {
+      "default": false,
+      "type": "boolean"
+     },
+     "model": {
+      "description": "Your model name, if you know it (optional; never guessed)",
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     },
+     "project": {
+      "description": "Project name or id. Required for every write.",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "project_id": {
+      "type": "integer"
+     },
+     "value": {
+      "type": "string"
+     },
+     "variable_id": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "action"
+    ],
+    "type": "object"
+   },
+   "name": "variable"
+  },
+  {
+   "annotations": {
+    "destructiveHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Project methods"
+   },
+   "description": "Manage project methods (auth flows, deployment steps, patterns). Actions: create, list, update, delete Write: requires project=\"<name>\" (or project_id).",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "enum": [
+       "create",
+       "list",
+       "update",
+       "delete"
+      ],
+      "type": "string"
+     },
+     "category": {
+      "enum": [
+       "auth",
+       "deployment",
+       "testing",
+       "architecture",
+       "workflow",
+       "convention",
+       "api",
+       "security",
+       "other"
+      ],
+      "type": "string"
+     },
+     "code_example": {
+      "type": "string"
+     },
+     "description": {
+      "type": "string"
+     },
+     "method_id": {
+      "type": "integer"
+     },
+     "model": {
+      "description": "Your model name, if you know it (optional; never guessed)",
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     },
+     "project": {
+      "description": "Project name or id. Required for every write.",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "project_id": {
+      "type": "integer"
+     },
+     "related_component_id": {
+      "type": "integer"
+     },
+     "steps": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "action"
+    ],
+    "type": "object"
+   },
+   "name": "method"
+  },
+  {
+   "annotations": {
+    "destructiveHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Skills and state"
+   },
+   "description": "Manage Claude's learned skills and session state. Actions: learn_skill, get_skills, confirm_skill, save_state, get_state, log_metric, get_metrics Write: requires project=\"<name>\" (or project_id).",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "enum": [
+       "learn_skill",
+       "get_skills",
+       "confirm_skill",
+       "save_state",
+       "get_state",
+       "log_metric",
+       "get_metrics"
+      ],
+      "type": "string"
+     },
+     "action_taken": {
+      "type": "string"
+     },
+     "active_component_ids": {
+      "items": {
+       "type": "integer"
+      },
+      "type": "array"
+     },
+     "active_problem_ids": {
+      "items": {
+       "type": "integer"
+      },
+      "type": "array"
+     },
+     "context": {
+      "description": "When this applies",
+      "type": "string"
+     },
+     "effectiveness_score": {
+      "description": "0.0-1.0",
+      "type": "number"
+     },
+     "focus_summary": {
+      "type": "string"
+     },
+     "key_facts": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "metric_type": {
+      "enum": [
+       "checkpoint_timing",
+       "tool_choice",
+       "response_quality",
+       "prediction_accuracy",
+       "user_satisfaction"
+      ],
+      "type": "string"
+     },
+     "model": {
+      "description": "Your model name, if you know it (optional; never guessed)",
+      "type": "string"
+     },
+     "outcome": {
+      "type": "string"
+     },
+     "pending_decisions": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "project": {
+      "description": "Project name or id. Required for every write.",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "project_id": {
+      "type": "integer"
+     },
+     "promoted_only": {
+      "default": false,
+      "type": "boolean"
+     },
+     "skill": {
+      "description": "What was learned",
+      "type": "string"
+     },
+     "skill_id": {
+      "type": "integer"
+     },
+     "skill_type": {
+      "enum": [
+       "tool_capability",
+       "user_preference",
+       "approach",
+       "gotcha",
+       "project_specific"
+      ],
+      "type": "string"
+     },
+     "tool_name": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "action"
+    ],
+    "type": "object"
+   },
+   "name": "self_improve"
+  }
+ ]
+}
