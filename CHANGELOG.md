@@ -1,6 +1,37 @@
 # Changelog
 
-## Unreleased
+## Unreleased (v2.1.0)
+
+### Working with your AI
+- A smaller, consistent tool list: 12 tools instead of 35, and every name starts with a
+  verb. Tools that do several things are `manage_<things>` and take an `action`:
+  `start_here`, `log_work`, `search`, `manage_todos`, `manage_problems`, `manage_review`,
+  `manage_handoffs`, `manage_rules`, `manage_links`, `manage_history`, `manage_projects`,
+  `manage_memory`. The full old -> new mapping is in `docs/TOOL_CONSOLIDATION.md`.
+- Nothing your apps do today breaks: every v2.0 tool name (`todo`, `link`, `handoff`,
+  `review_approve`, `list_projects`, `log_learning`, `git`, ...) still works when called,
+  with the same arguments and result, plus one extra line naming the new tool. The old
+  names are just not listed any more.
+- `search` now also answers a plain question (`answer=true`, what `ask` did) and, with no
+  query, lists the newest records (`content_types`, `since_hours`), which replaces
+  `get_learnings` and `get_recent_changes`.
+- Every tool description now says what the tool is for, which tool to use instead, what it
+  changes, which actions only read, and what it returns; every parameter is described.
+- Read / write labels are per action now (`_meta["flowstate/actions"]`), and the tool-level
+  labels are the most cautious action. Links, hard rules and handoff notes are no longer
+  marked destructive (their removes keep the record).
+- Profiles: `FLOWSTATE_TOOLS` unset lists the 12 tools; `core` lists 6 (start_here,
+  log_work, search, manage_todos, manage_review, manage_handoffs); `full` (or `all`) adds
+  `manage_sessions`, `manage_files`, `manage_data_git`, `manage_variables`,
+  `manage_methods` and `manage_skills`. Before, unset listed all 35. Every tool name answers
+  in every profile.
+- The `tools/list` payload is smaller: 24,492 characters by default (was 39,221).
+- The skill (`skills/flowstate`, version 2.3), AGENTS.md, README and llms.txt use the new
+  names.
+
+### Fixes
+- Updating a component without giving its name failed, and updating it without a
+  description erased the description. Omitted fields are now kept.
 
 ### Getting started
 - AGENTS.md: setup snippets for VS Code (GitHub Copilot), Cline and Zed.

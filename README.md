@@ -100,7 +100,7 @@ items, leave a handoff if you stop mid-task). Apps that load skills follow it wi
 
 No skill support in your app? Paste this once per chat, or into its custom instructions:
 
-> Use FlowState as my project memory. First call start_here for the project we're working on (ask me which if unsure). As we work, log decisions, changes, problems, lessons and todos to that project with log_work. If something is shared between projects, link it with the link tool instead of copying it. Never approve or reject review items, and never change my review mode, unless I ask you to in this chat. At the end, log a short summary of what we did and what's next.
+> Use FlowState as my project memory. First call start_here for the project we're working on (ask me which if unsure). As we work, log decisions, changes, problems, lessons and todos to that project with log_work. If something is shared between projects, link it with manage_links instead of copying it. Never approve or reject review items, and never change my review mode, unless I ask you to in this chat. At the end, log a short summary of what we did and what's next.
 
 The server also sends these rules to every app when it connects, and offers them as the MCP
 prompt `flowstate-start`.
@@ -143,11 +143,11 @@ prompt `flowstate-start`.
   or self-reported).
 - **"Who did what" view**: on the review page, filter by app, model, machine, project and time
   (50 per page) and undo a change from there (the normal undo, with the page's CSRF and origin
-  checks). AIs can read the same list with `history(action="who")`.
+  checks). AIs can read the same list with `manage_history(action="who")`.
 - **Per-app keys for the local/LAN HTTP server**: `flowstate keys add --name "<app>"` gives
   each app its own key (optionally read-only), so the recorded app name comes from the key, not
   from what the app says. The key is shown once and only a hash is kept; a revoked key is
-  refused (401) at once. Keys aren't accepted on the public listener, and can't use `git` or
+  refused (401) at once. Keys aren't accepted on the public listener, and can't use `manage_data_git` or
   attach files. The old shared LAN token still works; its changes are marked "shared token (legacy)".
 
 **Projects that share things**
@@ -163,8 +163,8 @@ prompt `flowstate-start`.
   highest priority first.
 
 **Finding things**
-- **The `ask` tool**: ask a question in plain words; FlowState answers by quoting your own
-  records, with their ids, and says so when it has nothing on it. It doesn't make anything up.
+- **Ask a question**: `search(query=..., answer=true)` takes a question in plain words; FlowState
+  answers by quoting your own records, with their ids, and says so when it has nothing on it. It doesn't make anything up.
 - **Search**: keyword search over todos, decisions, changes, learnings, problems and solutions
   (word endings match too). Search by meaning is optional and uses a local model you install yourself.
 - **Clean-up suggestions**: likely duplicates, stale items and records filed under the wrong
@@ -203,8 +203,10 @@ prompt `flowstate-start`.
   behind your own Cloudflare Tunnel with OAuth 2.1 sign-in that you approve with an owner
   passphrase, plus revocable per-app tokens (optionally read-only). See
   [docs/REMOTE-ACCESS.md](docs/REMOTE-ACCESS.md).
-- **Fewer tools if you want**: `--tools core` (or `FLOWSTATE_TOOLS=core`) lists only the 9 core
-  tools to save context; the others still work if called. Every tool is labelled read-only or read-write.
+- **Fewer or more tools**: 12 tools are listed by default. `--tools core` (or
+  `FLOWSTATE_TOOLS=core`) lists only the 6 everyday ones to save context; `--tools full` adds the
+  6 specialist ones. Every tool still answers when called, in every profile. Every tool is
+  labelled read-only or read-write (per action in its `_meta`).
 
 ---
 
@@ -258,36 +260,37 @@ the venv active). Add `-h` to any command for its options.
 
 ## MCP tools
 
-35 tools. The first two are the ones every agent needs.
+12 tools by default. Every name starts with a verb; tools that do several things are
+`manage_<things>` and take an `action`. The first three are the ones every agent needs.
 
 | Tool | What it does |
 |---|---|
-| `start_here` | **Call first.** Project brief (`size`: quick / standard / deep); lists projects when called without one |
-| `log_work` | Record a decision, change, problem, learning or todo (`replaces=`, `source=`, `suggested=`) |
-| `rules` | A project's hard rules |
-| `handoff` | Leave / list / pick up "where I was, next step" notes |
-| `review_list` / `review_approve` / `review_reject` | The review queue (approve / reject only when you ask) |
-| `review_mode` | Read the review mode; change it only when you ask |
-| `link` | Link projects, shared components, records and URLs |
-| `history` | See edits; undo the last change to a record; `action="who"`: who did what (app, model, machine), with filters |
-| `verify` | Stale facts; mark one as checked; set a record's source |
-| `ask` | Plain-language question, answered from your records with their ids |
-| `search` | Keyword search (and by meaning, if set up) |
-| `todo` | Add, update, list, next, block / unblock; subtasks |
-| `cleanup_suggest` | Duplicate / stale / misfiled suggestions, to the review queue |
-| `import_memory` | A memory export or edited markdown export into the review queue |
-| `list_projects`, `create_project`, `update_project`, `get_context` | Projects and full project context |
-| `create_component`, `list_components`, `update_component` | Components of a project |
-| `log_learning`, `get_learnings`, `log_change`, `get_recent_changes` | Older single-purpose record tools |
-| `problem`, `attempt` | Problems, solution attempts and their outcomes |
-| `session` | Sessions and conversation notes (sessions also run automatically) |
-| `file` | Attach, list, remove or search file attachments |
-| `git` | Git for the data folder (init, status, sync, remote, clone, history) |
-| `variable`, `method` | Project variables (servers, config, endpoints) and documented methods |
-| `self_improve` | The AI's learned skills and saved state |
+| `start_here` | **Call first.** Project brief (`size`: quick / standard / deep; deep is the full context); lists projects when called without one |
+| `log_work` | Record a new decision, change, problem, learning or todo (`replaces=`, `source=`, `suggested=`) |
+| `search` | Find records by words (and by meaning, if set up); `answer=true` answers a plain question from your records with their ids; no query lists the newest records (`since_hours`) |
+| `manage_todos` | list, next, update (done / cancelled), block / unblock; add for subtasks, blockers and due dates |
+| `manage_problems` | list, tree, add_attempt, end_attempt, solve |
+| `manage_review` | The review queue and review mode: list, get_mode; approve, reject, set_mode only when you ask |
+| `manage_handoffs` | Leave / list / pick up "where I was, next step" notes |
+| `manage_rules` | A project's hard rules |
+| `manage_links` | Link projects, shared components, records and URLs |
+| `manage_history` | See edits; undo the last change to a record; `action="who"`: who did what (app, model, machine), with filters |
+| `manage_projects` | Projects and components: list, create, update, list_components, add_component, update_component |
+| `manage_memory` | Upkeep: cleanup suggestions and memory imports (to the review queue), stale facts, mark checked, set source |
 
-Over HTTP, only the owner's LAN token may use `git` or attach files from your computer; per-app
-keys, per-app tokens and OAuth apps are refused.
+With `FLOWSTATE_TOOLS=full` six specialist tools are listed too: `manage_sessions` (sessions
+also run automatically), `manage_files` (file attachments), `manage_data_git` (git for the
+FlowState data folder, not your repo), `manage_variables` (non-secret project settings),
+`manage_methods` (documented procedures) and `manage_skills` (the AI's learned skills and
+saved state).
+
+**Older tool names still work.** The 35 names of v2.0 (`todo`, `link`, `handoff`,
+`review_approve`, `list_projects`, `log_learning`, `git`, ...) are not listed any more but
+answer exactly as before, with one extra line naming the new tool. The full mapping is in
+[docs/TOOL_CONSOLIDATION.md](docs/TOOL_CONSOLIDATION.md).
+
+Over HTTP, only the owner's LAN token may use `manage_data_git` (or `git`) or attach files
+from your computer; per-app keys, per-app tokens and OAuth apps are refused.
 
 ---
 
@@ -296,7 +299,7 @@ keys, per-app tokens and OAuth apps are refused.
 - **Search by meaning needs a model download.** FlowState never downloads a model or calls a
   cloud API. You install `sentence-transformers` into the venv, put a model (default
   `all-MiniLM-L6-v2`) on disk, set `FLOWSTATE_MEANING_MODEL`, and run `flowstate meaning index`.
-  Without it, search and `ask` match words only, so a reworded question can miss.
+  Without it, search (also with `answer=true`) matches words only, so a reworded question can miss.
 - **Model names are recorded only when the app supplies them** (the tool's `model` argument,
   the `X-FlowState-Model` header, or `FLOWSTATE_MODEL` for a desktop app). FlowState never
   guesses one; if the app says nothing, the model is left empty.
@@ -311,7 +314,7 @@ keys, per-app tokens and OAuth apps are refused.
   changing the review mode and removing rules require the AI to quote your words, but a
   misbehaving AI could make them up. Hard rules are shown first in every brief; FlowState can't
   stop an AI from doing something outside FlowState.
-- **`ask` is extractive**: it quotes the best-matching sentences of your records; it doesn't write new answers.
+- **Answers are extractive** (`search` with `answer=true`): it quotes the best-matching sentences of your records; it doesn't write new answers.
 - **Tested mainly on Windows and macOS.** Linux should work but is less tested.
 - **Remote access is optional and takes setup**: your own domain on Cloudflare, `cloudflared`
   on your computer, and an owner passphrase. The helper launch scripts in `scripts/windows/` are
