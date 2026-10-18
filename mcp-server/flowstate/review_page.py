@@ -78,7 +78,8 @@ class Page:
         if not item:
             return "That item no longer exists."
         args = {"item_id": item["id"], "user_request": USER_WORDS.format(what="Approve"),
-                **{k: form[k] for k in ("summary", "details", "move_to") if form.get(k, "").strip()}}
+                **{k: form[k] for k in ("summary", "details", "move_to", "confirm_name")
+                   if form.get(k, "").strip()}}
         if args.get("summary") == item["summary"]:
             args.pop("summary")
         if args.get("details") == (item["details"] or ""):
@@ -216,9 +217,19 @@ class Page:
                                       for p in projects)
                     move = ('<label>Move to (empty = the suggested project)<select name="move_to">'
                             f'<option value=""></option>{targets}</select></label>')
-                out.append(f"""<form method="post" action="/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
+                if it["kind"] == "delete":   # nothing to edit; a project needs its name typed
+                    confirm = ""
+                    if '"record_type": "project"' in (it.get("payload") or ""):
+                        confirm = ('<label>Type the project name to confirm '
+                                   '<input type="text" name="confirm_name" autocomplete="off"></label>')
+                    out.append(f"""<p><strong>{_e(it['summary'])}</strong></p><p class="meta">{_e(it['details'])}</p>
+<form method="post" action="/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">{confirm}
+<button>Approve: delete it</button></form>""")
+                else:
+                    out.append(f"""<form method="post" action="/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
 <textarea name="summary" rows="2">{_e(it['summary'])}</textarea><textarea name="details" rows="2" placeholder="details">{_e(it['details'])}</textarea>{move}
-<button>Approve (with any edits)</button></form>
+<button>Approve (with any edits)</button></form>""")
+                out.append(f"""
 <form method="post" action="/reject">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
 <input type="text" name="reason" placeholder="Reason for rejecting"><button>Reject</button></form>""")
             else:

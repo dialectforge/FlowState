@@ -9,7 +9,7 @@ listed name starts with a verb; tools with several operations are manage_<things
 from mcp.types import Tool
 
 from . import agent_guide as guide
-from . import history, links, meaning, priority, provenance, review_mode, tool_labels
+from . import deletes, history, links, meaning, priority, provenance, review_mode, tool_labels
 from .brief import SIZE_NAMES
 
 _PRIORITY = {"type": "string", "enum": list(priority.ACCEPTED)}
@@ -26,7 +26,7 @@ def _p(desc: str, type_="string", **kw) -> dict:
 
 def _action(actions) -> dict:
     return {"type": "string", "enum": list(actions),
-            "description": "The operation, as explained in the tool description."}
+            "description": "The operation; see the tool description."}
 
 
 def _tool(name: str, description: str, props: dict, required=()) -> Tool:
@@ -82,7 +82,7 @@ MANAGE_TODOS = _tool("manage_todos", guide.TODOS_DESCRIPTION, {
     "action": _action(_TODO_ACTIONS),
     "project": PROJECT,
     "todo_id": _p("update / block / unblock: the todo id (#id in the brief).", "integer"),
-    "status": _p("update: the new status. list: only this status.",
+    "status": _p("update: the new status. list: only this one.",
                  enum=["pending", "in_progress", "blocked", "done", "cancelled"]),
     "priority": {**_PRIORITY, "description": "add / update: the priority. list: only this one."},
     "title": _p("add: the title (required). update: a new title."),
@@ -127,8 +127,8 @@ MANAGE_PROBLEMS = _tool("manage_problems", guide.PROBLEMS_DESCRIPTION, {
 _REVIEW_ACTIONS = ("list", "get_mode", "approve", "reject", "set_mode")
 MANAGE_REVIEW = _tool("manage_review", guide.REVIEW_DESCRIPTION, {
     "action": _action(_REVIEW_ACTIONS),
-    "project": _p("approve / reject: required. list / get_mode / set_mode: omit for all / the "
-                  "whole install.",
+    "project": _p("approve / reject: required. Others: omit for all projects / the whole "
+                  "install.",
                   ["string", "integer"]),
     "status": _p("list: which items. Default pending.",
                  enum=["pending", "approved", "rejected", "all"]),
@@ -148,6 +148,7 @@ MANAGE_REVIEW = _tool("manage_review", guide.REVIEW_DESCRIPTION, {
     "kinds": {"type": "array", "items": {"type": "string", "enum": list(review_mode.KINDS)},
               "description": "set_mode, mode=types: kinds that wait."},
     "clear": _p("set_mode: remove this project's override.", "boolean"),
+    "confirm_name": _p("approve, project delete: its exact name, typed by the user."),
     "model": MODEL,
 }, ["action"])
 
@@ -213,11 +214,11 @@ MANAGE_HISTORY = _tool("manage_history", guide.HISTORY_DESCRIPTION, {
 }, ["action"])
 
 _PROJECT_ACTIONS = ("list", "list_components", "create", "add_component", "update",
-                    "update_component")
+                    "update_component", "delete", "delete_component")
 MANAGE_PROJECTS = _tool("manage_projects", guide.PROJECTS_DESCRIPTION, {
     "action": _action(_PROJECT_ACTIONS),
-    "project": _p("update / list_components / add_component / update_component: the project, by "
-                  "name or id.", ["string", "integer"]),
+    "project": _p("Every action but list and create: the project, by name or id.",
+                  ["string", "integer"]),
     "name": _p("create / add_component: the new name (required, unique). update / "
                "update_component: a new name."),
     "description": _p("create / update / add_component / update_component: what it is."),
@@ -225,12 +226,13 @@ MANAGE_PROJECTS = _tool("manage_projects", guide.PROJECTS_DESCRIPTION, {
                  "update_component: planning, in_progress, testing, complete or deprecated.",
                  enum=["active", "paused", "completed", "archived", "planning", "in_progress",
                        "testing", "complete", "deprecated"]),
-    "component_id": _p("update_component: the component's id (list_components shows ids).", "integer"),
+    "component_id": _p("update_component / delete_component: the component's id "
+                       "(list_components shows ids).", "integer"),
     "parent_component_id": _p("add_component: a parent component in the same project.", "integer"),
     "model": MODEL,
 }, ["action"])
 
-_MEMORY_ACTIONS = ("stale", "cleanup", "import", "mark_checked", "set_source")
+_MEMORY_ACTIONS = ("stale", "cleanup", "import", "mark_checked", "set_source", "delete")
 MANAGE_MEMORY = _tool("manage_memory", guide.MEMORY_DESCRIPTION, {
     "action": _action(_MEMORY_ACTIONS),
     "project": PROJECT,
@@ -242,8 +244,9 @@ MANAGE_MEMORY = _tool("manage_memory", guide.MEMORY_DESCRIPTION, {
     "origin": _p("import: where it came from, such as Claude or ChatGPT."),
     "kind": _p("import (memory format): record kind for each memory. Default learning.",
                enum=["learning", "decision", "todo", "problem", "change"]),
-    "record_type": _p("mark_checked / set_source: the record's type.", enum=list(provenance.TABLES)),
-    "record_id": _p("mark_checked / set_source: the record's id.", "integer"),
+    "record_type": _p("delete / mark_checked / set_source: the record's type (the last two: "
+                      f"{', '.join(provenance.TABLES)}).", enum=list(deletes.RECORD_TYPES)),
+    "record_id": _p("delete / mark_checked / set_source: the record's id.", "integer"),
     "source": _p("set_source (required) / mark_checked (optional): user_stated, ai_inferred or "
                  "from_code.", enum=list(provenance.SOURCES)),
     "days": _p("stale: unchecked for this many days. Default 60.", "integer"),

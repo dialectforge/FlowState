@@ -129,6 +129,11 @@ prompt `flowstate-start`.
   AI sees it first until it picks it up.
 - **Undo and history**: edits made through FlowState are kept; you can see them and undo the
   last change to a record (an undo can itself be undone).
+- **Deletes need your OK**: an AI can only *ask* to delete a project, a component or a record.
+  The request shows what would go (for a project or component, how many todos, decisions,
+  changes, ... go with it) and waits in the review queue; nothing is removed until you
+  approve it, and a project also needs its exact name typed. Reject keeps everything. An
+  approved delete is copied into the edit history first, so undo brings all of it back.
 - **Superseded decisions**: a new decision can name the one it replaces, so only the current
   one shows in the brief.
 - **Source and last-verified flags**: records can say where they came from (`user_stated`,
@@ -270,13 +275,13 @@ the venv active). Add `-h` to any command for its options.
 | `search` | Find records by words (and by meaning, if set up); `answer=true` answers a plain question from your records with their ids; no query lists the newest records (`since_hours`) |
 | `manage_todos` | list, next, update (done / cancelled), block / unblock; add for subtasks, blockers and due dates |
 | `manage_problems` | list, tree, add_attempt, end_attempt, solve |
-| `manage_review` | The review queue and review mode: list, get_mode; approve, reject, set_mode only when you ask |
+| `manage_review` | The review queue and review mode: list, get_mode; approve (also carries out a delete request), reject, set_mode only when you ask |
 | `manage_handoffs` | Leave / list / pick up "where I was, next step" notes |
 | `manage_rules` | A project's hard rules |
 | `manage_links` | Link projects, shared components, records and URLs |
 | `manage_history` | See edits; undo the last change to a record; `action="who"`: who did what (app, model, machine), with filters |
-| `manage_projects` | Projects and components: list, create, update, list_components, add_component, update_component |
-| `manage_memory` | Upkeep: cleanup suggestions and memory imports (to the review queue), stale facts, mark checked, set source |
+| `manage_projects` | Projects and components: list, create, update, list_components, add_component, update_component; delete / delete_component only ask (you approve in the review queue) |
+| `manage_memory` | Upkeep: cleanup suggestions and memory imports (to the review queue), stale facts, mark checked, set source; delete asks to delete one record (you approve) |
 
 With `FLOWSTATE_TOOLS=full` six specialist tools are listed too: `manage_sessions` (sessions
 also run automatically), `manage_files` (file attachments), `manage_data_git` (git for the
@@ -290,7 +295,8 @@ answer exactly as before, with one extra line naming the new tool. The full mapp
 [docs/TOOL_CONSOLIDATION.md](docs/TOOL_CONSOLIDATION.md).
 
 Over HTTP, only the owner's LAN token may use `manage_data_git` (or `git`) or attach files
-from your computer; per-app keys, per-app tokens and OAuth apps are refused.
+from your computer, or ask for or approve a delete; per-app keys, per-app tokens and OAuth
+apps are refused.
 
 ---
 
@@ -327,6 +333,9 @@ from your computer; per-app keys, per-app tokens and OAuth apps are refused.
   comes from your local backups. Pushing it means your memory leaves your machine, to your private repo.
 - **Undo covers edits made through FlowState.** Creating a record isn't undone (mark it done or
   cancelled instead), and changes made directly in SQLite aren't tracked.
+- **A delete is recoverable, not an erasure.** The deleted rows stay in the edit history (that is
+  what undo uses) and in your backups, so the text is still in the database file. There is no
+  "erase for good" yet. Approving a file attachment's delete keeps the file itself.
 - **Not backed up nightly:** the remote-access settings file (`remote-auth.db`). Losing it only
   means approving your apps again.
 

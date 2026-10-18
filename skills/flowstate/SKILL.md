@@ -13,7 +13,7 @@ license: MIT
 compatibility: Requires the FlowState MCP server v2.1+ to be connected (tools start_here, log_work, search, manage_links, manage_review). Older servers use the names todo, link, handoff, rules, review_list.
 metadata:
   author: John Martin
-  version: "2.3"
+  version: "2.4"
 ---
 
 # FlowState routine
@@ -89,6 +89,14 @@ never guess or invent one. `manage_history(action="who", ...)` shows who did wha
   call `manage_review(action="approve")` / `(action="reject")` when the user tells you to in
   this chat, and quote their words in `user_request`. Tell the user when items are waiting; don't ask them to
   approve in the same breath as creating them.
+- **Deleting only asks.** Only when the user wants something gone: `manage_projects(action=
+  "delete" | "delete_component", ...)` or `manage_memory(action="delete", record_type=...,
+  record_id=...)`. That deletes nothing; it queues a request. Tell the user what it would
+  remove (the counts in the answer) and let them decide. Approve it only when they say so in
+  this chat (`manage_review(action="approve", item_id=..., user_request=<their words>)`); for a
+  project they must type its exact name, which you pass as `confirm_name`. Never fill
+  `confirm_name` in yourself. `manage_history(action="undo")` brings a delete back. To retire
+  something without deleting it, use its status (done, cancelled, archived, deprecated).
 - The review mode (shown in the brief) decides what waits for review. **Never change it**
   unless the user asks you to in this chat; then quote them in `user_request`. Never change
   it to get your own writes saved.

@@ -103,7 +103,11 @@ def test_delete_comes_back_and_outside_changes_block_undo(backend, seeded_db):
     v = _j(call(backend, "variable", {"action": "create", "project": "Alpha", "name": "port",
                                       "value": "8766"}))
     vid = v["id"]
-    call(backend, "variable", {"action": "delete", "project": "Alpha", "variable_id": vid})
+    # since v2.1 a delete only asks; the user's approval deletes (test_deletes.py)
+    req = _j(call(backend, "variable", {"action": "delete", "project": "Alpha", "variable_id": vid}))
+    assert _q(seeded_db, "SELECT 1 FROM project_variables WHERE id = ?", vid)
+    call(backend, "review_approve", {"project": "Alpha", "item_id": req["delete_requested"],
+                                     "user_request": "User: delete the port setting"})
     assert not _q(seeded_db, "SELECT 1 FROM project_variables WHERE id = ?", vid)
     call(backend, "history", {"action": "undo", "project": "Alpha", "record_type": "variable",
                               "record_id": vid})

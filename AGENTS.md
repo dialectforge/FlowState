@@ -291,8 +291,8 @@ app its own key: `<venv python> -m flowstate keys add --name "<app>" [--read-onl
 pastes it into that app as its bearer token. FlowState then records the app's name from the
 key, not from what the app says. A read-only key can only read; `keys revoke --id <id>` (or
 `--name <app>`) stops a key at once (it then gets 401); `keys list` shows them (never the key).
-Keys work on the local/LAN listener only, never on the public one, and can't use `manage_data_git` or
-attach files. The shared token keeps working as before; changes made with it are marked
+Keys work on the local/LAN listener only, never on the public one, and can't use `manage_data_git`,
+attach files, or ask for or approve deletes. The shared token keeps working as before; changes made with it are marked
 "shared token (legacy)". Apps may also send `X-FlowState-Model: <model name>` and
 `X-FlowState-Workspace: <name>` headers (a key's own workspace, if set, wins).
 
@@ -350,7 +350,12 @@ don't show server instructions:
    `manage_problems` (attempts and solve), `manage_history` (see edits; undo the last change
    to a record), `manage_memory(action="cleanup")` (duplicates / stale / misfiled, as review
    suggestions only), `manage_memory(action="import")` (memory exports into the review queue),
-   `manage_projects` (projects and components). The review page, pausing apps and git commit
+   `manage_projects` (projects and components). **Deletes only ask:** `manage_projects(action=
+   "delete" / "delete_component")` and `manage_memory(action="delete", record_type=...,
+   record_id=...)` queue a request that shows what would go; tell the user, and only when they
+   say so call `manage_review(action="approve", item_id=..., user_request=<their words>)` (a
+   project also needs `confirm_name=<its exact name, typed by the user>`). Undo with
+   `manage_history(action="undo")`. The review page, pausing apps and git commit
    capture are the user's controls (command line / `flowstate review-page`); there is no tool
    for them.
 
@@ -404,7 +409,7 @@ The same guidance is available as the MCP prompt `flowstate-start`.
   `agent_guide.py` the wording sent to apps, `brief.py`, `autosession.py`,
   `guard.py`, `review.py`, `review_mode.py`, `links.py`, `tasks.py`, `history.py`,
   `rules.py`, `handoffs.py`, `provenance.py`, `ask.py`, `meaning.py`, `cleanup.py`,
-  `activity.py`, `review_page.py`, `markdown_io.py`, `memory_import.py`, `git_capture.py`,
+  `activity.py`, `review_page.py`, `markdown_io.py`, `memory_import.py`, `git_capture.py`, `deletes.py`,
   `secrets_scan.py`, `secret_store.py`, `remote_auth.py`, `app_keys.py`, `identity.py`,
   `who.py`, `backup.py`, `offsite.py`, `scheduler.py`, `cli.py`, `cli_more.py`). Schema:
   `database/schema.sql` (base) plus numbered migrations in `mcp-server/flowstate/migrations/`

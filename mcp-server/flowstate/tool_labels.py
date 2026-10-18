@@ -6,7 +6,8 @@ its actions; the per-action split is published in the tool's `_meta["flowstate/a
 (and said in its description), so `manage_todos(action="list")` is still known to be a read.
 
 destructive = an action overwrites or removes stored content (an update, an undo, a review
-decision or settings change, a delete, a push). Adding rows, or setting a flag that keeps
+decision or settings change, a delete, a push). A delete action is destructive even though it
+only queues a request: approving it (manage_review) removes data. Adding rows, or setting a flag that keeps
 the content (a handoff picked up, a link or rule removed but kept and listable), is additive.
 
 Profiles (FLOWSTATE_TOOLS or `flowstate --tools`): unset = the 12 default tools; core = the
@@ -37,10 +38,11 @@ LABELS = {
                                                             "destructive": ["undo"]}),
     "manage_projects": ("Projects and components",
                         {"read": ["list", "list_components"], "additive": ["create", "add_component"],
-                         "destructive": ["update", "update_component"]}),
+                         "destructive": ["update", "update_component", "delete",
+                                         "delete_component"]}),
     "manage_memory": ("Memory upkeep (clean-up, import, fact checks)",
                       {"read": ["stale"], "additive": ["cleanup", "import", "mark_checked"],
-                       "destructive": ["set_source"]}),
+                       "destructive": ["set_source", "delete"]}),
     "manage_sessions": ("Sessions", {"read": ["current", "list", "conversations"],
                                      "additive": ["start"], "destructive": ["end"]}),
     "manage_files": ("File attachments", {"read": ["list", "search"], "additive": ["attach"],

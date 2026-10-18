@@ -177,8 +177,9 @@ def suggest(db_path: Path, project_id: Optional[int] = None,
                                                    f"repeats #{old['id']}",
                                         "details": ("Approve to cancel the newer todo (kept, marked "
                                                     "cancelled)." if kind == "todo" else
-                                                    "Approving only notes it; FlowState doesn't delete "
-                                                    f"{kind}s.")})
+                                                    "Approving only notes it; to remove one, ask for a "
+                                                    "delete (manage_memory action=delete), which "
+                                                    "the user approves.")})
         if "stale" in kinds:
             cutoff = ((now or datetime.now(timezone.utc)) - timedelta(days=STALE_TODO_DAYS)
                       ).strftime("%Y-%m-%d %H:%M:%S")

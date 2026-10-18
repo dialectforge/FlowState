@@ -2,7 +2,7 @@
 
 An AI that stops mid-task leaves "where I was" and "next step". The next AI sees open notes
 first in start_here (right after the hard rules) until one of them marks the note picked
-up. Notes are never deleted.
+up. This tool never deletes notes (only a delete the user approves can; deletes.py).
 """
 
 from pathlib import Path

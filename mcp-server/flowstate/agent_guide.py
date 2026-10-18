@@ -9,7 +9,7 @@ INSTRUCTIONS = """FlowState is the user's project memory (todos, changes, decisi
 1. At the start of every conversation about a project, call start_here(project="<name>") first and read the brief. If you don't know the project, call start_here() with no arguments (or with folder="<working folder>") to see the list, then pick one.
 2. As you work, record what matters with log_work(project="<name>", kind=..., summary=...): kind=decision for choices made, change for things changed, problem for bugs/blockers, learning for lessons, todo for follow-ups. One short line each; add details only when useful. Look things up with search (answer=true for a question).
 3. Every write must name the project. Never put passwords, tokens or keys in any text. If you know your model name, pass it as model="<name>" on writes; never guess or invent it (leave it out).
-4. A session is opened and closed for you automatically; you don't need to manage it. Its auto-captured summary, and anything you log with suggested=true, waits in a review queue for the user. Never approve or reject review items unless the user explicitly asks you to in this chat. The user's review mode (shown in the brief) decides what else waits; never change it unless the user asks you to in this chat.
+4. A session is opened and closed for you automatically; you don't need to manage it. Its auto-captured summary, and anything you log with suggested=true, waits in a review queue for the user. Never approve or reject review items unless the user explicitly asks you to in this chat. Deleting (manage_projects or manage_memory action=delete) only queues a request there for the user. The user's review mode (shown in the brief) decides what else waits; never change it unless the user asks you to in this chat.
 5. Things shared between projects (a protocol, a library) are linked with manage_links; log changes to a shared component by its name and the other projects are alerted.
 6. The brief starts with the project's HARD RULES: never break them. If it shows a HANDOFF note, continue from it and mark it picked up (manage_handoffs action=pickup). If you must stop mid-task, leave one: manage_handoffs(action="leave", project=..., where_i_was=..., next_step=...).
 7. If FlowState is slow, errors, or is unavailable, tell the user once and carry on with their task without it. Never retry more than once."""
@@ -41,11 +41,11 @@ SEARCH_DESCRIPTION = (
 )
 
 TODOS_DESCRIPTION = (
-    "Work with a project's existing todos. list: filter and sort. next: top unblocked todos. "
-    "update: status (done; cancelled to drop one, no delete), priority, title, description. "
+    "A project's existing todos. list: filter and sort. next: top unblocked todos. "
+    "update: status (done; cancelled to drop one), priority, title, description. "
     "block / unblock: waits on todos or a problem. add: only for a subtask, blockers or a due "
     "date; a plain new todo is log_work kind=todo. Reads: list, next. update and unblock "
-    "change data (manage_history undo restores an update). Returns todo rows."
+    "change data (manage_history undo restores updates). Returns todo rows."
 )
 
 PROBLEMS_DESCRIPTION = (
@@ -63,11 +63,12 @@ _USER_ONLY = (
 )
 
 REVIEW_DESCRIPTION = (
-    "The user's review queue and review mode. Session summaries, suggested records, imports "
-    "and clean-up ideas wait here. list, get_mode: read-only. approve: make the item a "
-    "record (edit fields or move_to first). reject: mark it rejected; nothing is deleted. "
-    "set_mode: which new records wait (clear=true drops a project override). All decisions "
-    "are logged." + _USER_ONLY + " Returns {items, total}, the mode, or the result."
+    "The user's review queue and review mode. Session summaries, suggested records, imports, "
+    "clean-up ideas and delete requests wait here. list, get_mode: read-only. approve: make "
+    "the item a record (edit fields or move_to first) or carry out a delete (a project also "
+    "needs confirm_name; undo: manage_history). reject: mark it rejected; nothing "
+    "changes. set_mode: which new records wait. Decisions are logged." + _USER_ONLY +
+    " Returns {items, total}, the mode, or the result."
 )
 
 HANDOFFS_DESCRIPTION = (
@@ -97,30 +98,32 @@ LINKS_DESCRIPTION = (
 
 HISTORY_DESCRIPTION = (
     "The edit trail of existing records. list: row edits with old and new values. undo: "
-    "restore a record to before its last edit or deletion (refused if it changed again "
-    "since). who: who did what (app, model, machine), with filters and pages. Logged "
-    "changes (kind=change) are records: find them with search. Reads: list, who. list and "
-    "undo require project. Returns {history}, the undo result, or {rows, page}."
+    "restore a record to before its last edit, or bring back an approved delete with "
+    "everything removed with it (a deleted project: its old name and id; refused if the rows "
+    "changed again since). who: who did what (app, model, machine), with filters and pages. "
+    "Logged changes (kind=change) are records: find them with search. Reads: list, who. "
+    "list and undo require project. Returns {history}, the undo result, or {rows, page}."
 )
 
 PROJECTS_DESCRIPTION = (
     "Projects and their components (named parts of a project). list: projects (by status). "
-    "create: only when the user asks for a new project; names are unique. update: rename, "
-    "describe, or set status (status=archived retires it; there is no delete). "
-    "list_components / add_component / update_component: same for components "
-    "(status=deprecated retires one). log_work creates a missing component by name. Reads: "
-    "list, list_components. Updates are undone with manage_history. Returns project or "
-    "component rows."
+    "create: only when the user asks; names are unique. update: rename, describe, or set "
+    "status (archived retires it). list_components / add_component / update_component: the "
+    "same for components (deprecated retires one). delete / delete_component: only when the "
+    "user asks. Deletes nothing yet: queues a request with the child record counts, which the "
+    "user must approve in manage_review (a project also needs its exact name); undo restores "
+    "it. Reads: list, list_components. Returns project or component rows, or the request."
 )
 
 MEMORY_DESCRIPTION = (
     "Memory upkeep; nothing here edits records directly. cleanup: queue likely duplicate, "
-    "stale and misfiled records as suggestions for the user (rejected ideas are not "
-    "repeated). import: a memory export (Claude, ChatGPT) or an edited FlowState markdown "
-    "export into the review queue; secret-like lines skipped. stale: facts (paths, ports, "
-    "hosts, URLs, config) unchecked for 60+ days (read-only). mark_checked: you re-checked "
-    "one and it holds. set_source: correct a record's origin. A changed fact is log_work. "
-    "Requires project. Returns counts and ids, or {facts}."
+    "stale and misfiled records as suggestions (rejected ideas not repeated). import: a "
+    "memory export (Claude, ChatGPT) or edited FlowState markdown into the review queue. "
+    "stale: facts (paths, ports, URLs, config) unchecked for 60+ days (read-only). "
+    "mark_checked: you re-checked one. set_source: correct a record's origin. delete: only "
+    "when the user asks; queues a request to delete one record (and its attempts or links), "
+    "carried out only when the user approves it in manage_review; undo restores it. A "
+    "changed fact is log_work. Requires project. Returns counts and ids, {facts} or the request."
 )
 
 SESSIONS_DESCRIPTION = (
@@ -134,9 +137,10 @@ SESSIONS_DESCRIPTION = (
 FILES_DESCRIPTION = (
     "File attachments of a project. attach: a file on this computer, to the project, a "
     "component or a problem; copied into FlowState's bundle by default. list, search (text "
-    "in attached files): read. remove: detach; delete_file=true also deletes the bundle "
-    "copy for good (undo restores the row, not the file). Local apps only: attach is "
-    "refused over HTTP. Requires project for writes. Returns attachment rows or hits."
+    "in attached files): read. remove: asks the user to detach it (a delete request they "
+    "approve in manage_review; the bundle copy is kept; undo restores it). Local apps only: "
+    "attach and remove are refused over HTTP. Requires project for writes. Returns "
+    "attachment rows, hits or the request."
 )
 
 DATA_GIT_DESCRIPTION = (
@@ -148,15 +152,17 @@ DATA_GIT_DESCRIPTION = (
 
 VARIABLES_DESCRIPTION = (
     "Non-secret project settings: hosts, ports, endpoints, config. create, list (read), "
-    "update, delete (both undone with manage_history). Secrets are refused; is_secret only "
+    "update (undo with manage_history), delete (queues a request the user approves in "
+    "manage_review; undo restores it). Secrets are refused; is_secret only "
     "labels a value and does not hide it, so never store passwords, tokens or keys. "
     "Requires project. Returns variable rows."
 )
 
 METHODS_DESCRIPTION = (
     "Documented reusable procedures of a project (deploy, test, a code convention), with "
-    "ordered steps. create, list (read), update (steps replaces the whole list), delete "
-    "(both undone with manage_history). A one-off choice is log_work kind=decision; a "
+    "ordered steps. create, list (read), update (steps replaces the whole list; undo with "
+    "manage_history), delete (queues a request the user approves in manage_review). A "
+    "one-off choice is log_work kind=decision; a "
     "lesson is kind=learning. Requires project. Returns method rows."
 )
 

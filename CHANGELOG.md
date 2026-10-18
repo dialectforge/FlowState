@@ -25,9 +25,35 @@
   `manage_sessions`, `manage_files`, `manage_data_git`, `manage_variables`,
   `manage_methods` and `manage_skills`. Before, unset listed all 35. Every tool name answers
   in every profile.
-- The `tools/list` payload is smaller: 24,492 characters by default (was 39,221).
+- The `tools/list` payload is smaller: 25,053 characters by default (was 39,221).
 - The skill (`skills/flowstate`, version 2.3), AGENTS.md, README and llms.txt use the new
   names.
+
+### Deletes, approved by you
+- You can now delete a project, a component or a single record (decision, change, learning,
+  todo, problem, attempt, handoff note, hard rule, link, setting, procedure, attachment). An
+  AI can only ask: `manage_projects(action="delete" / "delete_component")` and
+  `manage_memory(action="delete")` put a delete request in the review queue that shows what
+  would go, including how many records go with a project or component. Nothing is removed
+  until you approve it (`manage_review(action="approve")` with your words, or on the review
+  page). Deleting a project also needs its exact name typed. Rejecting keeps everything.
+- Before an approved delete runs, every row it removes or changes is copied into the edit
+  history as one edit; `manage_history(action="undo")` puts it all back (a deleted project:
+  undo with its old name and id). The delete is checked against that copy and rolled back if
+  anything else would have gone. The copies are kept like the rest of the edit history (never
+  pruned) and are in your backups, so a delete is recoverable, not an erasure.
+- Only apps on this computer and the owner's LAN token can ask for or approve a delete;
+  per-app keys, remote tokens, OAuth apps and read-only keys are refused.
+- Changed: `manage_variables(action="delete")`, `manage_methods(action="delete")` and
+  `manage_files(action="remove")` (and the older `variable`, `method`, `file` names) now make a
+  delete request instead of deleting at once. Approving an attachment's delete keeps the file.
+- Undo: undoing the undo of a delete is refused (that would delete again without you); a
+  restored record whose parent was deleted after it is refused with a clear message (undo the
+  parent first); a restore that clashes with a newer row (for example a new project with the
+  same name) is refused instead of failing.
+- No database migration: delete requests are review items, the copies are edit-history rows.
+  Older v2.0 servers list a delete request but can't approve it (it stays pending); they can't
+  undo a project delete (refused, nothing changed). Use v2.1 to undo deletes.
 
 ### Fixes
 - Updating a component without giving its name failed, and updating it without a

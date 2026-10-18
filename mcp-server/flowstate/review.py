@@ -1,8 +1,9 @@
 """Review queue: items that wait for the user's OK before they count as records.
 
-Two sources: summaries of automatically closed sessions, and records an agent logs with
-suggested=true. Approve turns an item into a normal record (optionally edited first);
-reject keeps the item, marked rejected, with the user's reason. Nothing is deleted.
+Sources: summaries of automatically closed sessions, records an agent logs with
+suggested=true, imports, clean-up suggestions and delete requests (deletes.py). Approve turns
+an item into a normal record (optionally edited first), or applies it; reject keeps the
+item, marked rejected, with the user's reason, and changes nothing else.
 """
 
 import json

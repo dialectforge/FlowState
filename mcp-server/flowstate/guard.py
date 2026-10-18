@@ -58,6 +58,11 @@ WRITES = {
     ("handoff", "pickup"): None,
     ("verify", "mark"): None,
     ("verify", "source"): None,
+    # User-approved deletes (deletes.py): these only queue a request; deletes.py checks the
+    # record is the project's. A project names itself; a component is checked here.
+    ("delete_request", "project"): None,
+    ("delete_request", "component"): "component_id",
+    ("delete_request", "record"): None,
 }
 # Not project records: create_project names itself; git syncs the data repo.
 EXEMPT = {"create_project", "git"}

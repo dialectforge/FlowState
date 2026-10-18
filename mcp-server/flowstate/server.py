@@ -26,6 +26,7 @@ from . import tools
 from . import agent_guide as guide
 from . import activity
 from . import cleanup
+from . import deletes
 from . import history
 from . import identity
 from . import links
@@ -320,9 +321,15 @@ def handle_call(name: str, args: dict, client: str = "unknown", meta: Optional[d
     except priority.PriorityError as e:
         return priority.error_payload(e)
 
-    pid = None
+    pid = gone = None
     if is_write(name, args):
-        pid = check_write(db_path, name, args)
+        # undo of an approved project delete: the project is gone, so its old name can't
+        # pass the project check; deletes.py finds it in the edit history instead
+        gone = (_safe_call(deletes.deleted_project, db_path, explicit_project(args),
+                           args.get("record_id"))
+                if (name, args.get("action"), args.get("record_type")) == ("history", "undo", "project")
+                else None)
+        pid = gone if gone is not None else check_write(db_path, name, args)
         args["project_id"] = pid  # the resolved id (callers may pass a name or "12")
     else:
         named = explicit_project(args)
@@ -333,7 +340,8 @@ def handle_call(name: str, args: dict, client: str = "unknown", meta: Optional[d
                 args["project_id"] = pid  # reads too: tools take the id, callers may give a name
 
     meta["project_id"] = pid
-    sid =_safe_track(tracker.touch, client, pid, None) if (pid and tracker) else None
+    # (no session for a deleted project being restored: its row isn't back yet)
+    sid = _safe_track(tracker.touch, client, pid, None) if (pid and tracker and gone is None) else None
 
     # Session tool: adopt / end the automatic session instead of duplicating it.
     if name == "session" and args.get("action") == "start" and sid:
@@ -351,6 +359,8 @@ def handle_call(name: str, args: dict, client: str = "unknown", meta: Optional[d
             result["note"] = "Review mode is off, so this was saved directly."
     elif name in ("review_approve", "review_reject"):
         result = _review_decide(name, pid, args, client)
+    elif name == "delete_request" or (name, args.get("action")) in _DELETE_ACTIONS:
+        result = _delete_request(pid, name, args, client)
     elif name == "link":
         result = _link(pid, args, client)
     elif name == "review_mode":
@@ -884,6 +894,38 @@ def _review_list(args: dict) -> Any:
         return e.payload
 
 
+# The older direct deletes: (tool, action) -> (record type, argument holding its id). Since
+# v2.1 they ask the user too, like manage_memory(action="delete").
+_DELETE_ACTIONS = {("variable", "delete"): ("variable", "variable_id"),
+                   ("method", "delete"): ("method", "method_id"),
+                   ("file", "remove"): ("attachment", "attachment_id")}
+
+
+def _delete_request(pid: int, name: str, args: dict, client: str) -> Any:
+    """Queue a delete for the user's approval (deletes.py). Never deletes anything."""
+    act = args.get("action")
+    if name != "delete_request":
+        rtype, key = _DELETE_ACTIONS[(name, act)]
+        rid = args.get(key)
+    elif act == "project":
+        rtype, rid = "project", pid
+    elif act == "component":
+        rtype, rid = "component", args.get("component_id")
+    elif act == "record":
+        rtype, rid = args.get("record_type"), args.get("record_id")
+        if rtype not in deletes.RECORD_TYPES:
+            return {"error": "bad_type",
+                    "message": f"record_type must be one of: {', '.join(deletes.RECORD_TYPES)}. "
+                               f"Projects and components: manage_projects(action=\"delete\" / "
+                               f"\"delete_component\")."}
+    else:
+        return {"error": "bad_action", "message": "action must be project, component or record."}
+    try:
+        return deletes.request(backend.db_path, pid, rtype, rid, client)
+    except deletes.DeleteError as e:
+        return e.payload
+
+
 def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
     if args.get("item_id") is None:
         return {"error": "item_id_required", "message": "Name the review item (item_id)."}
@@ -892,7 +934,15 @@ def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
         return {"error": "user_request_required",
                 "message": "Only the user can approve or reject review items. Ask them; pass "
                            "their words as user_request."}
+    done: dict = {}
     try:
+        if name == "review_approve":
+            item = review.get_item(backend.db_path, int(args["item_id"]))
+            if item and item["kind"] == "delete":   # checked before anything is claimed
+                from .remote_auth import DELETE_REFUSAL, may_delete
+                if not may_delete(_caller()[1]):
+                    return {"error": DELETE_REFUSAL[0], "message": DELETE_REFUSAL[1]}
+                deletes.check_approval(item, args.get("confirm_name"))
         if name == "review_reject":
             return review.reject(backend.db_path, int(args["item_id"]), args.get("reason") or "",
                                  user_request, client)
@@ -920,10 +970,16 @@ def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
             from .markdown_io import apply_edit as do
             return do(backend.db_path, item, client)
 
+        def apply_delete(item: dict, _edits: dict):
+            done.update(deletes.execute(backend.db_path, item, client, args.get("confirm_name")))
+            return deletes.TYPES[done["deleted"]["record_type"]][0], done["deleted"]["id"]
+
         edits = {k: args.get(k) for k in ("summary", "details", "priority", "category", "component")}
-        return review.approve(backend.db_path, int(args["item_id"]), user_request, client, apply, edits,
-                              others={"cleanup": apply_cleanup, "edit": apply_edit})
-    except review.ReviewError as e:
+        out = review.approve(backend.db_path, int(args["item_id"]), user_request, client, apply, edits,
+                             others={"cleanup": apply_cleanup, "edit": apply_edit,
+                                     "delete": apply_delete})
+        return {**out, **done}
+    except (review.ReviewError, deletes.DeleteError) as e:
         return e.payload
 
 

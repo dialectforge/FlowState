@@ -701,6 +701,18 @@ async def _json(send, code: int, body: dict, extra_headers=None):
 # ---------------------------------------------------------------- tool policy
 LOCAL_TOOLS = {"git"}                     # every action runs git on this computer
 LOCAL_ACTIONS = {("file", "attach")}      # reads any file on this computer
+# Deletes (asking for one, or approving one: server._review_decide) are for apps on this
+# computer and the owner's LAN token only; remote, OAuth and per-app LAN keys never.
+DELETE_TOOLS = {"delete_request"}
+DELETE_ACTIONS = {("variable", "delete"), ("method", "delete"), ("file", "remove")}
+DELETE_REFUSAL = ("not_allowed_remotely",
+                  "Deleting from FlowState is only possible from an app on the FlowState computer "
+                  "(or the owner's LAN token), and only with the user's approval. Nothing was "
+                  "deleted. Tell the user.")
+
+
+def may_delete(scopes: Optional[list[str]]) -> bool:
+    return scopes is None or SCOPE_LOCAL in scopes
 
 
 def refusal(name: str, args: dict, scopes: Optional[list[str]]) -> Optional[tuple[str, str]]:
@@ -714,6 +726,9 @@ def refusal(name: str, args: dict, scopes: Optional[list[str]]) -> Optional[tupl
         return ("not_allowed_remotely",
                 f"{name} works on files of the FlowState computer, so it is only available to "
                 f"apps on that computer or the owner's LAN token.")
+    if (name in DELETE_TOOLS or (name, args.get("action")) in DELETE_ACTIONS) \
+            and not may_delete(scopes):
+        return DELETE_REFUSAL
     if writes_text(name, args) and SCOPE_WRITE not in scopes:
         return ("read_only_client",
                 "This app was given read-only access to FlowState, so it can't save or change "
