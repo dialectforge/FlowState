@@ -182,6 +182,13 @@ def enable_mcps(names):
     
     for raw_name in names:
         name = resolve_name(raw_name)
+        current_matches = [
+            k for k in config["mcpServers"]
+            if k.lower().replace("buildmcp", "") == name.lower().replace("buildmcp", "")
+        ]
+        if current_matches:
+            print(f"  ✅ Already on: {name}")
+            continue
         backup_matches = [
             k for k in backup_servers
             if k.lower().replace("buildmcp", "") == name.lower().replace("buildmcp", "")

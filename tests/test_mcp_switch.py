@@ -149,3 +149,34 @@ def test_only_preserves_existing_custom_server_and_explicit_backup_override(tmp_
     assert after_only["mcpServers"]["flowstate"] == custom_fs
     assert after_only["preferences"] == {"theme": "dark"}
 
+
+def test_on_skips_already_enabled_server_without_overwriting_from_backup(tmp_path):
+    cfg_path = tmp_path / "claude_desktop_config.json"
+    backup_path = tmp_path / "claude_desktop_config.backup.json"
+
+    older_github = {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-github"],
+        "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "OLD_BACKUP_TOKEN"},
+    }
+    newer_github = {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-github"],
+        "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "NEW_CURRENT_TOKEN"},
+    }
+    backup_path.write_text(
+        json.dumps({"mcpServers": {"github": older_github}}, indent=2),
+        encoding="utf-8",
+    )
+    cfg_path.write_text(
+        json.dumps({"mcpServers": {"github": newer_github}}, indent=2),
+        encoding="utf-8",
+    )
+
+    res = run_switch(cfg_path, "on", "github")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "already on" in res.stdout.lower()
+
+    after = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert after["mcpServers"]["github"] == newer_github
+
