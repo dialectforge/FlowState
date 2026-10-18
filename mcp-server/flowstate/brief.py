@@ -223,7 +223,7 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
               f"log_work(project=\"{name}\", kind=decision|change|problem|learning|todo, summary=...).")
     if pending is not None:
         b.add(f"Review queue: {pending} item{'s' if pending != 1 else ''} waiting for the user's OK"
-              + (" (review_list shows them; approve or reject only when the user asks)."
+              + (" (manage_review action=list shows them; approve or reject only when the user asks)."
                  if pending else "."))
     if mode_line:
         b.add(mode_line)
@@ -269,7 +269,8 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
             lambda l: f"- [{l['category'] or 'other'}{', verified' if l['verified'] else ''}] "
                       f"{_one_line(l['insight'], 160)}" + tag("learning", l["id"]),
             prof["learnings"][1])
-    footer = "\nMore detail: get_context, todo(action=list), problem(action=list), search, ask."
+    footer = ("\nMore detail: manage_todos(action=list), manage_problems(action=list), "
+              "search (answer=true to ask).")
     if size != "deep":
         footer += " Longer brief: start_here(size=\"deep\")."
     # Linked projects last, from whatever is left: this is what gets trimmed, never the
@@ -302,7 +303,7 @@ def candidates_text(resolution: dict, cap: int = BRIEF_CAP) -> str:
     """Brief-sized reply when no single project matched."""
     b = _Budget(cap - 40)
     b.add(f"FlowState: {resolution.get('reason', 'no project chosen')}.")
-    b.add("Call start_here again with project=\"<name>\" (or create_project if this is new work).")
+    b.add("Call start_here again with project=\"<name>\" (or manage_projects(action=\"create\") if this is new work).")
     b.add("Projects:")
     for n in resolution.get("candidates", []):
         if not b.add(f"- {n}"):

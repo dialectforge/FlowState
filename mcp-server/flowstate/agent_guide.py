@@ -1,105 +1,186 @@
-"""What FlowState tells any MCP client: initialize instructions, the start prompt, and the
-wording shared by tool descriptions. Kept short: clients paste this into model context."""
+"""What FlowState tells any MCP client: initialize instructions, the start prompt, and every
+listed tool's description. Kept short: clients paste this into model context.
+
+Each tool description follows the same order: what it is for, which sibling to use
+instead, side effects (and which actions only read), and what it returns. Parameter
+meanings are in the schemas (tooldefs.py)."""
 
 INSTRUCTIONS = """FlowState is the user's project memory (todos, changes, decisions, problems, learnings).
 1. At the start of every conversation about a project, call start_here(project="<name>") first and read the brief. If you don't know the project, call start_here() with no arguments (or with folder="<working folder>") to see the list, then pick one.
-2. As you work, record what matters with log_work(project="<name>", kind=..., summary=...): kind=decision for choices made, change for things changed, problem for bugs/blockers, learning for lessons, todo for follow-ups. One short line each; add details only when useful.
+2. As you work, record what matters with log_work(project="<name>", kind=..., summary=...): kind=decision for choices made, change for things changed, problem for bugs/blockers, learning for lessons, todo for follow-ups. One short line each; add details only when useful. Look things up with search (answer=true for a question).
 3. Every write must name the project. Never put passwords, tokens or keys in any text. If you know your model name, pass it as model="<name>" on writes; never guess or invent it (leave it out).
 4. A session is opened and closed for you automatically; you don't need to manage it. Its auto-captured summary, and anything you log with suggested=true, waits in a review queue for the user. Never approve or reject review items unless the user explicitly asks you to in this chat. The user's review mode (shown in the brief) decides what else waits; never change it unless the user asks you to in this chat.
-5. Things shared between projects (a protocol, a library) are linked with the link tool; log changes to a shared component by its name and the other projects are alerted.
-6. The brief starts with the project's HARD RULES: never break them. If it shows a HANDOFF note, continue from it and mark it picked up (handoff action=pickup). If you must stop mid-task, leave one: handoff(action="leave", project=..., where_i_was=..., next_step=...).
+5. Things shared between projects (a protocol, a library) are linked with manage_links; log changes to a shared component by its name and the other projects are alerted.
+6. The brief starts with the project's HARD RULES: never break them. If it shows a HANDOFF note, continue from it and mark it picked up (manage_handoffs action=pickup). If you must stop mid-task, leave one: manage_handoffs(action="leave", project=..., where_i_was=..., next_step=...).
 7. If FlowState is slow, errors, or is unavailable, tell the user once and carry on with their task without it. Never retry more than once."""
 
 START_HERE_DESCRIPTION = (
-    "CALL THIS FIRST, before get_context or list_projects. Returns a brief and opens "
-    "a session. No project, or only folder, lists projects."
+    "CALL THIS FIRST in every conversation about a project. Returns the brief as text: hard "
+    "rules, a handoff note if any, review mode, open todos and problems, recent changes, "
+    "decisions and learnings, facts to re-check, linked projects. Without project it lists "
+    "the projects instead. size=deep gives the full working context. Side effects: opens or "
+    "reuses the automatic session, notes when you looked, runs the user's opt-in git capture."
 )
 
 LOG_WORK_DESCRIPTION = (
-    "Record one decision, change, problem, learning, or todo. suggested=true queues it. "
-    "Secrets are refused. Undo does not delete it."
+    "Record one new decision (a choice and why), change (code or setup), problem (bug or "
+    "blocker), learning (reusable lesson) or todo in a project. Use it for every new record; "
+    "to update existing todos or problems use manage_todos / manage_problems. Only adds. The "
+    "review mode or suggested=true may queue it for the user instead. A change on a shared "
+    "component alerts linked projects. Secrets are refused. Returns {logged, record} or "
+    "{queued_for_review}."
 )
 
-REVIEW_LIST_DESCRIPTION = (
-    "List the review queue. Read-only. Approve or reject only when the user asks. "
-    "Returns {items, total, status}."
+SEARCH_DESCRIPTION = (
+    "Find stored todos, decisions, changes, learnings, problems and solutions. query: ranked "
+    "matches (word endings match; by meaning too if a local model is installed). query + "
+    "answer=true: a short quoted answer with record ids, also from hard rules and handoffs, "
+    "or says FlowState has nothing; check it before contradicting a decision. No query: the "
+    "newest records (since_hours, content_types). Read-only. Overview: start_here; edit "
+    "trail: manage_history. Returns {results, count} or {answer, sources}."
+)
+
+TODOS_DESCRIPTION = (
+    "Work with a project's existing todos. list: filter and sort. next: top unblocked todos. "
+    "update: status (done; cancelled to drop one, no delete), priority, title, description. "
+    "block / unblock: waits on todos or a problem. add: only for a subtask, blockers or a due "
+    "date; a plain new todo is log_work kind=todo. Reads: list, next. update and unblock "
+    "change data (manage_history undo restores an update). Returns todo rows."
+)
+
+PROBLEMS_DESCRIPTION = (
+    "Work on a project's existing problems (bugs, blockers). list: open problems. tree: "
+    "one problem with every attempt and its solution. add_attempt: record a try. "
+    "end_attempt: how a try ended. solve: close it with what fixed it (manage_history undo "
+    "reopens it). Open a new problem with log_work kind=problem. Reads: list, tree. Writes "
+    "need project. Returns problem rows, the tree, or the saved attempt or solution."
 )
 
 _USER_ONLY = (
-    " ONLY call this when the user has explicitly told you, in this chat, to approve or "
-    "reject this item, and never approve your own suggestions."
+    " approve, reject, set_mode: ONLY call this when the user has explicitly told you, in "
+    "this chat; quote them in user_request; never approve your own suggestions or change "
+    "the mode to get your own writes saved."
 )
 
-REVIEW_APPROVE_DESCRIPTION = (
-    "Approve one queued item into a normal record (session summaries go on that "
-    "session). Edit fields first, or move_to for a misfiled item. Undo does not "
-    "delete the new record."
-    + _USER_ONLY
+REVIEW_DESCRIPTION = (
+    "The user's review queue and review mode. Session summaries, suggested records, imports "
+    "and clean-up ideas wait here. list, get_mode: read-only. approve: make the item a "
+    "record (edit fields or move_to first). reject: mark it rejected; nothing is deleted. "
+    "set_mode: which new records wait (clear=true drops a project override). All decisions "
+    "are logged." + _USER_ONLY + " Returns {items, total}, the mode, or the result."
 )
 
-REVIEW_REJECT_DESCRIPTION = (
-    "Reject one queued item. It stays marked rejected; nothing is deleted."
-    + _USER_ONLY
+HANDOFFS_DESCRIPTION = (
+    "Notes from one AI to the next. leave: when you must stop mid-task, save where_i_was and "
+    "next_step; the next start_here shows it after the hard rules. pickup: once you continue "
+    "from a note, mark it so it stops showing. list: open notes. Not a session summary and "
+    "not a todo. Adds or marks notes; never deletes. Returns the note or {notes}."
 )
 
-LINK_DESCRIPTION = (
-    "Link projects, components, records, or a URL. A shared-component change alerts "
-    "linked projects and does not edit other apps. history undoes a remove "
-    "(record_type=link)."
+RULES_DESCRIPTION = (
+    "A project's hard rules: short never/always rules from the user, shown first in every "
+    "brief and never cut. add: when the user states one (one sentence, max 300 chars; 25 "
+    "rules, 2,000 chars in total). list: active rules. remove: ONLY when the user asks in "
+    "this chat; quote them in user_request; the rule is kept as removed. Preferences and "
+    "lessons go in log_work. Requires project. Returns the rule or {rules}."
 )
 
-REVIEW_MODE_DESCRIPTION = (
-    "Which new records wait: off, auto_only (default), types, or everything. "
-    "set ONLY when the user has explicitly asked you, in this chat, to change the "
-    "review mode; quote user_request; never to get your own writes saved. "
-    "clear=true removes an override."
+LINKS_DESCRIPTION = (
+    "Connect things across projects. add: a project uses a shared component "
+    "(link_type=uses, target_project, target_component), depends on a project, two "
+    "components are the same, records relate, or a record gets a URL (e.g. an issue). Then "
+    "a change or decision logged on the shared component (log_work component=<name>) gives "
+    "each linked project an update todo and a 'changed since' line; FlowState never edits "
+    "other projects. remove: by link_id or the add fields; kept as removed (manage_history "
+    "undo, record_type=link). list: read-only. Requires project. Returns the link or {links}."
 )
 
 HISTORY_DESCRIPTION = (
-    "list reads edits. undo restores the last edit or a deletion, unless it changed "
-    "again. who lists app, model, and machine. Logged changes are get_recent_changes."
+    "The edit trail of existing records. list: row edits with old and new values. undo: "
+    "restore a record to before its last edit or deletion (refused if it changed again "
+    "since). who: who did what (app, model, machine), with filters and pages. Logged "
+    "changes (kind=change) are records: find them with search. Reads: list, who. list and "
+    "undo require project. Returns {history}, the undo result, or {rows, page}."
+)
+
+PROJECTS_DESCRIPTION = (
+    "Projects and their components (named parts of a project). list: projects (by status). "
+    "create: only when the user asks for a new project; names are unique. update: rename, "
+    "describe, or set status (status=archived retires it; there is no delete). "
+    "list_components / add_component / update_component: same for components "
+    "(status=deprecated retires one). log_work creates a missing component by name. Reads: "
+    "list, list_components. Updates are undone with manage_history. Returns project or "
+    "component rows."
+)
+
+MEMORY_DESCRIPTION = (
+    "Memory upkeep; nothing here edits records directly. cleanup: queue likely duplicate, "
+    "stale and misfiled records as suggestions for the user (rejected ideas are not "
+    "repeated). import: a memory export (Claude, ChatGPT) or an edited FlowState markdown "
+    "export into the review queue; secret-like lines skipped. stale: facts (paths, ports, "
+    "hosts, URLs, config) unchecked for 60+ days (read-only). mark_checked: you re-checked "
+    "one and it holds. set_source: correct a record's origin. A changed fact is log_work. "
+    "Requires project. Returns counts and ids, or {facts}."
+)
+
+SESSIONS_DESCRIPTION = (
+    "Inspect FlowState's sessions. They open and close by themselves (closed after 2 hours "
+    "idle or when the app quits, with a summary queued for review), so this is rarely "
+    "needed. current, list, conversations: read. start: returns the automatic session. "
+    "end: close one with a summary (not undoable). Decisions go in log_work. Returns "
+    "session or conversation rows."
+)
+
+FILES_DESCRIPTION = (
+    "File attachments of a project. attach: a file on this computer, to the project, a "
+    "component or a problem; copied into FlowState's bundle by default. list, search (text "
+    "in attached files): read. remove: detach; delete_file=true also deletes the bundle "
+    "copy for good (undo restores the row, not the file). Local apps only: attach is "
+    "refused over HTTP. Requires project for writes. Returns attachment rows or hits."
+)
+
+DATA_GIT_DESCRIPTION = (
+    "Git for FlowState's own data folder, NOT the user's code repository; never use it for "
+    "the user's project. status, history: read. init, set_remote, clone (into an empty "
+    "folder): set up. sync: commit and push to the remote (reaches the network; not "
+    "undoable). Local apps only: refused over HTTP. Returns git results."
+)
+
+VARIABLES_DESCRIPTION = (
+    "Non-secret project settings: hosts, ports, endpoints, config. create, list (read), "
+    "update, delete (both undone with manage_history). Secrets are refused; is_secret only "
+    "labels a value and does not hide it, so never store passwords, tokens or keys. "
+    "Requires project. Returns variable rows."
+)
+
+METHODS_DESCRIPTION = (
+    "Documented reusable procedures of a project (deploy, test, a code convention), with "
+    "ordered steps. create, list (read), update (steps replaces the whole list), delete "
+    "(both undone with manage_history). A one-off choice is log_work kind=decision; a "
+    "lesson is kind=learning. Requires project. Returns method rows."
+)
+
+SKILLS_DESCRIPTION = (
+    "The connected app's own learned skills, checkpoints and metrics: how the AI works, not "
+    "project facts (those go in log_work). learn: save a skill. list: a project's and "
+    "global skills. confirm: one more session where it held (promoted after 3 at a 0.8 "
+    "rate). save_state / get_state: a checkpoint. log_metric / list_metrics: scores. "
+    "Reads: list, get_state, list_metrics; the rest only add rows or counts. Returns rows."
 )
 
 MODEL_PROPERTY = {
     "type": "string",
-    "description": "Model name if you know it. Never guess.",
+    "description": "Your model name if you know it. Never guess.",
 }
-
-CLEANUP_DESCRIPTION = (
-    "Queue duplicate, stale, and misfiled suggestions. Nothing changes until approved; "
-    "history can undo that. Rejected ideas are not repeated."
-)
-
-IMPORT_DESCRIPTION = (
-    "Copy memories into the review queue; nothing is saved until approved. "
-    "Secret-like lines are skipped. One note is log_work."
-)
-
-RULES_DESCRIPTION = (
-    "Hard rules, shown first on every brief. add one sentence (max 300; 25 rules, "
-    "2,000 total) when the user states one. remove only when they ask; quote them."
-)
-
-HANDOFF_DESCRIPTION = (
-    "Leave a note when you stop mid-task (where_i_was, next_step); the next start_here "
-    "shows it. pickup hides it. Not a session summary."
-)
-
-VERIFY_DESCRIPTION = (
-    "stale lists paths, ports, hosts, URLs, and config unchecked for 60+ days. "
-    "mark records a re-check. A changed fact is log_work."
-)
-
-ASK_DESCRIPTION = (
-    "Answer from stored records (read-only), with ids. Meaning search if a local "
-    "model is installed, else keywords. Says when nothing matches; never guesses."
-)
-
-WRITE_NOTE = ""
 
 PROJECT_PROPERTY = {
     "type": ["string", "integer"],
-    "description": "Name or id. Required on writes.",
+    "description": "Project name or id. Required.",
+}
+
+USER_REQUEST_PROPERTY = {
+    "type": "string",
+    "description": "The user's words in this chat asking for this.",
 }
 
 PROMPT_NAME = "flowstate-start"

@@ -43,30 +43,34 @@ def list_tools(S):
 
 
 # ---------------------------------------------------------------- D4a labels
-def test_every_tool_is_labelled(backend):
+def test_every_tool_is_labelled(backend, monkeypatch):
     from flowstate.tool_labels import LABELS
+    monkeypatch.setenv("FLOWSTATE_TOOLS", "full")
     tools = list_tools(backend)
     assert {t.name for t in tools} == set(LABELS)
     by = {t.name: t.annotations for t in tools}
-    for name in ("start_here", "search", "list_projects", "review_list", "get_context"):
+    for name in ("start_here", "search"):
         assert by[name].readOnlyHint is True and by[name].idempotentHint is True
-    for name in ("log_work", "log_learning", "create_project"):
+    for name in ("log_work", "manage_handoffs", "manage_rules", "manage_links", "manage_skills"):
         assert by[name].readOnlyHint is False and by[name].destructiveHint is False
-    for name in ("variable", "file", "history", "review_approve", "todo"):
+    for name in ("manage_variables", "manage_files", "manage_history", "manage_review",
+                 "manage_todos", "manage_projects"):
         assert by[name].readOnlyHint is False and by[name].destructiveHint is True
-    assert by["git"].openWorldHint is True and by["todo"].openWorldHint is False
+    assert by["manage_data_git"].openWorldHint is True and by["manage_todos"].openWorldHint is False
     assert all(a.title for a in by.values())
 
 
 def test_core_profile_lists_few_tools_but_all_still_work(backend, monkeypatch):
     monkeypatch.setenv("FLOWSTATE_TOOLS", "core")
     names = [t.name for t in list_tools(backend)]
-    assert names == ["start_here", "log_work", "review_list", "review_approve", "review_reject",
-                     "link", "handoff", "search", "todo"]
-    r = call(backend, "list_projects", {})            # not listed, still answers
+    assert names == ["start_here", "log_work", "search", "manage_todos", "manage_review",
+                     "manage_handoffs"]
+    r = call(backend, "manage_projects", {"action": "list"})   # not listed, still answers
     assert not r.isError and "Alpha" in r.content[0].text
-    monkeypatch.setenv("FLOWSTATE_TOOLS", "all")
-    assert len(list_tools(backend)) > 20
+    r = call(backend, "list_projects", {})                     # older name, still answers
+    assert not r.isError and "Alpha" in r.content[0].text
+    monkeypatch.setenv("FLOWSTATE_TOOLS", "all")               # older spelling of full
+    assert len(list_tools(backend)) == 18
 
 
 # ---------------------------------------------------------------- D4c history

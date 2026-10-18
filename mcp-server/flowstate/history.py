@@ -230,7 +230,7 @@ def list_history(db_path: Path, project_id: int, record_type: Optional[str] = No
                         "undo_of": r["undo_of"], "changes": _changed_fields(old, new),
                         **{k: r[k] for k in identity.FIELDS if k in r.keys()}})
         return {"history": out, "count": len(out),
-                "note": "history(action=undo, record_type=..., record_id=...) reverts the last "
+                "note": "manage_history(action=undo, record_type=..., record_id=...) reverts the last "
                         "change to a record."}
     finally:
         conn.close()

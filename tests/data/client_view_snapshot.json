@@ -1,5 +1,5 @@
 {
- "instructions": "FlowState is the user's project memory (todos, changes, decisions, problems, learnings).\n1. At the start of every conversation about a project, call start_here(project=\"<name>\") first and read the brief. If you don't know the project, call start_here() with no arguments (or with folder=\"<working folder>\") to see the list, then pick one.\n2. As you work, record what matters with log_work(project=\"<name>\", kind=..., summary=...): kind=decision for choices made, change for things changed, problem for bugs/blockers, learning for lessons, todo for follow-ups. One short line each; add details only when useful.\n3. Every write must name the project. Never put passwords, tokens or keys in any text. If you know your model name, pass it as model=\"<name>\" on writes; never guess or invent it (leave it out).\n4. A session is opened and closed for you automatically; you don't need to manage it. Its auto-captured summary, and anything you log with suggested=true, waits in a review queue for the user. Never approve or reject review items unless the user explicitly asks you to in this chat. The user's review mode (shown in the brief) decides what else waits; never change it unless the user asks you to in this chat.\n5. Things shared between projects (a protocol, a library) are linked with the link tool; log changes to a shared component by its name and the other projects are alerted.\n6. The brief starts with the project's HARD RULES: never break them. If it shows a HANDOFF note, continue from it and mark it picked up (handoff action=pickup). If you must stop mid-task, leave one: handoff(action=\"leave\", project=..., where_i_was=..., next_step=...).\n7. If FlowState is slow, errors, or is unavailable, tell the user once and carry on with their task without it. Never retry more than once.",
+ "instructions": "FlowState is the user's project memory (todos, changes, decisions, problems, learnings).\n1. At the start of every conversation about a project, call start_here(project=\"<name>\") first and read the brief. If you don't know the project, call start_here() with no arguments (or with folder=\"<working folder>\") to see the list, then pick one.\n2. As you work, record what matters with log_work(project=\"<name>\", kind=..., summary=...): kind=decision for choices made, change for things changed, problem for bugs/blockers, learning for lessons, todo for follow-ups. One short line each; add details only when useful. Look things up with search (answer=true for a question).\n3. Every write must name the project. Never put passwords, tokens or keys in any text. If you know your model name, pass it as model=\"<name>\" on writes; never guess or invent it (leave it out).\n4. A session is opened and closed for you automatically; you don't need to manage it. Its auto-captured summary, and anything you log with suggested=true, waits in a review queue for the user. Never approve or reject review items unless the user explicitly asks you to in this chat. The user's review mode (shown in the brief) decides what else waits; never change it unless the user asks you to in this chat.\n5. Things shared between projects (a protocol, a library) are linked with manage_links; log changes to a shared component by its name and the other projects are alerted.\n6. The brief starts with the project's HARD RULES: never break them. If it shows a HANDOFF note, continue from it and mark it picked up (manage_handoffs action=pickup). If you must stop mid-task, leave one: manage_handoffs(action=\"leave\", project=..., where_i_was=..., next_step=...).\n7. If FlowState is slow, errors, or is unavailable, tell the user once and carry on with their task without it. Never retry more than once.",
  "prompts": [
   {
    "arguments": [
@@ -21,15 +21,15 @@
     "readOnlyHint": true,
     "title": "Project brief (start here)"
    },
-   "description": "CALL THIS FIRST, before get_context or list_projects. Returns a brief and opens a session. No project, or only folder, lists projects.",
+   "description": "CALL THIS FIRST in every conversation about a project. Returns the brief as text: hard rules, a handoff note if any, review mode, open todos and problems, recent changes, decisions and learnings, facts to re-check, linked projects. Without project it lists the projects instead. size=deep gives the full working context. Side effects: opens or reuses the automatic session, notes when you looked, runs the user's opt-in git capture.",
    "inputSchema": {
     "properties": {
      "folder": {
-      "description": "Selects the project when project is omitted.",
+      "description": "Working folder; picks the project if project is omitted.",
       "type": "string"
      },
      "project": {
-      "description": "Name or id. Omit to list projects.",
+      "description": "Project name or id. Omit to get the project list.",
       "type": [
        "string",
        "integer"
@@ -37,7 +37,7 @@
      },
      "size": {
       "default": "standard",
-      "description": "quick ~1,500; standard 4,000; deep 12,000.",
+      "description": "quick (~1,500 chars), standard (4,000, default) or deep (12,000, full context).",
       "enum": [
        "quick",
        "standard",
@@ -53,15 +53,16 @@
   {
    "annotations": {
     "destructiveHint": false,
+    "idempotentHint": false,
     "openWorldHint": false,
     "readOnlyHint": false,
     "title": "Log work"
    },
-   "description": "Record one decision, change, problem, learning, or todo. suggested=true queues it. Secrets are refused. Undo does not delete it.",
+   "description": "Record one new decision (a choice and why), change (code or setup), problem (bug or blocker), learning (reusable lesson) or todo in a project. Use it for every new record; to update existing todos or problems use manage_todos / manage_problems. Only adds. The review mode or suggested=true may queue it for the user instead. A change on a shared component alerts linked projects. Secrets are refused. Returns {logged, record} or {queued_for_review}.",
    "inputSchema": {
     "properties": {
      "category": {
-      "description": "Learnings only. Omit otherwise.",
+      "description": "learning only: the kind of lesson.",
       "enum": [
        "pattern",
        "gotcha",
@@ -75,15 +76,15 @@
       "type": "string"
      },
      "component": {
-      "description": "Changes and problems default to General.",
+      "description": "Component name, created if missing (change / problem default: General). Shared components work too.",
       "type": "string"
      },
      "details": {
-      "description": "Longer reason or context.",
+      "description": "Optional: why, what was rejected, old / new values.",
       "type": "string"
      },
      "kind": {
-      "description": "Which record to write.",
+      "description": "Which kind of record (see the tool description).",
       "enum": [
        "decision",
        "change",
@@ -94,11 +95,11 @@
       "type": "string"
      },
      "model": {
-      "description": "Model name if you know it. Never guess.",
+      "description": "Your model name if you know it. Never guess.",
       "type": "string"
      },
      "priority": {
-      "description": "Priority or severity. high and medium are older names.",
+      "description": "todo / problem only. Default normal; high and medium are older names.",
       "enum": [
        "critical",
        "urgent",
@@ -110,18 +111,18 @@
       "type": "string"
      },
      "project": {
-      "description": "Name or id. Required on writes.",
+      "description": "Project name or id. Required.",
       "type": [
        "string",
        "integer"
       ]
      },
      "replaces": {
-      "description": "Decisions only: id this one replaces.",
+      "description": "decision only: id of the decision this replaces.",
       "type": "integer"
      },
      "source": {
-      "description": "From the user, your inference, or the code.",
+      "description": "Where it came from: the user, your inference, or the code.",
       "enum": [
        "user_stated",
        "ai_inferred",
@@ -130,12 +131,11 @@
       "type": "string"
      },
      "suggested": {
-      "default": false,
-      "description": "Queue for review instead of saving.",
+      "description": "true = queue it for the user's review instead of saving.",
       "type": "boolean"
      },
      "summary": {
-      "description": "One short line.",
+      "description": "The record in one short line.",
       "type": "string"
      }
     },
@@ -153,51 +153,355 @@
     "idempotentHint": true,
     "openWorldHint": false,
     "readOnlyHint": true,
-    "title": "Review queue"
+    "title": "Search and ask"
    },
-   "description": "List the review queue. Read-only. Approve or reject only when the user asks. Returns {items, total, status}.",
+   "description": "Find stored todos, decisions, changes, learnings, problems and solutions. query: ranked matches (word endings match; by meaning too if a local model is installed). query + answer=true: a short quoted answer with record ids, also from hard rules and handoffs, or says FlowState has nothing; check it before contradicting a decision. No query: the newest records (since_hours, content_types). Read-only. Overview: start_here; edit trail: manage_history. Returns {results, count} or {answer, sources}.",
    "inputSchema": {
     "properties": {
+     "answer": {
+      "description": "true = answer the query, quoting records.",
+      "type": "boolean"
+     },
+     "content_types": {
+      "description": "Only these record types. Omit for all.",
+      "items": {
+       "enum": [
+        "todo",
+        "decision",
+        "change",
+        "learning",
+        "problem",
+        "solution"
+       ],
+       "type": "string"
+      },
+      "type": "array"
+     },
      "limit": {
-      "default": 20,
-      "description": "Max items. Default 20, max 100.",
+      "description": "Max results: default 10, max 50 (answer=true: 5, max 10).",
       "type": "integer"
      },
+     "mode": {
+      "default": "auto",
+      "description": "auto (meaning too if a local model exists), keyword or meaning.",
+      "enum": [
+       "auto",
+       "keyword",
+       "meaning"
+      ],
+      "type": "string"
+     },
      "project": {
-      "description": "Project name or id. Omit for all projects.",
+      "description": "Project name or id. Omit to search every project.",
       "type": [
        "string",
        "integer"
       ]
      },
-     "status": {
-      "default": "pending",
-      "description": "Which slice of the queue.",
-      "enum": [
-       "pending",
-       "approved",
-       "rejected",
-       "all"
-      ],
+     "query": {
+      "description": "Words to find, or a question with answer=true. Omit to list the newest.",
       "type": "string"
+     },
+     "since_hours": {
+      "description": "No query only: from the last N hours.",
+      "type": "integer"
      }
     },
     "type": "object"
    },
-   "name": "review_list"
+   "name": "search"
   },
   {
    "annotations": {
     "destructiveHint": true,
+    "idempotentHint": false,
     "openWorldHint": false,
     "readOnlyHint": false,
-    "title": "Approve review item (user only)"
+    "title": "Todos"
    },
-   "description": "Approve one queued item into a normal record (session summaries go on that session). Edit fields first, or move_to for a misfiled item. Undo does not delete the new record. ONLY call this when the user has explicitly told you, in this chat, to approve or reject this item, and never approve your own suggestions.",
+   "description": "Work with a project's existing todos. list: filter and sort. next: top unblocked todos. update: status (done; cancelled to drop one, no delete), priority, title, description. block / unblock: waits on todos or a problem. add: only for a subtask, blockers or a due date; a plain new todo is log_work kind=todo. Reads: list, next. update and unblock change data (manage_history undo restores an update). Returns todo rows.",
    "inputSchema": {
     "properties": {
+     "action": {
+      "description": "The operation, as explained in the tool description.",
+      "enum": [
+       "list",
+       "next",
+       "update",
+       "block",
+       "unblock",
+       "add"
+      ],
+      "type": "string"
+     },
+     "blocked_by": {
+      "description": "add / block / unblock: todo ids it waits on. unblock without blockers clears all.",
+      "items": {
+       "type": "integer"
+      },
+      "type": "array"
+     },
+     "blocked_by_problem": {
+      "description": "add / block / unblock: a problem id it waits on.",
+      "type": "integer"
+     },
+     "compact": {
+      "description": "list: shorter rows.",
+      "type": "boolean"
+     },
+     "component_id": {
+      "description": "add: its component id.",
+      "type": "integer"
+     },
+     "description": {
+      "description": "add / update: longer detail.",
+      "type": "string"
+     },
+     "due_date": {
+      "description": "add: ISO due date.",
+      "type": "string"
+     },
+     "limit": {
+      "description": "next: how many todos. Default 5.",
+      "type": "integer"
+     },
+     "min_priority": {
+      "description": "list: this priority or more urgent.",
+      "enum": [
+       "critical",
+       "urgent",
+       "high",
+       "normal",
+       "medium",
+       "low"
+      ],
+      "type": "string"
+     },
+     "model": {
+      "description": "Your model name if you know it. Never guess.",
+      "type": "string"
+     },
+     "parent_todo_id": {
+      "description": "add: parent todo id (makes it a subtask).",
+      "type": "integer"
+     },
+     "priority": {
+      "description": "add / update: the priority. list: only this one.",
+      "enum": [
+       "critical",
+       "urgent",
+       "high",
+       "normal",
+       "medium",
+       "low"
+      ],
+      "type": "string"
+     },
+     "project": {
+      "description": "Project name or id. Required.",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "sort": {
+      "description": "list: sort order. Default priority.",
+      "enum": [
+       "priority",
+       "due",
+       "newest"
+      ],
+      "type": "string"
+     },
+     "status": {
+      "description": "update: the new status. list: only this status.",
+      "enum": [
+       "pending",
+       "in_progress",
+       "blocked",
+       "done",
+       "cancelled"
+      ],
+      "type": "string"
+     },
+     "title": {
+      "description": "add: the title (required). update: a new title.",
+      "type": "string"
+     },
+     "todo_id": {
+      "description": "update / block / unblock: the todo id (#id in the brief).",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "action",
+     "project"
+    ],
+    "type": "object"
+   },
+   "meta": {
+    "flowstate/actions": {
+     "additive": [
+      "add",
+      "block"
+     ],
+     "destructive": [
+      "update",
+      "unblock"
+     ],
+     "read": [
+      "list",
+      "next"
+     ]
+    }
+   },
+   "name": "manage_todos"
+  },
+  {
+   "annotations": {
+    "destructiveHint": true,
+    "idempotentHint": false,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Problems and attempts"
+   },
+   "description": "Work on a project's existing problems (bugs, blockers). list: open problems. tree: one problem with every attempt and its solution. add_attempt: record a try. end_attempt: how a try ended. solve: close it with what fixed it (manage_history undo reopens it). Open a new problem with log_work kind=problem. Reads: list, tree. Writes need project. Returns problem rows, the tree, or the saved attempt or solution.",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "description": "The operation, as explained in the tool description.",
+      "enum": [
+       "list",
+       "tree",
+       "add_attempt",
+       "end_attempt",
+       "solve"
+      ],
+      "type": "string"
+     },
+     "attempt_id": {
+      "description": "end_attempt: the attempt's id (from add_attempt or tree).",
+      "type": "integer"
+     },
+     "code_snippet": {
+      "description": "solve: the fix as text. No secrets.",
+      "type": "string"
+     },
+     "compact": {
+      "description": "list: shorter rows.",
+      "type": "boolean"
+     },
+     "component_id": {
+      "description": "list: only this component's problems.",
+      "type": "integer"
+     },
+     "confidence": {
+      "description": "end_attempt: how sure. Default attempted.",
+      "enum": [
+       "attempted",
+       "worked_once",
+       "verified",
+       "proven",
+       "deprecated"
+      ],
+      "type": "string"
+     },
+     "description": {
+      "description": "add_attempt: what you tried (required).",
+      "type": "string"
+     },
+     "key_insight": {
+      "description": "solve: the lesson, one sentence.",
+      "type": "string"
+     },
+     "model": {
+      "description": "Your model name if you know it. Never guess.",
+      "type": "string"
+     },
+     "notes": {
+      "description": "end_attempt: what you learned.",
+      "type": "string"
+     },
+     "outcome": {
+      "description": "end_attempt: how it ended (required).",
+      "enum": [
+       "success",
+       "failure",
+       "partial",
+       "abandoned"
+      ],
+      "type": "string"
+     },
+     "parent_attempt_id": {
+      "description": "add_attempt: an earlier attempt this one builds on.",
+      "type": "integer"
+     },
+     "problem_id": {
+      "description": "tree / add_attempt / solve: the problem's id.",
+      "type": "integer"
+     },
+     "project": {
+      "description": "Project name or id. Required for writes; list: omit for all projects.",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "summary": {
+      "description": "solve: what fixed it (required).",
+      "type": "string"
+     },
+     "winning_attempt_id": {
+      "description": "solve: the attempt that worked.",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "action"
+    ],
+    "type": "object"
+   },
+   "meta": {
+    "flowstate/actions": {
+     "additive": [
+      "add_attempt"
+     ],
+     "destructive": [
+      "end_attempt",
+      "solve"
+     ],
+     "read": [
+      "list",
+      "tree"
+     ]
+    }
+   },
+   "name": "manage_problems"
+  },
+  {
+   "annotations": {
+    "destructiveHint": true,
+    "idempotentHint": false,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Review queue (user decides)"
+   },
+   "description": "The user's review queue and review mode. Session summaries, suggested records, imports and clean-up ideas wait here. list, get_mode: read-only. approve: make the item a record (edit fields or move_to first). reject: mark it rejected; nothing is deleted. set_mode: which new records wait (clear=true drops a project override). All decisions are logged. approve, reject, set_mode: ONLY call this when the user has explicitly told you, in this chat; quote them in user_request; never approve your own suggestions or change the mode to get your own writes saved. Returns {items, total}, the mode, or the result.",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "description": "The operation, as explained in the tool description.",
+      "enum": [
+       "list",
+       "get_mode",
+       "approve",
+       "reject",
+       "set_mode"
+      ],
+      "type": "string"
+     },
      "category": {
-      "description": "For a learning. Omit otherwise.",
+      "description": "approve: for a learning.",
       "enum": [
        "pattern",
        "gotcha",
@@ -210,31 +514,63 @@
       ],
       "type": "string"
      },
+     "clear": {
+      "description": "set_mode: remove this project's override.",
+      "type": "boolean"
+     },
      "component": {
-      "description": "Component to file the approved record under.",
+      "description": "approve: component name to file it under.",
       "type": "string"
      },
      "details": {
-      "description": "New details. Omit to keep.",
+      "description": "approve: new details.",
       "type": "string"
      },
      "item_id": {
-      "description": "Review item id from review_list.",
+      "description": "approve / reject: the item id from list.",
       "type": "integer"
      },
+     "kinds": {
+      "description": "set_mode, mode=types: kinds that wait.",
+      "items": {
+       "enum": [
+        "decision",
+        "change",
+        "problem",
+        "learning",
+        "todo"
+       ],
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "limit": {
+      "description": "list: max items. Default 20, max 100.",
+      "type": "integer"
+     },
+     "mode": {
+      "description": "set_mode: the new mode (auto_only is the default).",
+      "enum": [
+       "off",
+       "auto_only",
+       "types",
+       "everything"
+      ],
+      "type": "string"
+     },
      "model": {
-      "description": "Model name if you know it. Never guess.",
+      "description": "Your model name if you know it. Never guess.",
       "type": "string"
      },
      "move_to": {
-      "description": "Project to move a misfiled item to.",
+      "description": "approve: project to move a misfiled item to.",
       "type": [
        "string",
        "integer"
       ]
      },
      "priority": {
-      "description": "Todo or problem. high and medium still work.",
+      "description": "approve: for a todo or problem.",
       "enum": [
        "critical",
        "urgent",
@@ -246,84 +582,206 @@
       "type": "string"
      },
      "project": {
-      "description": "Name or id. Required on writes.",
-      "type": [
-       "string",
-       "integer"
-      ]
-     },
-     "summary": {
-      "description": "New summary. Omit to keep.",
-      "type": "string"
-     },
-     "user_request": {
-      "description": "The user's words in this chat.",
-      "type": "string"
-     }
-    },
-    "required": [
-     "item_id",
-     "user_request"
-    ],
-    "type": "object"
-   },
-   "name": "review_approve"
-  },
-  {
-   "annotations": {
-    "destructiveHint": true,
-    "openWorldHint": false,
-    "readOnlyHint": false,
-    "title": "Reject review item (user only)"
-   },
-   "description": "Reject one queued item. It stays marked rejected; nothing is deleted. ONLY call this when the user has explicitly told you, in this chat, to approve or reject this item, and never approve your own suggestions.",
-   "inputSchema": {
-    "properties": {
-     "item_id": {
-      "description": "Review item id from review_list.",
-      "type": "integer"
-     },
-     "model": {
-      "description": "Model name if you know it. Never guess.",
-      "type": "string"
-     },
-     "project": {
-      "description": "Name or id. Required on writes.",
+      "description": "approve / reject: required. list / get_mode / set_mode: omit for all / the whole install.",
       "type": [
        "string",
        "integer"
       ]
      },
      "reason": {
-      "description": "The user's reason. Required. The item is kept.",
+      "description": "reject: the user's reason (required).",
+      "type": "string"
+     },
+     "status": {
+      "description": "list: which items. Default pending.",
+      "enum": [
+       "pending",
+       "approved",
+       "rejected",
+       "all"
+      ],
+      "type": "string"
+     },
+     "summary": {
+      "description": "approve: a new summary.",
       "type": "string"
      },
      "user_request": {
-      "description": "The user's words in this chat.",
+      "description": "approve / reject / set_mode (required): the user's words asking for it.",
       "type": "string"
      }
     },
     "required": [
-     "item_id",
-     "reason",
-     "user_request"
+     "action"
     ],
     "type": "object"
    },
-   "name": "review_reject"
+   "meta": {
+    "flowstate/actions": {
+     "destructive": [
+      "approve",
+      "reject",
+      "set_mode"
+     ],
+     "read": [
+      "list",
+      "get_mode"
+     ]
+    }
+   },
+   "name": "manage_review"
   },
   {
    "annotations": {
-    "destructiveHint": true,
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Handoff notes"
+   },
+   "description": "Notes from one AI to the next. leave: when you must stop mid-task, save where_i_was and next_step; the next start_here shows it after the hard rules. pickup: once you continue from a note, mark it so it stops showing. list: open notes. Not a session summary and not a todo. Adds or marks notes; never deletes. Returns the note or {notes}.",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "description": "The operation, as explained in the tool description.",
+      "enum": [
+       "leave",
+       "pickup",
+       "list"
+      ],
+      "type": "string"
+     },
+     "handoff_id": {
+      "description": "pickup: the note's id (H<id> in the brief).",
+      "type": "integer"
+     },
+     "include_picked_up": {
+      "description": "list: include picked-up notes.",
+      "type": "boolean"
+     },
+     "limit": {
+      "description": "list: max notes. Default 20.",
+      "type": "integer"
+     },
+     "model": {
+      "description": "Your model name if you know it. Never guess.",
+      "type": "string"
+     },
+     "next_step": {
+      "description": "leave: the very next step. Max 500 chars.",
+      "type": "string"
+     },
+     "project": {
+      "description": "Project name or id. Required.",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "where_i_was": {
+      "description": "leave: what you did and how far it got. Max 1,000 chars.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "action",
+     "project"
+    ],
+    "type": "object"
+   },
+   "meta": {
+    "flowstate/actions": {
+     "additive": [
+      "leave",
+      "pickup"
+     ],
+     "read": [
+      "list"
+     ]
+    }
+   },
+   "name": "manage_handoffs"
+  },
+  {
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Hard rules"
+   },
+   "description": "A project's hard rules: short never/always rules from the user, shown first in every brief and never cut. add: when the user states one (one sentence, max 300 chars; 25 rules, 2,000 chars in total). list: active rules. remove: ONLY when the user asks in this chat; quote them in user_request; the rule is kept as removed. Preferences and lessons go in log_work. Requires project. Returns the rule or {rules}.",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "description": "The operation, as explained in the tool description.",
+      "enum": [
+       "add",
+       "list",
+       "remove"
+      ],
+      "type": "string"
+     },
+     "include_removed": {
+      "description": "list: also removed rules.",
+      "type": "boolean"
+     },
+     "model": {
+      "description": "Your model name if you know it. Never guess.",
+      "type": "string"
+     },
+     "project": {
+      "description": "Project name or id. Required.",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "rule": {
+      "description": "add: the rule, one short sentence.",
+      "type": "string"
+     },
+     "rule_id": {
+      "description": "remove: the rule's id (R<id> in the brief).",
+      "type": "integer"
+     },
+     "user_request": {
+      "description": "remove (required): the user's own words asking to remove it.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "action",
+     "project"
+    ],
+    "type": "object"
+   },
+   "meta": {
+    "flowstate/actions": {
+     "additive": [
+      "add",
+      "remove"
+     ],
+     "read": [
+      "list"
+     ]
+    }
+   },
+   "name": "manage_rules"
+  },
+  {
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": false,
     "openWorldHint": false,
     "readOnlyHint": false,
     "title": "Cross-project links"
    },
-   "description": "Link projects, components, records, or a URL. A shared-component change alerts linked projects and does not edit other apps. history undoes a remove (record_type=link).",
+   "description": "Connect things across projects. add: a project uses a shared component (link_type=uses, target_project, target_component), depends on a project, two components are the same, records relate, or a record gets a URL (e.g. an issue). Then a change or decision logged on the shared component (log_work component=<name>) gives each linked project an update todo and a 'changed since' line; FlowState never edits other projects. remove: by link_id or the add fields; kept as removed (manage_history undo, record_type=link). list: read-only. Requires project. Returns the link or {links}.",
    "inputSchema": {
     "properties": {
      "action": {
-      "description": "add, remove, or list.",
+      "description": "The operation, as explained in the tool description.",
       "enum": [
        "add",
        "remove",
@@ -336,16 +794,15 @@
       "type": "string"
      },
      "include_removed": {
-      "default": false,
-      "description": "list: also return removed links.",
+      "description": "list: also removed links.",
       "type": "boolean"
      },
      "item_id": {
-      "description": "Source record id. remove can use this instead of link_id.",
+      "description": "Source: the record's id.",
       "type": "integer"
      },
      "item_type": {
-      "description": "Source record type. Use with item_id.",
+      "description": "Source: a record type, with item_id.",
       "enum": [
        "project",
        "component",
@@ -358,11 +815,11 @@
       "type": "string"
      },
      "link_id": {
-      "description": "remove: link id, or the same fields as add.",
+      "description": "remove: the link's id (from list); or give the add fields instead.",
       "type": "integer"
      },
      "link_type": {
-      "description": "Relation to the target.",
+      "description": "How the source relates to the target: uses, depends_on, part_of, same_as, supersedes, subtask_of, blocks, about, or url.",
       "enum": [
        "uses",
        "depends_on",
@@ -377,37 +834,37 @@
       "type": "string"
      },
      "model": {
-      "description": "Model name if you know it. Never guess.",
+      "description": "Your model name if you know it. Never guess.",
       "type": "string"
      },
      "note": {
-      "description": "add: short note stored on the link.",
+      "description": "add: a short note kept on the link.",
       "type": "string"
      },
      "project": {
-      "description": "Name or id. Required on writes.",
+      "description": "The source project, by name or id. Required.",
       "type": [
        "string",
        "integer"
       ]
      },
      "target_component": {
-      "description": "add: component name in the target project.",
+      "description": "add: a component name in the target project.",
       "type": "string"
      },
      "target_id": {
-      "description": "add: target record id. Use with target_type.",
+      "description": "add: the target record's id.",
       "type": "integer"
      },
      "target_project": {
-      "description": "add: target project name or id.",
+      "description": "add: the target project, by name or id.",
       "type": [
        "string",
        "integer"
       ]
      },
      "target_type": {
-      "description": "add: target record type. Use with target_id.",
+      "description": "add: a target record type, with target_id.",
       "enum": [
        "project",
        "component",
@@ -420,107 +877,51 @@
       "type": "string"
      },
      "url": {
-      "description": "add: https URL stored on the source record.",
+      "description": "add: an https URL to attach to the source record.",
       "type": "string"
      }
     },
     "required": [
-     "action"
+     "action",
+     "project"
     ],
     "type": "object"
    },
-   "name": "link"
+   "meta": {
+    "flowstate/actions": {
+     "additive": [
+      "add",
+      "remove"
+     ],
+     "read": [
+      "list"
+     ]
+    }
+   },
+   "name": "manage_links"
   },
   {
    "annotations": {
     "destructiveHint": true,
+    "idempotentHint": false,
     "openWorldHint": false,
     "readOnlyHint": false,
-    "title": "Review mode (user only)"
+    "title": "Edit history, undo, who did what"
    },
-   "description": "Which new records wait: off, auto_only (default), types, or everything. set ONLY when the user has explicitly asked you, in this chat, to change the review mode; quote user_request; never to get your own writes saved. clear=true removes an override.",
+   "description": "The edit trail of existing records. list: row edits with old and new values. undo: restore a record to before its last edit or deletion (refused if it changed again since). who: who did what (app, model, machine), with filters and pages. Logged changes (kind=change) are records: find them with search. Reads: list, who. list and undo require project. Returns {history}, the undo result, or {rows, page}.",
    "inputSchema": {
     "properties": {
      "action": {
-      "description": "get, or set when the user asks.",
-      "enum": [
-       "get",
-       "set"
-      ],
-      "type": "string"
-     },
-     "clear": {
-      "description": "set: remove this project's override.",
-      "type": "boolean"
-     },
-     "kinds": {
-      "description": "mode=types: which kinds also wait for review.",
-      "items": {
-       "enum": [
-        "decision",
-        "change",
-        "problem",
-        "learning",
-        "todo"
-       ],
-       "type": "string"
-      },
-      "type": "array"
-     },
-     "mode": {
-      "description": "off, auto_only (default), types, or everything.",
-      "enum": [
-       "off",
-       "auto_only",
-       "types",
-       "everything"
-      ],
-      "type": "string"
-     },
-     "model": {
-      "description": "Model name if you know it. Never guess.",
-      "type": "string"
-     },
-     "project": {
-      "description": "One project. Omit to change the whole install.",
-      "type": [
-       "string",
-       "integer"
-      ]
-     },
-     "user_request": {
-      "description": "The user's words in this chat.",
-      "type": "string"
-     }
-    },
-    "required": [
-     "action"
-    ],
-    "type": "object"
-   },
-   "name": "review_mode"
-  },
-  {
-   "annotations": {
-    "destructiveHint": true,
-    "openWorldHint": false,
-    "readOnlyHint": false,
-    "title": "Edit history and undo"
-   },
-   "description": "list reads edits. undo restores the last edit or a deletion, unless it changed again. who lists app, model, and machine. Logged changes are get_recent_changes.",
-   "inputSchema": {
-    "properties": {
-     "action": {
-      "description": "list, undo, or who.",
+      "description": "The operation, as explained in the tool description.",
       "enum": [
        "list",
-       "undo",
-       "who"
+       "who",
+       "undo"
       ],
       "type": "string"
      },
      "by_app": {
-      "description": "who: only this app (part of the name).",
+      "description": "who: only apps whose name contains this.",
       "type": "string"
      },
      "by_machine": {
@@ -528,36 +929,34 @@
       "type": "string"
      },
      "by_model": {
-      "description": "who: only this model (part of the name).",
+      "description": "who: only models whose name contains this.",
       "type": "string"
      },
      "limit": {
-      "default": 20,
-      "description": "list/who: max rows. Default 20, max 100.",
+      "description": "list / who: max rows. Default 20, max 100.",
       "type": "integer"
      },
      "model": {
-      "description": "Model name if you know it. Never guess.",
+      "description": "Your model name if you know it. Never guess.",
       "type": "string"
      },
      "page": {
-      "default": 1,
       "description": "who: page number. Default 1.",
       "type": "integer"
      },
      "project": {
-      "description": "Name or id. Required on writes.",
+      "description": "Project name or id. Required for list and undo; who: omit for all.",
       "type": [
        "string",
        "integer"
       ]
      },
      "record_id": {
-      "description": "Record id. Required for undo.",
+      "description": "list: only this record. undo: required.",
       "type": "integer"
      },
      "record_type": {
-      "description": "Record table. Required for undo.",
+      "description": "list: only this record type. undo: required.",
       "enum": [
        "todo",
        "project",
@@ -589,20 +988,155 @@
     ],
     "type": "object"
    },
-   "name": "history"
+   "meta": {
+    "flowstate/actions": {
+     "destructive": [
+      "undo"
+     ],
+     "read": [
+      "list",
+      "who"
+     ]
+    }
+   },
+   "name": "manage_history"
   },
   {
    "annotations": {
-    "destructiveHint": false,
+    "destructiveHint": true,
+    "idempotentHint": false,
     "openWorldHint": false,
     "readOnlyHint": false,
-    "title": "Suggest clean-ups (to review)"
+    "title": "Projects and components"
    },
-   "description": "Queue duplicate, stale, and misfiled suggestions. Nothing changes until approved; history can undo that. Rejected ideas are not repeated.",
+   "description": "Projects and their components (named parts of a project). list: projects (by status). create: only when the user asks for a new project; names are unique. update: rename, describe, or set status (status=archived retires it; there is no delete). list_components / add_component / update_component: same for components (status=deprecated retires one). log_work creates a missing component by name. Reads: list, list_components. Updates are undone with manage_history. Returns project or component rows.",
    "inputSchema": {
     "properties": {
+     "action": {
+      "description": "The operation, as explained in the tool description.",
+      "enum": [
+       "list",
+       "list_components",
+       "create",
+       "add_component",
+       "update",
+       "update_component"
+      ],
+      "type": "string"
+     },
+     "component_id": {
+      "description": "update_component: the component's id (list_components shows ids).",
+      "type": "integer"
+     },
+     "description": {
+      "description": "create / update / add_component / update_component: what it is.",
+      "type": "string"
+     },
+     "model": {
+      "description": "Your model name if you know it. Never guess.",
+      "type": "string"
+     },
+     "name": {
+      "description": "create / add_component: the new name (required, unique). update / update_component: a new name.",
+      "type": "string"
+     },
+     "parent_component_id": {
+      "description": "add_component: a parent component in the same project.",
+      "type": "integer"
+     },
+     "project": {
+      "description": "update / list_components / add_component / update_component: the project, by name or id.",
+      "type": [
+       "string",
+       "integer"
+      ]
+     },
+     "status": {
+      "description": "list: only this status. update: active, paused, completed or archived. update_component: planning, in_progress, testing, complete or deprecated.",
+      "enum": [
+       "active",
+       "paused",
+       "completed",
+       "archived",
+       "planning",
+       "in_progress",
+       "testing",
+       "complete",
+       "deprecated"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "action"
+    ],
+    "type": "object"
+   },
+   "meta": {
+    "flowstate/actions": {
+     "additive": [
+      "create",
+      "add_component"
+     ],
+     "destructive": [
+      "update",
+      "update_component"
+     ],
+     "read": [
+      "list",
+      "list_components"
+     ]
+    }
+   },
+   "name": "manage_projects"
+  },
+  {
+   "annotations": {
+    "destructiveHint": true,
+    "idempotentHint": false,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Memory upkeep (clean-up, import, fact checks)"
+   },
+   "description": "Memory upkeep; nothing here edits records directly. cleanup: queue likely duplicate, stale and misfiled records as suggestions for the user (rejected ideas are not repeated). import: a memory export (Claude, ChatGPT) or an edited FlowState markdown export into the review queue; secret-like lines skipped. stale: facts (paths, ports, hosts, URLs, config) unchecked for 60+ days (read-only). mark_checked: you re-checked one and it holds. set_source: correct a record's origin. A changed fact is log_work. Requires project. Returns counts and ids, or {facts}.",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "description": "The operation, as explained in the tool description.",
+      "enum": [
+       "stale",
+       "cleanup",
+       "import",
+       "mark_checked",
+       "set_source"
+      ],
+      "type": "string"
+     },
+     "days": {
+      "description": "stale: unchecked for this many days. Default 60.",
+      "type": "integer"
+     },
+     "format": {
+      "description": "import: memory (default; one memory per line or bullet) or flowstate_markdown (an edited `flowstate export-md` file).",
+      "enum": [
+       "memory",
+       "flowstate_markdown"
+      ],
+      "type": "string"
+     },
+     "kind": {
+      "description": "import (memory format): record kind for each memory. Default learning.",
+      "enum": [
+       "learning",
+       "decision",
+       "todo",
+       "problem",
+       "change"
+      ],
+      "type": "string"
+     },
      "kinds": {
-      "description": "Which checks to run. Omit for all three.",
+      "description": "cleanup: which checks. Omit for all three.",
       "items": {
        "enum": [
         "duplicate",
@@ -613,240 +1147,31 @@
       },
       "type": "array"
      },
-     "model": {
-      "description": "Model name if you know it. Never guess.",
-      "type": "string"
-     },
-     "project": {
-      "description": "Name or id. Required on writes.",
-      "type": [
-       "string",
-       "integer"
-      ]
-     }
-    },
-    "type": "object"
-   },
-   "name": "cleanup_suggest"
-  },
-  {
-   "annotations": {
-    "destructiveHint": false,
-    "openWorldHint": false,
-    "readOnlyHint": false,
-    "title": "Import memories to review"
-   },
-   "description": "Copy memories into the review queue; nothing is saved until approved. Secret-like lines are skipped. One note is log_work.",
-   "inputSchema": {
-    "properties": {
-     "format": {
-      "default": "memory",
-      "description": "memory (default) or flowstate_markdown (export-md).",
-      "enum": [
-       "memory",
-       "flowstate_markdown"
-      ],
-      "type": "string"
-     },
-     "kind": {
-      "default": "learning",
-      "description": "Record kind for a memory import. Default learning.",
-      "enum": [
-       "learning",
-       "decision",
-       "todo",
-       "problem",
-       "change"
-      ],
-      "type": "string"
-     },
-     "model": {
-      "description": "Model name if you know it. Never guess.",
-      "type": "string"
-     },
-     "project": {
-      "description": "Name or id. Required on writes.",
-      "type": [
-       "string",
-       "integer"
-      ]
-     },
-     "source": {
-      "description": "Where it came from, such as Claude or ChatGPT.",
-      "type": "string"
-     },
-     "text": {
-      "description": "File contents. Max 200,000 characters.",
-      "type": "string"
-     }
-    },
-    "required": [
-     "text"
-    ],
-    "type": "object"
-   },
-   "name": "import_memory"
-  },
-  {
-   "annotations": {
-    "destructiveHint": true,
-    "openWorldHint": false,
-    "readOnlyHint": false,
-    "title": "Hard rules"
-   },
-   "description": "Hard rules, shown first on every brief. add one sentence (max 300; 25 rules, 2,000 total) when the user states one. remove only when they ask; quote them.",
-   "inputSchema": {
-    "properties": {
-     "action": {
-      "description": "add, list, or remove.",
-      "enum": [
-       "add",
-       "list",
-       "remove"
-      ],
-      "type": "string"
-     },
-     "include_removed": {
-      "default": false,
-      "description": "list: include removed rules.",
-      "type": "boolean"
-     },
-     "model": {
-      "description": "Model name if you know it. Never guess.",
-      "type": "string"
-     },
-     "project": {
-      "description": "Name or id. Required on writes.",
-      "type": [
-       "string",
-       "integer"
-      ]
-     },
-     "rule": {
-      "description": "add: the rule, one short sentence.",
-      "type": "string"
-     },
-     "rule_id": {
-      "description": "remove: rule id (R<id> in the brief).",
-      "type": "integer"
-     },
-     "user_request": {
-      "description": "The user's words in this chat.",
-      "type": "string"
-     }
-    },
-    "required": [
-     "action"
-    ],
-    "type": "object"
-   },
-   "name": "rules"
-  },
-  {
-   "annotations": {
-    "destructiveHint": true,
-    "openWorldHint": false,
-    "readOnlyHint": false,
-    "title": "Handoff notes"
-   },
-   "description": "Leave a note when you stop mid-task (where_i_was, next_step); the next start_here shows it. pickup hides it. Not a session summary.",
-   "inputSchema": {
-    "properties": {
-     "action": {
-      "description": "leave, list, or pickup.",
-      "enum": [
-       "leave",
-       "list",
-       "pickup"
-      ],
-      "type": "string"
-     },
-     "handoff_id": {
-      "description": "pickup: note id (H<id> in the brief).",
-      "type": "integer"
-     },
-     "include_picked_up": {
-      "default": false,
-      "description": "list: include notes already picked up.",
-      "type": "boolean"
-     },
      "limit": {
-      "default": 20,
-      "description": "list: max notes. Default 20.",
-      "type": "integer"
-     },
-     "model": {
-      "description": "Model name if you know it. Never guess.",
-      "type": "string"
-     },
-     "next_step": {
-      "description": "leave: the next step. Max 500 characters.",
-      "type": "string"
-     },
-     "project": {
-      "description": "Name or id. Required on writes.",
-      "type": [
-       "string",
-       "integer"
-      ]
-     },
-     "where_i_was": {
-      "description": "leave: progress so far. Max 1,000 characters.",
-      "type": "string"
-     }
-    },
-    "required": [
-     "action"
-    ],
-    "type": "object"
-   },
-   "name": "handoff"
-  },
-  {
-   "annotations": {
-    "destructiveHint": true,
-    "openWorldHint": false,
-    "readOnlyHint": false,
-    "title": "Verify facts and sources"
-   },
-   "description": "stale lists paths, ports, hosts, URLs, and config unchecked for 60+ days. mark records a re-check. A changed fact is log_work.",
-   "inputSchema": {
-    "properties": {
-     "action": {
-      "description": "stale, mark (you re-checked one), or source.",
-      "enum": [
-       "stale",
-       "mark",
-       "source"
-      ],
-      "type": "string"
-     },
-     "days": {
-      "description": "stale: age in days. Default 60.",
-      "type": "integer"
-     },
-     "limit": {
-      "default": 20,
       "description": "stale: max facts. Default 20.",
       "type": "integer"
      },
      "model": {
-      "description": "Model name if you know it. Never guess.",
+      "description": "Your model name if you know it. Never guess.",
+      "type": "string"
+     },
+     "origin": {
+      "description": "import: where it came from, such as Claude or ChatGPT.",
       "type": "string"
      },
      "project": {
-      "description": "Name or id. Required on writes.",
+      "description": "Project name or id. Required.",
       "type": [
        "string",
        "integer"
       ]
      },
      "record_id": {
-      "description": "mark/source: record id.",
+      "description": "mark_checked / set_source: the record's id.",
       "type": "integer"
      },
      "record_type": {
-      "description": "mark/source: record type.",
+      "description": "mark_checked / set_source: the record's type.",
       "enum": [
        "todo",
        "decision",
@@ -859,1402 +1184,41 @@
       "type": "string"
      },
      "source": {
-      "description": "Required for source. Optional when you mark.",
+      "description": "set_source (required) / mark_checked (optional): user_stated, ai_inferred or from_code.",
       "enum": [
        "user_stated",
        "ai_inferred",
        "from_code"
       ],
       "type": "string"
-     }
-    },
-    "required": [
-     "action"
-    ],
-    "type": "object"
-   },
-   "name": "verify"
-  },
-  {
-   "annotations": {
-    "idempotentHint": true,
-    "openWorldHint": false,
-    "readOnlyHint": true,
-    "title": "Ask a question"
-   },
-   "description": "Answer from stored records (read-only), with ids. Meaning search if a local model is installed, else keywords. Says when nothing matches; never guesses.",
-   "inputSchema": {
-    "properties": {
-     "limit": {
-      "default": 5,
-      "description": "Max records to quote. Default 5.",
-      "type": "integer"
      },
-     "project": {
-      "description": "Name or id. Omit to search every project.",
-      "type": [
-       "string",
-       "integer"
-      ]
-     },
-     "question": {
-      "description": "The question in plain words.",
+     "text": {
+      "description": "import: the file contents. Max 200,000 chars.",
       "type": "string"
      }
     },
     "required": [
-     "question"
+     "action",
+     "project"
     ],
     "type": "object"
    },
-   "name": "ask"
-  },
-  {
-   "annotations": {
-    "idempotentHint": true,
-    "openWorldHint": false,
-    "readOnlyHint": true,
-    "title": "List projects"
+   "meta": {
+    "flowstate/actions": {
+     "additive": [
+      "cleanup",
+      "import",
+      "mark_checked"
+     ],
+     "destructive": [
+      "set_source"
+     ],
+     "read": [
+      "stale"
+     ]
+    }
    },
-   "description": "List projects, newest first (read-only). Use start_here to open a brief. Returns id, name, description, status, and timestamps.",
-   "inputSchema": {
-    "properties": {
-     "status": {
-      "description": "Only this status. Omit for all.",
-      "enum": [
-       "active",
-       "paused",
-       "completed",
-       "archived"
-      ],
-      "type": "string"
-     }
-    },
-    "type": "object"
-   },
-   "name": "list_projects"
-  },
-  {
-   "annotations": {
-    "destructiveHint": false,
-    "openWorldHint": false,
-    "readOnlyHint": false,
-    "title": "Create project"
-   },
-   "description": "Create a project when the user asks for one. name must be unique. Duplicates are rejected. Open it with start_here.",
-   "inputSchema": {
-    "properties": {
-     "description": {
-      "description": "Longer description. Omit to leave empty.",
-      "type": "string"
-     },
-     "model": {
-      "description": "Model name if you know it. Never guess.",
-      "type": "string"
-     },
-     "name": {
-      "description": "Unique project name.",
-      "type": "string"
-     }
-    },
-    "required": [
-     "name"
-    ],
-    "type": "object"
-   },
-   "name": "create_project"
-  },
-  {
-   "annotations": {
-    "destructiveHint": true,
-    "openWorldHint": false,
-    "readOnlyHint": false,
-    "title": "Update project"
-   },
-   "description": "Change a project's name, description, or status. history undo restores the row.",
-   "inputSchema": {
-    "properties": {
-     "description": {
-      "description": "New description. Omit to keep the current one.",
-      "type": "string"
-     },
-     "model": {
-      "description": "Model name if you know it. Never guess.",
-      "type": "string"
-     },
-     "name": {
-      "description": "New unique name. Omit to keep the current one.",
-      "type": "string"
-     },
-     "project": {
-      "description": "Name or id. Required on writes.",
-      "type": [
-       "string",
-       "integer"
-      ]
-     },
-     "project_id": {
-      "description": "Project id to update.",
-      "type": "integer"
-     },
-     "status": {
-      "description": "New status. Omit to keep the current one.",
-      "enum": [
-       "active",
-       "paused",
-       "completed",
-       "archived"
-      ],
-      "type": "string"
-     }
-    },
-    "required": [],
-    "type": "object"
-   },
-   "name": "update_project"
-  },
-  {
-   "annotations": {
-    "idempotentHint": true,
-    "openWorldHint": false,
-    "readOnlyHint": true,
-    "title": "Project context"
-   },
-   "description": "Raw context by exact name. Prefer start_here. lean=true (default) is short; false includes the working records.",
-   "inputSchema": {
-    "properties": {
-     "hours": {
-      "default": 48,
-      "description": "Hours of changes when lean is false.",
-      "type": "integer"
-     },
-     "lean": {
-      "default": true,
-      "description": "Counts and titles (default), or full objects.",
-      "type": "boolean"
-     },
-     "project_name": {
-      "description": "Exact project name. Required, not an id.",
-      "type": "string"
-     }
-    },
-    "required": [
-     "project_name"
-    ],
-    "type": "object"
-   },
-   "name": "get_context"
-  },
-  {
-   "annotations": {
-    "destructiveHint": false,
-    "openWorldHint": false,
-    "readOnlyHint": false,
-    "title": "Create component"
-   },
-   "description": "Add a named part of a project. name is unique in it. A change is log_work(kind=change).",
-   "inputSchema": {
-    "properties": {
-     "description": {
-      "description": "What this component is.",
-      "type": "string"
-     },
-     "model": {
-      "description": "Model name if you know it. Never guess.",
-      "type": "string"
-     },
-     "name": {
-      "description": "Name, unique in the project.",
-      "type": "string"
-     },
-     "parent_component_id": {
-      "description": "Parent component in the same project.",
-      "type": "integer"
-     },
-     "project": {
-      "description": "Name or id. Required on writes.",
-      "type": [
-       "string",
-       "integer"
-      ]
-     },
-     "project_id": {
-      "description": "Owning project id, or pass project=.",
-      "type": "integer"
-     }
-    },
-    "required": [
-     "name"
-    ],
-    "type": "object"
-   },
-   "name": "create_component"
-  },
-  {
-   "annotations": {
-    "idempotentHint": true,
-    "openWorldHint": false,
-    "readOnlyHint": true,
-    "title": "List components"
-   },
-   "description": "List one project's components (read-only). For the working brief, use start_here.",
-   "inputSchema": {
-    "properties": {
-     "project_id": {
-      "description": "Project id whose components to list.",
-      "type": "integer"
-     }
-    },
-    "required": [
-     "project_id"
-    ],
-    "type": "object"
-   },
-   "name": "list_components"
-  },
-  {
-   "annotations": {
-    "destructiveHint": true,
-    "openWorldHint": false,
-    "readOnlyHint": false,
-    "title": "Update component"
-   },
-   "description": "Change a component's name, description, or status. history undo restores the row.",
-   "inputSchema": {
-    "properties": {
-     "component_id": {
-      "description": "Component id.",
-      "type": "integer"
-     },
-     "description": {
-      "description": "New description. Omit to keep.",
-      "type": "string"
-     },
-     "model": {
-      "description": "Model name if you know it. Never guess.",
-      "type": "string"
-     },
-     "name": {
-      "description": "New name, unique in the project. Omit to keep.",
-      "type": "string"
-     },
-     "project": {
-      "description": "Name or id. Required on writes.",
-      "type": [
-       "string",
-       "integer"
-      ]
-     },
-     "status": {
-      "description": "New status. Omit to keep the current one.",
-      "enum": [
-       "planning",
-       "in_progress",
-       "testing",
-       "complete",
-       "deprecated"
-      ],
-      "type": "string"
-     }
-    },
-    "required": [
-     "component_id"
-    ],
-    "type": "object"
-   },
-   "name": "update_component"
-  },
-  {
-   "annotations": {
-    "destructiveHint": false,
-    "openWorldHint": false,
-    "readOnlyHint": false,
-    "title": "Log learning"
-   },
-   "description": "Save a lesson. Prefer log_work(kind=learning). May be queued. Secrets are refused. Undo does not remove it.",
-   "inputSchema": {
-    "properties": {
-     "category": {
-      "description": "Learning category. Omit for none.",
-      "enum": [
-       "pattern",
-       "gotcha",
-       "best_practice",
-       "tool_tip",
-       "architecture",
-       "performance",
-       "security",
-       "other"
-      ],
-      "type": "string"
-     },
-     "component_id": {
-      "description": "Component this lesson is about.",
-      "type": "integer"
-     },
-     "context": {
-      "description": "When this lesson applies.",
-      "type": "string"
-     },
-     "insight": {
-      "description": "The lesson, one or two sentences.",
-      "type": "string"
-     },
-     "model": {
-      "description": "Model name if you know it. Never guess.",
-      "type": "string"
-     },
-     "project": {
-      "description": "Name or id. Required on writes.",
-      "type": [
-       "string",
-       "integer"
-      ]
-     },
-     "project_id": {
-      "description": "Project id, or pass project=.",
-      "type": "integer"
-     },
-     "source": {
-      "default": "experience",
-      "description": "Where the lesson came from. Default experience.",
-      "enum": [
-       "experience",
-       "documentation",
-       "conversation",
-       "error",
-       "research"
-      ],
-      "type": "string"
-     }
-    },
-    "required": [
-     "insight"
-    ],
-    "type": "object"
-   },
-   "name": "log_learning"
-  },
-  {
-   "annotations": {
-    "idempotentHint": true,
-    "openWorldHint": false,
-    "readOnlyHint": true,
-    "title": "Get learnings"
-   },
-   "description": "List lessons (read-only). compact=true shortens rows. For a question use ask; for every record type use search.",
-   "inputSchema": {
-    "properties": {
-     "category": {
-      "description": "Only this category.",
-      "enum": [
-       "pattern",
-       "gotcha",
-       "best_practice",
-       "tool_tip",
-       "architecture",
-       "performance",
-       "security",
-       "other"
-      ],
-      "type": "string"
-     },
-     "compact": {
-      "default": false,
-      "description": "Shorter rows: drop empties and timestamps.",
-      "type": "boolean"
-     },
-     "project_id": {
-      "description": "Only this project. Omit for all.",
-      "type": "integer"
-     }
-    },
-    "type": "object"
-   },
-   "name": "get_learnings"
-  },
-  {
-   "annotations": {
-    "destructiveHint": false,
-    "openWorldHint": false,
-    "readOnlyHint": false,
-    "title": "Log change"
-   },
-   "description": "Append a change on a component. Prefer log_work(kind=change). Omit component_id for General. Not undone by history.",
-   "inputSchema": {
-    "properties": {
-     "change_type": {
-      "description": "Kind of change. Omit to store none.",
-      "enum": [
-       "config",
-       "code",
-       "architecture",
-       "dependency",
-       "documentation",
-       "other"
-      ],
-      "type": "string"
-     },
-     "component_id": {
-      "description": "Component that changed. Omit for General.",
-      "type": "integer"
-     },
-     "field_name": {
-      "description": "Short label of what changed.",
-      "type": "string"
-     },
-     "model": {
-      "description": "Model name if you know it. Never guess.",
-      "type": "string"
-     },
-     "new_value": {
-      "description": "New value, as text.",
-      "type": "string"
-     },
-     "old_value": {
-      "description": "Previous value, as text.",
-      "type": "string"
-     },
-     "project": {
-      "description": "Name or id. Required on writes.",
-      "type": [
-       "string",
-       "integer"
-      ]
-     },
-     "reason": {
-      "description": "Why it changed.",
-      "type": "string"
-     }
-    },
-    "required": [
-     "field_name"
-    ],
-    "type": "object"
-   },
-   "name": "log_change"
-  },
-  {
-   "annotations": {
-    "idempotentHint": true,
-    "openWorldHint": false,
-    "readOnlyHint": true,
-    "title": "Recent changes"
-   },
-   "description": "Logged changes from the last hours (default 24), read-only. Not row-edit history; for old/new values or undo, use history.",
-   "inputSchema": {
-    "properties": {
-     "compact": {
-      "default": false,
-      "description": "Shorter rows: drop empties and timestamps.",
-      "type": "boolean"
-     },
-     "component_id": {
-      "description": "Only this component. Omit for all.",
-      "type": "integer"
-     },
-     "hours": {
-      "default": 24,
-      "description": "How far back, in hours. Default 24.",
-      "type": "integer"
-     },
-     "project_id": {
-      "description": "Only this project. Omit for all.",
-      "type": "integer"
-     }
-    },
-    "type": "object"
-   },
-   "name": "get_recent_changes"
-  },
-  {
-   "annotations": {
-    "idempotentHint": true,
-    "openWorldHint": false,
-    "readOnlyHint": true,
-    "title": "Search"
-   },
-   "description": "Find records by words. Word endings match. auto adds meaning if a local model exists. For a quoted answer, use ask.",
-   "inputSchema": {
-    "properties": {
-     "content_types": {
-      "description": "todo, decision, change, learning, problem, or solution.",
-      "items": {
-       "type": "string"
-      },
-      "type": "array"
-     },
-     "limit": {
-      "default": 10,
-      "description": "Max results. Default 10, max 50.",
-      "type": "integer"
-     },
-     "mode": {
-      "default": "auto",
-      "description": "auto uses meaning when a local model exists; else keywords.",
-      "enum": [
-       "auto",
-       "keyword",
-       "meaning"
-      ],
-      "type": "string"
-     },
-     "project": {
-      "description": "Only this project. Omit to search all.",
-      "type": [
-       "string",
-       "integer"
-      ]
-     },
-     "project_id": {
-      "description": "Only this project id. A matching name wins.",
-      "type": "integer"
-     },
-     "query": {
-      "description": "Words to match.",
-      "type": "string"
-     }
-    },
-    "required": [
-     "query"
-    ],
-    "type": "object"
-   },
-   "name": "search"
-  },
-  {
-   "annotations": {
-    "destructiveHint": true,
-    "openWorldHint": false,
-    "readOnlyHint": false,
-    "title": "Problems"
-   },
-   "description": "Bugs and blockers. Prefer log_work(kind=problem) to open one. undo reopens a solve. get_tree reads attempts.",
-   "inputSchema": {
-    "properties": {
-     "action": {
-      "description": "log, list, solve, or get_tree.",
-      "enum": [
-       "log",
-       "list",
-       "solve",
-       "get_tree"
-      ],
-      "type": "string"
-     },
-     "code_snippet": {
-      "description": "solve: the fix as text. Optional. No secrets.",
-      "type": "string"
-     },
-     "compact": {
-      "default": false,
-      "description": "Shorter rows: drop empties and timestamps.",
-      "type": "boolean"
-     },
-     "component_id": {
-      "description": "log: component (General if omitted). list: filter.",
-      "type": "integer"
-     },
-     "description": {
-      "description": "log: what is wrong.",
-      "type": "string"
-     },
-     "key_insight": {
-      "description": "solve: the lesson.",
-      "type": "string"
-     },
-     "model": {
-      "description": "Model name if you know it. Never guess.",
-      "type": "string"
-     },
-     "problem_id": {
-      "description": "solve/get_tree: problem id. Required.",
-      "type": "integer"
-     },
-     "project": {
-      "description": "Name or id. Required on writes.",
-      "type": [
-       "string",
-       "integer"
-      ]
-     },
-     "project_id": {
-      "description": "list: only this project. Omit for all.",
-      "type": "integer"
-     },
-     "severity": {
-      "default": "normal",
-      "description": "log: severity. high and medium are older names.",
-      "enum": [
-       "critical",
-       "urgent",
-       "high",
-       "normal",
-       "medium",
-       "low"
-      ],
-      "type": "string"
-     },
-     "summary": {
-      "description": "solve: what fixed it. Required for solve.",
-      "type": "string"
-     },
-     "title": {
-      "description": "log: short title. Required for log.",
-      "type": "string"
-     },
-     "winning_attempt_id": {
-      "description": "solve: attempt id that worked.",
-      "type": "integer"
-     }
-    },
-    "required": [
-     "action"
-    ],
-    "type": "object"
-   },
-   "name": "problem"
-  },
-  {
-   "annotations": {
-    "destructiveHint": true,
-    "openWorldHint": false,
-    "readOnlyHint": false,
-    "title": "Solution attempts"
-   },
-   "description": "Tries against a problem. log adds one; outcome sets how it ended and can be undone. Close it with problem action=solve.",
-   "inputSchema": {
-    "properties": {
-     "action": {
-      "description": "log a try, or set how it ended.",
-      "enum": [
-       "log",
-       "outcome"
-      ],
-      "type": "string"
-     },
-     "attempt_id": {
-      "description": "outcome: attempt id. Required.",
-      "type": "integer"
-     },
-     "confidence": {
-      "default": "attempted",
-      "description": "outcome: how sure. Default attempted.",
-      "enum": [
-       "attempted",
-       "worked_once",
-       "verified",
-       "proven",
-       "deprecated"
-      ],
-      "type": "string"
-     },
-     "description": {
-      "description": "log: what was tried. Required for log.",
-      "type": "string"
-     },
-     "model": {
-      "description": "Model name if you know it. Never guess.",
-      "type": "string"
-     },
-     "notes": {
-      "description": "outcome: what was learned.",
-      "type": "string"
-     },
-     "outcome": {
-      "description": "How the try ended. Required for outcome.",
-      "enum": [
-       "success",
-       "failure",
-       "partial",
-       "abandoned"
-      ],
-      "type": "string"
-     },
-     "parent_attempt_id": {
-      "description": "log: earlier attempt this branches from.",
-      "type": "integer"
-     },
-     "problem_id": {
-      "description": "log: problem this try is for. Required.",
-      "type": "integer"
-     },
-     "project": {
-      "description": "Name or id. Required on writes.",
-      "type": [
-       "string",
-       "integer"
-      ]
-     }
-    },
-    "required": [
-     "action"
-    ],
-    "type": "object"
-   },
-   "name": "attempt"
-  },
-  {
-   "annotations": {
-    "destructiveHint": true,
-    "openWorldHint": false,
-    "readOnlyHint": false,
-    "title": "Todos"
-   },
-   "description": "Todos. Prefer log_work(kind=todo) to add. Undo restores an update, not a new todo (set done or cancelled). next is the top unblocked ones. requires project.",
-   "inputSchema": {
-    "properties": {
-     "action": {
-      "description": "Which operation.",
-      "enum": [
-       "add",
-       "update",
-       "list",
-       "next",
-       "block",
-       "unblock"
-      ],
-      "type": "string"
-     },
-     "blocked_by": {
-      "description": "Ids it waits on. Omit both fields to clear all.",
-      "items": {
-       "type": "integer"
-      },
-      "type": "array"
-     },
-     "blocked_by_problem": {
-      "description": "add/block/unblock: problem id it waits on.",
-      "type": "integer"
-     },
-     "compact": {
-      "default": false,
-      "description": "Shorter rows.",
-      "type": "boolean"
-     },
-     "component_id": {
-      "description": "add: component this todo is about.",
-      "type": "integer"
-     },
-     "description": {
-      "description": "add/update: longer detail.",
-      "type": "string"
-     },
-     "due_date": {
-      "description": "add: due date, preferably ISO.",
-      "type": "string"
-     },
-     "limit": {
-      "default": 5,
-      "description": "next: how many ready todos. Default 5.",
-      "type": "integer"
-     },
-     "min_priority": {
-      "description": "list: this level or more urgent.",
-      "enum": [
-       "critical",
-       "urgent",
-       "high",
-       "normal",
-       "medium",
-       "low"
-      ],
-      "type": "string"
-     },
-     "model": {
-      "description": "Model name if you know it. Never guess.",
-      "type": "string"
-     },
-     "parent_todo_id": {
-      "description": "add: parent todo id, in the same project.",
-      "type": "integer"
-     },
-     "priority": {
-      "default": "normal",
-      "description": "Priority. high and medium are older names.",
-      "enum": [
-       "critical",
-       "urgent",
-       "high",
-       "normal",
-       "medium",
-       "low"
-      ],
-      "type": "string"
-     },
-     "project": {
-      "description": "Name or id. Required on writes.",
-      "type": [
-       "string",
-       "integer"
-      ]
-     },
-     "project_id": {
-      "description": "Project id or name. Required for add, list, and next.",
-      "type": "integer"
-     },
-     "sort": {
-      "default": "priority",
-      "description": "list: sort order. Default priority.",
-      "enum": [
-       "priority",
-       "due",
-       "newest"
-      ],
-      "type": "string"
-     },
-     "status": {
-      "description": "update: new status. list: only this status.",
-      "enum": [
-       "pending",
-       "in_progress",
-       "blocked",
-       "done",
-       "cancelled"
-      ],
-      "type": "string"
-     },
-     "title": {
-      "description": "add: title, required. update: new title.",
-      "type": "string"
-     },
-     "todo_id": {
-      "description": "Todo id for update, block, or unblock. Required.",
-      "type": "integer"
-     }
-    },
-    "required": [
-     "action"
-    ],
-    "type": "object"
-   },
-   "name": "todo"
-  },
-  {
-   "annotations": {
-    "destructiveHint": true,
-    "openWorldHint": false,
-    "readOnlyHint": false,
-    "title": "Sessions"
-   },
-   "description": "Sessions open and close on their own. start reuses the open one or creates one. end stops it (not undone).",
-   "inputSchema": {
-    "properties": {
-     "action": {
-      "description": "Which operation.",
-      "enum": [
-       "start",
-       "end",
-       "current",
-       "log_conversation",
-       "list_conversations",
-       "list_sessions"
-      ],
-      "type": "string"
-     },
-     "assistant_response_summary": {
-      "description": "log_conversation: what was answered.",
-      "type": "string"
-     },
-     "focus_component_id": {
-      "description": "start: component in focus. Ignored if a session is open.",
-      "type": "integer"
-     },
-     "focus_problem_id": {
-      "description": "start: problem in focus. Ignored if a session is open.",
-      "type": "integer"
-     },
-     "key_decisions": {
-      "description": "Decision lines. Review mode may queue the first.",
-      "items": {
-       "type": "string"
-      },
-      "type": "array"
-     },
-     "limit": {
-      "default": 20,
-      "description": "Max rows for a list. Default 20.",
-      "type": "integer"
-     },
-     "model": {
-      "description": "Model name if you know it. Never guess.",
-      "type": "string"
-     },
-     "outcomes": {
-      "description": "end: short outcome lines.",
-      "items": {
-       "type": "string"
-      },
-      "type": "array"
-     },
-     "project": {
-      "description": "Name or id. Required on writes.",
-      "type": [
-       "string",
-       "integer"
-      ]
-     },
-     "project_id": {
-      "description": "Project id or project=. Optional for current.",
-      "type": "integer"
-     },
-     "session_id": {
-      "description": "Session id. end requires it; log uses the open session.",
-      "type": "integer"
-     },
-     "summary": {
-      "description": "end: what was accomplished.",
-      "type": "string"
-     },
-     "user_prompt_summary": {
-      "description": "log_conversation: what was asked. Required.",
-      "type": "string"
-     }
-    },
-    "required": [
-     "action"
-    ],
-    "type": "object"
-   },
-   "name": "session"
-  },
-  {
-   "annotations": {
-    "destructiveHint": true,
-    "openWorldHint": false,
-    "readOnlyHint": false,
-    "title": "File attachments"
-   },
-   "description": "Attach, list, remove, or search local files. Remote attach is refused. Copies into the bundle by default. delete_file removes that copy for good.",
-   "inputSchema": {
-    "properties": {
-     "action": {
-      "description": "attach, list, remove, or search.",
-      "enum": [
-       "attach",
-       "list",
-       "remove",
-       "search"
-      ],
-      "type": "string"
-     },
-     "attachment_id": {
-      "description": "remove: attachment id. Required.",
-      "type": "integer"
-     },
-     "component_id": {
-      "description": "Component to attach to, or a list filter.",
-      "type": "integer"
-     },
-     "copy_to_bundle": {
-      "default": true,
-      "description": "Copy into the bundle (default), or store the path only.",
-      "type": "boolean"
-     },
-     "delete_file": {
-      "default": false,
-      "description": "Also delete the bundle copy. Undo cannot restore it.",
-      "type": "boolean"
-     },
-     "file_path": {
-      "description": "attach: path on this computer. Required.",
-      "type": "string"
-     },
-     "file_types": {
-      "description": "search: extensions without a dot, such as md or py.",
-      "items": {
-       "type": "string"
-      },
-      "type": "array"
-     },
-     "limit": {
-      "default": 10,
-      "description": "search: max hits. Default 10.",
-      "type": "integer"
-     },
-     "model": {
-      "description": "Model name if you know it. Never guess.",
-      "type": "string"
-     },
-     "problem_id": {
-      "description": "Problem to attach to, or a list filter.",
-      "type": "integer"
-     },
-     "project": {
-      "description": "Name or id. Required on writes.",
-      "type": [
-       "string",
-       "integer"
-      ]
-     },
-     "project_id": {
-      "description": "attach: project id or project=. list/search may filter.",
-      "type": "integer"
-     },
-     "query": {
-      "description": "search: text in the index. Required for search.",
-      "type": "string"
-     },
-     "tags": {
-      "description": "attach: tags, stored comma-separated.",
-      "items": {
-       "type": "string"
-      },
-      "type": "array"
-     },
-     "user_description": {
-      "description": "attach: why this file matters.",
-      "type": "string"
-     }
-    },
-    "required": [
-     "action"
-    ],
-    "type": "object"
-   },
-   "name": "file"
-  },
-  {
-   "annotations": {
-    "destructiveHint": true,
-    "openWorldHint": true,
-    "readOnlyHint": false,
-    "title": "Data folder git"
-   },
-   "description": "Git for the FlowState data folder, not the user's repo. Remote clients are refused. sync may push (not undone).",
-   "inputSchema": {
-    "properties": {
-     "action": {
-      "description": "Which operation.",
-      "enum": [
-       "init",
-       "status",
-       "sync",
-       "set_remote",
-       "clone",
-       "history"
-      ],
-      "type": "string"
-     },
-     "commit_message": {
-      "description": "sync: commit subject. Omit for an automatic one.",
-      "type": "string"
-     },
-     "limit": {
-      "default": 20,
-      "description": "history: max commits. Default 20.",
-      "type": "integer"
-     },
-     "local_path": {
-      "description": "Clone directory. Must be empty. Default: data folder.",
-      "type": "string"
-     },
-     "remote_url": {
-      "description": "Git URL for set_remote or clone. Required.",
-      "type": "string"
-     }
-    },
-    "required": [
-     "action"
-    ],
-    "type": "object"
-   },
-   "name": "git"
-  },
-  {
-   "annotations": {
-    "destructiveHint": true,
-    "openWorldHint": false,
-    "readOnlyHint": false,
-    "title": "Project variables"
-   },
-   "description": "Non-secret settings (hosts, ports). Secrets are refused. is_secret does not hide the value. update and delete can be undone.",
-   "inputSchema": {
-    "properties": {
-     "action": {
-      "description": "create, list, update, or delete.",
-      "enum": [
-       "create",
-       "list",
-       "update",
-       "delete"
-      ],
-      "type": "string"
-     },
-     "category": {
-      "default": "custom",
-      "description": "Category, default custom. Not a place for secrets.",
-      "enum": [
-       "server",
-       "credentials",
-       "config",
-       "environment",
-       "endpoint",
-       "custom"
-      ],
-      "type": "string"
-     },
-     "description": {
-      "description": "create/update: what it is for.",
-      "type": "string"
-     },
-     "is_secret": {
-      "default": false,
-      "description": "Flag as sensitive. list still returns the value.",
-      "type": "boolean"
-     },
-     "model": {
-      "description": "Model name if you know it. Never guess.",
-      "type": "string"
-     },
-     "name": {
-      "description": "Name, unique per project and category. Required on create.",
-      "type": "string"
-     },
-     "project": {
-      "description": "Name or id. Required on writes.",
-      "type": [
-       "string",
-       "integer"
-      ]
-     },
-     "project_id": {
-      "description": "Project id or project=. Required for create and list.",
-      "type": "integer"
-     },
-     "value": {
-      "description": "The setting as text. Not for secrets.",
-      "type": "string"
-     },
-     "variable_id": {
-      "description": "update/delete: variable id. Required.",
-      "type": "integer"
-     }
-    },
-    "required": [
-     "action"
-    ],
-    "type": "object"
-   },
-   "name": "variable"
-  },
-  {
-   "annotations": {
-    "destructiveHint": true,
-    "openWorldHint": false,
-    "readOnlyHint": false,
-    "title": "Project methods"
-   },
-   "description": "A reusable procedure (prefer log_work for one decision). update replaces steps. update and delete can be undone.",
-   "inputSchema": {
-    "properties": {
-     "action": {
-      "description": "create, list, update, or delete.",
-      "enum": [
-       "create",
-       "list",
-       "update",
-       "delete"
-      ],
-      "type": "string"
-     },
-     "category": {
-      "description": "Category. list: filter.",
-      "enum": [
-       "auth",
-       "deployment",
-       "testing",
-       "architecture",
-       "workflow",
-       "convention",
-       "api",
-       "security",
-       "other"
-      ],
-      "type": "string"
-     },
-     "code_example": {
-      "description": "Sample code. Do not include secrets.",
-      "type": "string"
-     },
-     "description": {
-      "description": "What the procedure is. Required on create.",
-      "type": "string"
-     },
-     "method_id": {
-      "description": "update/delete: method id. Required.",
-      "type": "integer"
-     },
-     "model": {
-      "description": "Model name if you know it. Never guess.",
-      "type": "string"
-     },
-     "name": {
-      "description": "Name, unique in the project. Required on create.",
-      "type": "string"
-     },
-     "project": {
-      "description": "Name or id. Required on writes.",
-      "type": [
-       "string",
-       "integer"
-      ]
-     },
-     "project_id": {
-      "description": "Project id or project=. Required for create and list.",
-      "type": "integer"
-     },
-     "related_component_id": {
-      "description": "Component this procedure belongs to.",
-      "type": "integer"
-     },
-     "steps": {
-      "description": "Ordered steps. update replaces the whole list.",
-      "items": {
-       "type": "string"
-      },
-      "type": "array"
-     }
-    },
-    "required": [
-     "action"
-    ],
-    "type": "object"
-   },
-   "name": "method"
-  },
-  {
-   "annotations": {
-    "destructiveHint": true,
-    "openWorldHint": false,
-    "readOnlyHint": false,
-    "title": "Skills and state"
-   },
-   "description": "Skills, checkpoints, and metrics for this app. Use log_work for project memory. confirm_skill may promote after 3 sessions at rate 0.8. Undo does not delete a new row.",
-   "inputSchema": {
-    "properties": {
-     "action": {
-      "description": "Which operation.",
-      "enum": [
-       "learn_skill",
-       "get_skills",
-       "confirm_skill",
-       "save_state",
-       "get_state",
-       "log_metric",
-       "get_metrics"
-      ],
-      "type": "string"
-     },
-     "action_taken": {
-      "description": "log_metric: what was done.",
-      "type": "string"
-     },
-     "active_component_ids": {
-      "description": "save_state: component ids in progress.",
-      "items": {
-       "type": "integer"
-      },
-      "type": "array"
-     },
-     "active_problem_ids": {
-      "description": "save_state: problem ids in progress.",
-      "items": {
-       "type": "integer"
-      },
-      "type": "array"
-     },
-     "context": {
-      "description": "When a skill applies, or where a metric was scored.",
-      "type": "string"
-     },
-     "effectiveness_score": {
-      "description": "log_metric: score from 0.0 to 1.0.",
-      "type": "number"
-     },
-     "focus_summary": {
-      "description": "save_state: what the session was doing.",
-      "type": "string"
-     },
-     "key_facts": {
-      "description": "save_state: facts to keep.",
-      "items": {
-       "type": "string"
-      },
-      "type": "array"
-     },
-     "metric_type": {
-      "description": "Metric to log, or a get_metrics filter.",
-      "enum": [
-       "checkpoint_timing",
-       "tool_choice",
-       "response_quality",
-       "prediction_accuracy",
-       "user_satisfaction"
-      ],
-      "type": "string"
-     },
-     "model": {
-      "description": "Model name if you know it. Never guess.",
-      "type": "string"
-     },
-     "outcome": {
-      "description": "log_metric: what happened.",
-      "type": "string"
-     },
-     "pending_decisions": {
-      "description": "save_state: decisions not made yet.",
-      "items": {
-       "type": "string"
-      },
-      "type": "array"
-     },
-     "project": {
-      "description": "Name or id. Required on writes.",
-      "type": [
-       "string",
-       "integer"
-      ]
-     },
-     "project_id": {
-      "description": "Project id or project=. Required to save or get state. get_skills includes global skills.",
-      "type": "integer"
-     },
-     "promoted_only": {
-      "default": false,
-      "description": "get_skills: only promoted skills.",
-      "type": "boolean"
-     },
-     "skill": {
-      "description": "learn_skill: what was learned. Required.",
-      "type": "string"
-     },
-     "skill_id": {
-      "description": "confirm_skill: skill id. Required.",
-      "type": "integer"
-     },
-     "skill_type": {
-      "description": "Skill kind. Required to learn; optional filter.",
-      "enum": [
-       "tool_capability",
-       "user_preference",
-       "approach",
-       "gotcha",
-       "project_specific"
-      ],
-      "type": "string"
-     },
-     "tool_name": {
-      "description": "Related tool, or a get_skills filter.",
-      "type": "string"
-     }
-    },
-    "required": [
-     "action"
-    ],
-    "type": "object"
-   },
-   "name": "self_improve"
+   "name": "manage_memory"
   }
  ]
 }

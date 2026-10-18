@@ -32,8 +32,8 @@ def test_tools_prompt_and_instructions(backend):
         names = [t.name for t in tools]
         assert names[:2] == ["start_here", "log_work"]
         assert "CALL THIS FIRST" in tools[0].description
-        todo = next(t for t in tools if t.name == "todo")
-        assert "project" in todo.inputSchema["properties"] and "requires project" in todo.description
+        todo = next(t for t in tools if t.name == "manage_todos")
+        assert "project" in todo.inputSchema["required"]
         prompts = (await c.list_prompts()).prompts
         assert [p.name for p in prompts] == ["flowstate-start"]
         p = await c.get_prompt("flowstate-start", {"project": "Alpha"})

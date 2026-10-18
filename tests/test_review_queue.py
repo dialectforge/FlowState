@@ -40,13 +40,12 @@ def test_tools_listed_with_user_only_wording(backend):
     async def go(c):
         return {t.name: t for t in (await c.list_tools()).tools}
     tools = run(_with(backend, go))
-    for n in ("review_list", "review_approve", "review_reject"):
-        assert n in tools
-    for n in ("review_approve", "review_reject"):
-        d = tools[n].description
-        assert "ONLY call this when the user has explicitly told you" in d
-        assert "never approve your own suggestions" in d
-        assert "user_request" in tools[n].inputSchema["required"]
+    for n in ("review_list", "review_approve", "review_reject", "review_mode"):
+        assert n not in tools   # older names: still callable, no longer listed
+    d = tools["manage_review"].description
+    assert "approve, reject, set_mode: ONLY call this when the user has explicitly told you" in d
+    assert "never approve your own suggestions" in d
+    assert "(required)" in tools["manage_review"].inputSchema["properties"]["user_request"]["description"]
     assert "Never approve or reject review items" in backend.server.instructions
 
 

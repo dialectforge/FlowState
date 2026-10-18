@@ -116,7 +116,7 @@ def test_stale_facts_listed_in_brief_and_cleared_by_mark(backend, seeded_db):
     assert ("learning", "LAN server listens o") in got and ("variable", "LAN host config") in got
     assert st["total"] == 2 and all("secret-ish" not in s["text"] for s in st["stale"])
     text = brief(S)
-    assert "Needs re-check: 2 facts" in text and "verify(action=\"stale\")" in text
+    assert "Needs re-check: 2 facts" in text and "manage_memory(action=\"stale\")" in text
 
     lid = _q(seeded_db, "SELECT id FROM learnings WHERE insight LIKE 'LAN server%'")[0][0]
     call(S, "verify", {"action": "mark", "project": "Alpha", "record_type": "learning", "record_id": lid})

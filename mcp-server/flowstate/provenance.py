@@ -220,7 +220,7 @@ def stale(db_path: Path, pid: int, days: Optional[int] = None, limit: int = 20) 
         return {"project": links.project_name(conn, pid), "stale_after_days": days,
                 "stale": found[:max(1, int(limit or 20))], "total": len(found),
                 "note": "Facts (paths, ports, hosts, URLs, config) not checked recently. Check "
-                        "each one; if it still holds, verify(action=\"mark\"). If it changed, log the "
+                        "each one; if it still holds, manage_memory(action=\"mark_checked\"). If it changed, log the "
                         "change. Nothing was changed automatically."}
     finally:
         conn.close()
@@ -235,4 +235,4 @@ def brief_line(db_path: Path, pid: int) -> Optional[str]:
                    for s in res["stale"])
     return (f"Needs re-check: {res['total']} fact{'s' if res['total'] != 1 else ''} (paths, ports, "
             f"config...) not checked in {res['stale_after_days']}+ days, e.g. {eg}. "
-            f"verify(action=\"stale\") lists them.")
+            f"manage_memory(action=\"stale\") lists them.")
