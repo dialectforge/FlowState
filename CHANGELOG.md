@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (v2.1.0)
+## 2.1.0 - 2026-10-18
 
 ### Working with your AI
 - A smaller, consistent tool list: 12 tools instead of 35, and every name starts with a

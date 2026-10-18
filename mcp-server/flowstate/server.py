@@ -45,7 +45,7 @@ from .guard import GuardError, WRITES, check_write, explicit_project, is_write, 
 log = logging.getLogger("flowstate")
 
 # Create server instance; instructions reach every client at initialize.
-server = Server("flowstate", version="2.0.2", instructions=guide.INSTRUCTIONS)
+server = Server("flowstate", version="2.1.0", instructions=guide.INSTRUCTIONS)
 
 
 from .tooldefs import ALL_TOOLS  # noqa: E402 - the public tools (surface.py maps their calls)
@@ -1188,7 +1188,7 @@ def main():
     ap.add_argument("--allow-master-token", action="store_true",
                     help="public mode: also accept the owner's LAN token")
     ap.add_argument("--tools", choices=["default", "core", "full", "all"], default=None,
-                    help="which tools to list (also FLOWSTATE_TOOLS): default 12, core 7, "
+                    help="which tools to list (also FLOWSTATE_TOOLS): default 12, core 6, "
                          "full 18 (all = full); every tool name still answers")
     args = ap.parse_args()
     if args.tools:
