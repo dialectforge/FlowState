@@ -20,8 +20,61 @@ import sys
 from pathlib import Path
 
 # Config location
-CONFIG_PATH = Path.home() / "Library/Application Support/Claude/claude_desktop_config.json"
-BACKUP_PATH = Path.home() / "Library/Application Support/Claude/claude_desktop_config.backup.json"
+def backup_path_for(config_path: Path) -> Path:
+    suffix = config_path.suffix or ".json"
+    return config_path.with_name(f"{config_path.stem}.backup{suffix}")
+
+
+def default_config_path(platform_name: "str | None" = None, home: "Path | None" = None) -> Path:
+    plat = (platform_name or sys.platform).lower()
+    fake_home = home is not None
+    h = Path(home) if home else Path.home()
+    if plat in ("win32", "windows") or plat.startswith("win"):
+        localappdata = (
+            Path(os.environ["LOCALAPPDATA"])
+            if (not fake_home and os.environ.get("LOCALAPPDATA"))
+            else h / "AppData" / "Local"
+        )
+        pkgs = sorted((localappdata / "Packages").glob("Claude_*"))
+        for p in pkgs:
+            store = p / "LocalCache" / "Roaming" / "Claude"
+            if store.is_dir():
+                return store / "claude_desktop_config.json"
+        appdata = (
+            Path(os.environ["APPDATA"])
+            if (not fake_home and os.environ.get("APPDATA"))
+            else h / "AppData" / "Roaming"
+        )
+        return appdata / "Claude" / "claude_desktop_config.json"
+    if plat == "darwin":
+        return h / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+    return h / ".config" / "Claude" / "claude_desktop_config.json"
+
+
+CONFIG_PATH = default_config_path()
+BACKUP_PATH = backup_path_for(CONFIG_PATH)
+_LAST_CONFIG_PATH = CONFIG_PATH
+_LAST_BACKUP_PATH = BACKUP_PATH
+
+
+def _current_backup_path() -> Path:
+    global BACKUP_PATH, _LAST_CONFIG_PATH, _LAST_BACKUP_PATH
+    if CONFIG_PATH != _LAST_CONFIG_PATH:
+        if BACKUP_PATH == _LAST_BACKUP_PATH:
+            BACKUP_PATH = backup_path_for(Path(CONFIG_PATH))
+        _LAST_CONFIG_PATH = Path(CONFIG_PATH)
+        _LAST_BACKUP_PATH = Path(BACKUP_PATH)
+    return Path(BACKUP_PATH)
+
+
+def set_config_path(path: "str | Path") -> Path:
+    global CONFIG_PATH, BACKUP_PATH, _LAST_CONFIG_PATH, _LAST_BACKUP_PATH
+    CONFIG_PATH = Path(path).expanduser()
+    BACKUP_PATH = backup_path_for(CONFIG_PATH)
+    _LAST_CONFIG_PATH = CONFIG_PATH
+    _LAST_BACKUP_PATH = BACKUP_PATH
+    return CONFIG_PATH
+
 
 # All known MCP configurations (add new ones here)
 ALL_MCPS = {
@@ -59,22 +112,38 @@ ALIASES = {
 }
 
 def load_config():
-    if CONFIG_PATH.exists():
-        with open(CONFIG_PATH) as f:
+    cfg_path = Path(CONFIG_PATH)
+    if cfg_path.exists():
+        with open(cfg_path, encoding="utf-8") as f:
             return json.load(f)
     return {"mcpServers": {}}
 
+def _load_backup_servers():
+    bkp_path = _current_backup_path()
+    if bkp_path.exists():
+        try:
+            with open(bkp_path, encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict) and isinstance(data.get("mcpServers"), dict):
+                return data["mcpServers"]
+        except (OSError, ValueError):
+            pass
+    return {}
+
 def save_config(config):
+    cfg_path = Path(CONFIG_PATH)
+    bkp_path = _current_backup_path()
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
     # Backup first
-    if CONFIG_PATH.exists():
-        with open(CONFIG_PATH) as f:
+    if cfg_path.exists():
+        with open(cfg_path, encoding="utf-8") as f:
             backup = f.read()
-        with open(BACKUP_PATH, 'w') as f:
+        with open(bkp_path, 'w', encoding="utf-8") as f:
             f.write(backup)
     
-    with open(CONFIG_PATH, 'w') as f:
+    with open(cfg_path, 'w', encoding="utf-8") as f:
         json.dump(config, f, indent=2)
-    print(f"\n✅ Config saved. Backup at: {BACKUP_PATH}")
+    print(f"\n✅ Config saved. Backup at: {bkp_path}")
     print("⚠️  Restart Claude Desktop to apply changes.")
 
 def resolve_name(name):
@@ -109,10 +178,26 @@ def enable_mcps(names):
     config = load_config()
     if "mcpServers" not in config:
         config["mcpServers"] = {}
+    backup_servers = _load_backup_servers()
     
-    for name in names:
-        name = resolve_name(name)
-        if name in ALL_MCPS:
+    for raw_name in names:
+        name = resolve_name(raw_name)
+        current_matches = [
+            k for k in config["mcpServers"]
+            if k.lower().replace("buildmcp", "") == name.lower().replace("buildmcp", "")
+        ]
+        if current_matches:
+            print(f"  ✅ Already on: {name}")
+            continue
+        backup_matches = [
+            k for k in backup_servers
+            if k.lower().replace("buildmcp", "") == name.lower().replace("buildmcp", "")
+        ]
+        if backup_matches:
+            for k in backup_matches:
+                config["mcpServers"][k] = backup_servers[k]
+            print(f"  ✅ Enabled: {name}")
+        elif name in ALL_MCPS:
             # Use proper config key names
             key = "XcodeBuildMCP" if name == "xcode" else name
             config["mcpServers"][key] = ALL_MCPS[name]
@@ -138,11 +223,30 @@ def disable_mcps(names):
 
 def only_mcps(names):
     """Enable only these MCPs, disable everything else"""
-    config = {"mcpServers": {}}
+    config = load_config()
+    prior_servers = dict(config.get("mcpServers", {}))
+    backup_servers = _load_backup_servers()
+    config["mcpServers"] = {}
     
-    for name in names:
-        name = resolve_name(name)
-        if name in ALL_MCPS:
+    for raw_name in names:
+        name = resolve_name(raw_name)
+        prior_matches = [
+            k for k in prior_servers
+            if k.lower().replace("buildmcp", "") == name.lower().replace("buildmcp", "")
+        ]
+        backup_matches = [
+            k for k in backup_servers
+            if k.lower().replace("buildmcp", "") == name.lower().replace("buildmcp", "")
+        ]
+        if prior_matches:
+            for k in prior_matches:
+                config["mcpServers"][k] = prior_servers[k]
+            print(f"  ✅ Enabled: {name}")
+        elif backup_matches:
+            for k in backup_matches:
+                config["mcpServers"][k] = backup_servers[k]
+            print(f"  ✅ Enabled: {name}")
+        elif name in ALL_MCPS:
             key = "XcodeBuildMCP" if name == "xcode" else name
             config["mcpServers"][key] = ALL_MCPS[name]
             print(f"  ✅ Enabled: {name}")
@@ -160,13 +264,34 @@ def apply_preset(preset_name):
     print(f"\n🎛️  Applying preset: {preset_name}")
     only_mcps(PRESETS[preset_name])
 
-def main():
-    if len(sys.argv) < 2:
+def _parse_args(argv):
+    remaining = []
+    it = iter(argv)
+    for token in it:
+        if token == "--config":
+            try:
+                set_config_path(next(it))
+            except StopIteration:
+                raise SystemExit("Usage: mcp-switch.py [--config PATH] <command> ...")
+        elif token.startswith("--config="):
+            set_config_path(token.split("=", 1)[1])
+        else:
+            remaining.append(token)
+    return remaining
+
+def main(argv=None):
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+    raw_args = _parse_args(sys.argv[1:] if argv is None else list(argv))
+    if not raw_args:
         show_status()
         return
     
-    cmd = sys.argv[1].lower()
-    args = sys.argv[2:]
+    cmd = raw_args[0].lower()
+    args = raw_args[1:]
     
     if cmd == "list":
         print("\n📋 Available MCPs:")
