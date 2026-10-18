@@ -291,8 +291,8 @@ app its own key: `<venv python> -m flowstate keys add --name "<app>" [--read-onl
 pastes it into that app as its bearer token. FlowState then records the app's name from the
 key, not from what the app says. A read-only key can only read; `keys revoke --id <id>` (or
 `--name <app>`) stops a key at once (it then gets 401); `keys list` shows them (never the key).
-Keys work on the local/LAN listener only, never on the public one, and can't use `git` or
-attach files. The shared token keeps working as before; changes made with it are marked
+Keys work on the local/LAN listener only, never on the public one, and can't use `manage_data_git`,
+attach files, or ask for or approve deletes. The shared token keeps working as before; changes made with it are marked
 "shared token (legacy)". Apps may also send `X-FlowState-Model: <model name>` and
 `X-FlowState-Workspace: <name>` headers (a key's own workspace, if set, wins).
 
@@ -334,37 +334,50 @@ don't show server instructions:
    with a summary marked `[auto-captured, needs review]`).
 5. If FlowState is slow or errors, tell the user once and carry on without it.
 6. Auto-captured session summaries, and anything logged with `suggested=true`, wait in the
-   review queue (`review_list`). Only call `review_approve` / `review_reject` when the user
-   explicitly asks in the chat, quoting their words in `user_request`.
+   review queue (`manage_review(action="list")`). Only call `manage_review` with
+   `action="approve"` / `"reject"` when the user explicitly asks in the chat, quoting their
+   words in `user_request`.
 7. The **review mode** (`off`, `auto_only` default, `types`, `everything`; shown in the brief)
-   decides what else waits for review. Only call `review_mode(action="set")` when the user
-   asks for that change in the chat, quoting their words in `user_request`; every change is
-   logged. Never change it to get your own writes saved.
+   decides what else waits for review. Only call `manage_review(action="set_mode")` when the
+   user asks for that change in the chat, quoting their words in `user_request`; every change
+   is logged. Never change it to get your own writes saved.
 8. Things several projects share live in one project; the others **link** to them
-   (`link(action="add", project=..., link_type="uses", target_project=...,
+   (`manage_links(action="add", project=..., link_type="uses", target_project=...,
    target_component=...)`). Log changes to a shared component by its name; every linked
    project gets an update todo and a "changed since you last looked" note. FlowState only
    alerts; it never changes code in other apps.
-9. Other helpers: `todo(action="next")` (what to do next), `history` (see edits; undo the
-   last change to a record), `cleanup_suggest` (duplicates / stale / misfiled, as review
-   suggestions only), `import_memory` (memory exports into the review queue). The review
-   page, pausing apps and git commit capture are the user's controls (command line /
-   `flowstate review-page`); there is no tool for them.
+9. Other helpers: `manage_todos(action="next")` (what to do next; `update` to mark done),
+   `manage_problems` (attempts and solve), `manage_history` (see edits; undo the last change
+   to a record), `manage_memory(action="cleanup")` (duplicates / stale / misfiled, as review
+   suggestions only), `manage_memory(action="import")` (memory exports into the review queue),
+   `manage_projects` (projects and components). **Deletes only ask:** `manage_projects(action=
+   "delete" / "delete_component")` and `manage_memory(action="delete", record_type=...,
+   record_id=...)` queue a request that shows what would go; tell the user, and only when they
+   say so call `manage_review(action="approve", item_id=..., user_request=<their words>)` (a
+   project also needs `confirm_name=<its exact name, typed by the user>`). Undo with
+   `manage_history(action="undo")`. The review page, pausing apps and git commit
+   capture are the user's controls (command line / `flowstate review-page`); there is no tool
+   for them.
 
-10. The brief starts with the project's **hard rules** (`rules`; never break them; remove one
-   only when the user asks, quoting them in `user_request`) and any **handoff** note from the
-   last AI (continue from it, then `handoff(action="pickup")`; leave one with
-   `handoff(action="leave", where_i_was=..., next_step=...)` if you stop mid-task).
+10. The brief starts with the project's **hard rules** (`manage_rules`; never break them;
+   remove one only when the user asks, quoting them in `user_request`) and any **handoff** note
+   from the last AI (continue from it, then `manage_handoffs(action="pickup")`; leave one with
+   `manage_handoffs(action="leave", where_i_was=..., next_step=...)` if you stop mid-task).
    `start_here(size="quick"|"deep")` for a shorter or longer brief.
 11. Todo priorities are critical / urgent / normal / low (older names high and medium still
    work). `log_work(source=user_stated|ai_inferred|from_code)` says where a record came from.
-   `verify(action="stale")` lists facts (paths, ports, config) not checked for 60 days;
-   `verify(action="mark")` after checking one. `ask(question=...)` answers from the records,
-   with their ids, and says so when FlowState has nothing on it.
+   `manage_memory(action="stale")` lists facts (paths, ports, config) not checked for 60 days;
+   `manage_memory(action="mark_checked")` after checking one. `search(query=..., answer=true)`
+   answers a question from the records, with their ids, and says so when FlowState has nothing
+   on it; `search` without a query lists the newest records.
 12. Every recorded change keeps the app, the model (only if supplied), the machine or
    workspace, and how the app was identified (`app_key`, `oauth_client`, `remote_token`,
-   `shared_token` or `self_reported`). `history(action="who", by_app=..., by_model=...,
+   `shared_token` or `self_reported`). `manage_history(action="who", by_app=..., by_model=...,
    by_machine=..., since=..., until=...)` lists who did what (read-only).
+13. 12 tools are listed by default (`FLOWSTATE_TOOLS=core` lists 6, `full` lists 18). The
+   v2.0 tool names (`todo`, `link`, `handoff`, `review_approve`, `list_projects`, ...) still
+   work when called, with a one-line pointer to the new name; see
+   `docs/TOOL_CONSOLIDATION.md`.
 
 The same guidance is available as the MCP prompt `flowstate-start`.
 
@@ -392,10 +405,11 @@ The same guidance is available as the MCP prompt `flowstate-start`.
   They use temporary databases and fake config folders only.
 - Never point tests or experiments at a real database or a real app config.
 - Server code: `mcp-server/flowstate/` (`server.py` tools and transports, `tooldefs.py` tool
-  definitions, `agent_guide.py` the wording sent to apps, `brief.py`, `autosession.py`,
+  definitions, `surface.py` public and older tool names -> internal operations,
+  `agent_guide.py` the wording sent to apps, `brief.py`, `autosession.py`,
   `guard.py`, `review.py`, `review_mode.py`, `links.py`, `tasks.py`, `history.py`,
   `rules.py`, `handoffs.py`, `provenance.py`, `ask.py`, `meaning.py`, `cleanup.py`,
-  `activity.py`, `review_page.py`, `markdown_io.py`, `memory_import.py`, `git_capture.py`,
+  `activity.py`, `review_page.py`, `markdown_io.py`, `memory_import.py`, `git_capture.py`, `deletes.py`,
   `secrets_scan.py`, `secret_store.py`, `remote_auth.py`, `app_keys.py`, `identity.py`,
   `who.py`, `backup.py`, `offsite.py`, `scheduler.py`, `cli.py`, `cli_more.py`). Schema:
   `database/schema.sql` (base) plus numbered migrations in `mcp-server/flowstate/migrations/`
@@ -403,5 +417,7 @@ The same guidance is available as the MCP prompt `flowstate-start`.
   never touch v1.1 tables, never DROP or rewrite, so a v1.1 server can still open the same database).
 - Record identity only through `identity.py` (`identity.insert` / `identity.set_sql`), so
   every log stores app, model, machine and identity source the same way.
-- Every tool needs a read/write label in `tool_labels.py` (a test checks).
+- Every public tool needs a label with its read / additive / destructive actions in
+  `tool_labels.py`, and each action a route in `surface.py` (tests check). Keep older tool
+  names working: they are the internal operation ids.
 - Changes for users go in `CHANGELOG.md`.

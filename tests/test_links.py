@@ -87,7 +87,11 @@ def test_link_validation_and_listing(df):
     assert _j(wrong_owner)["error"] == "project_mismatch"
     bad_type = call(S, "link", {"action": "add", "project": "Beacon VPN", "link_type": "explodes",
                                 "target_project": "Mesh"})
-    assert bad_type.isError and "not one of" in bad_type.content[0].text   # schema enum
+    # the older name is not listed, so FlowState's own check answers (no SDK schema check)
+    assert bad_type.isError and _j(bad_type)["error"] == "bad_link_type"
+    listed = call(S, "manage_links", {"action": "add", "project": "Beacon VPN",
+                                      "link_type": "explodes", "target_project": "Mesh"})
+    assert listed.isError and "not one of" in listed.content[0].text   # schema enum
     from flowstate import links as L
     with pytest.raises(L.LinkError) as e:
         L.add(db, 2, "explodes", target_project="Mesh")

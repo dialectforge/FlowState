@@ -2,7 +2,7 @@
 
 An AI that stops mid-task leaves "where I was" and "next step". The next AI sees open notes
 first in start_here (right after the hard rules) until one of them marks the note picked
-up. Notes are never deleted.
+up. This tool never deletes notes (only a delete the user approves can; deletes.py).
 """
 
 from pathlib import Path
@@ -103,7 +103,7 @@ def brief_lines(conn, pid: int) -> list[str]:
     if not notes:
         return []
     out = [f"HANDOFF from the last AI ({len(notes)} open; read first, then "
-           f"handoff(action=\"pickup\", handoff_id=...)):"]
+           f"manage_handoffs(action=\"pickup\", handoff_id=...)):"]
     for n in notes[:BRIEF_FULL]:
         who = f", {n['created_by']}" if n.get("created_by") else ""
         out.append(f"- H{n['id']} ({(n['created_at'] or '')[:16]}{who}) Where I was: "
@@ -111,5 +111,5 @@ def brief_lines(conn, pid: int) -> list[str]:
         if n.get("next_step"):
             out.append("  Next step: " + " ".join(n["next_step"].split()))
     if len(notes) > BRIEF_FULL:
-        out.append(f"- ...and {len(notes) - BRIEF_FULL} older open note(s): handoff(action=\"list\").")
+        out.append(f"- ...and {len(notes) - BRIEF_FULL} older open note(s): manage_handoffs(action=\"list\").")
     return out

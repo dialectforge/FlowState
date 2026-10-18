@@ -211,7 +211,9 @@ class Database:
     def update_component(self, component_id: int, **kwargs) -> Optional[Component]:
         """Update component fields."""
         allowed = {'name', 'description', 'status', 'parent_component_id'}
-        updates = {k: v for k, v in kwargs.items() if k in allowed}
+        # None = keep the current value (as update_project does); an omitted name used to be
+        # written as NULL and failed, and an omitted description was wiped.
+        updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
         if not updates:
             return self.get_component(component_id)
         

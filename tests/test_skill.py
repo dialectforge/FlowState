@@ -41,7 +41,7 @@ def test_skill_follows_the_spec():
 
 def test_skill_teaches_the_habits():
     body = SKILL.read_text(encoding="utf-8").lower()
-    for habit in ("start_here", "log_work", "link(action=\"add\"", "never approve or reject review items yourself",
+    for habit in ("start_here", "log_work", "manage_links(action=\"add\"", "never approve or reject review items yourself",
                   "never change it", "user_request", "summary", "secret", "replaces="):
         assert habit in body, habit
 

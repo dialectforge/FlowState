@@ -1,13 +1,17 @@
 """Edit history and undo (v2 Phase D, migration 005).
 
-Before FlowState edits or deletes a record (todo update, problem solve, variable delete,
-link remove, an approved clean-up move, ...), the rows involved are copied; afterwards the
+Before FlowState edits a record (todo update, problem solve, link remove, an approved
+clean-up move, an approved delete, ...), the rows involved are copied; afterwards the
 new rows are copied too, and both go into `record_history`. `undo` puts the rows of the
 last edit of a record back as they were (re-inserting deleted rows, removing rows that edit
 created) and is itself recorded, so an undo can be undone.
 
 Creating a record is not undone here (that would mean deleting it); use the record's own
 status (done / cancelled) or the review queue instead.
+
+A user-approved delete (deletes.py) is one edit holding every row it removed; undoing it puts
+them all back. Undoing that undo would delete them again without the user, so it is refused:
+deleting again needs a new delete request.
 """
 
 import json
@@ -25,7 +29,8 @@ TABLES = {"todo": "todos", "project": "projects", "component": "components",
           "problem": "problems", "solution": "solutions", "attempt": "solution_attempts",
           "variable": "project_variables", "method": "project_methods",
           "attachment": "attachments", "link": "record_links", "learning": "learnings",
-          "decision": "conversations", "change": "changes"}
+          "decision": "conversations", "change": "changes", "rule": "project_rules",
+          "handoff": "handoff_notes"}
 TYPE_OF = {v: k for k, v in TABLES.items()}
 
 # (tool, action) -> rows the edit can touch: (table, key column, argument holding the key)
@@ -36,10 +41,7 @@ TRACKED = {
     ("attempt", "outcome"): [("solution_attempts", "id", "attempt_id")],
     ("todo", "update"): [("todos", "id", "todo_id")],
     ("variable", "update"): [("project_variables", "id", "variable_id")],
-    ("variable", "delete"): [("project_variables", "id", "variable_id")],
     ("method", "update"): [("project_methods", "id", "method_id")],
-    ("method", "delete"): [("project_methods", "id", "method_id")],
-    ("file", "remove"): [("attachments", "id", "attachment_id")],
     ("self_improve", "confirm_skill"): [("learned_skills", "id", "skill_id")],
 }
 
@@ -89,13 +91,39 @@ def _unval(v):
     return bytes.fromhex(v["$hex"]) if isinstance(v, dict) and "$hex" in v else v
 
 
+_ROW_KEY: dict = {}
+
+
+def row_key(conn, table: str) -> Optional[str]:
+    """The column that identifies a row: `id`, or the table's own INTEGER PRIMARY KEY
+    (project_views.project_id, auto_sessions.session_id). None if it has neither."""
+    if table in _ROW_KEY:
+        return _ROW_KEY[table]
+    cols = conn.execute(f'PRAGMA table_info("{table}")').fetchall()
+    key = None
+    if any(c[1] == "id" for c in cols):
+        key = "id"
+    else:
+        pk = [c for c in cols if c[5]]
+        if len(pk) == 1 and (pk[0][2] or "").upper() == "INTEGER":
+            key = pk[0][1]
+    if cols:   # a FlowState table's key column never changes (migrations only add)
+        _ROW_KEY[table] = key
+    return key
+
+
 def _rows(conn, table: str, key: str, value) -> dict:
-    """{id: row dict} for rows of `table` where key = value."""
+    """{row key: row dict} for rows of `table` where key = value."""
+    rk = row_key(conn, table) or "id"
     try:
         cur = conn.execute(f'SELECT * FROM "{table}" WHERE "{key}" = ?', (value,))
     except sqlite3.OperationalError:
         return {}
-    return {r["id"]: {k: _val(r[k]) for k in r.keys()} for r in cur.fetchall()}
+    return {r[rk]: {k: _val(r[k]) for k in r.keys()} for r in cur.fetchall()}
+
+
+def _row(conn, table: str, rid) -> Optional[dict]:
+    return _rows(conn, table, row_key(conn, table) or "id", rid).get(rid)
 
 
 def _project_of(conn, table: str, row: Optional[dict]) -> Optional[int]:
@@ -230,27 +258,43 @@ def list_history(db_path: Path, project_id: int, record_type: Optional[str] = No
                         "undo_of": r["undo_of"], "changes": _changed_fields(old, new),
                         **{k: r[k] for k in identity.FIELDS if k in r.keys()}})
         return {"history": out, "count": len(out),
-                "note": "history(action=undo, record_type=..., record_id=...) reverts the last "
+                "note": "manage_history(action=undo, record_type=..., record_id=...) reverts the last "
                         "change to a record."}
     finally:
         conn.close()
 
 
 # ---------------------------------------------------------------- undo
-def _restore(conn, table: str, rid: int, row: Optional[dict]) -> None:
-    exists = conn.execute(f'SELECT 1 FROM "{table}" WHERE id = ?', (rid,)).fetchone()
+def _restore(conn, table: str, rid: int, row: Optional[dict]) -> bool:
+    """Put one row back as `row` (None = remove it). True if it was re-inserted."""
+    rk = row_key(conn, table) or "id"
+    exists = conn.execute(f'SELECT 1 FROM "{table}" WHERE "{rk}" = ?', (rid,)).fetchone()
     if row is None:
-        conn.execute(f'DELETE FROM "{table}" WHERE id = ?', (rid,))
-        return
+        conn.execute(f'DELETE FROM "{table}" WHERE "{rk}" = ?', (rid,))
+        return False
     cols = list(row)
     vals = [_unval(row[c]) for c in cols]
     if exists:
-        sets = ", ".join(f'"{c}" = ?' for c in cols if c != "id")
-        conn.execute(f'UPDATE "{table}" SET {sets} WHERE id = ?',
-                     [v for c, v in zip(cols, vals) if c != "id"] + [rid])
-    else:
-        conn.execute(f'INSERT INTO "{table}" ({", ".join(chr(34) + c + chr(34) for c in cols)}) '
-                     f'VALUES ({", ".join("?" * len(cols))})', vals)
+        sets = ", ".join(f'"{c}" = ?' for c in cols if c != rk)
+        conn.execute(f'UPDATE "{table}" SET {sets} WHERE "{rk}" = ?',
+                     [v for c, v in zip(cols, vals) if c != rk] + [rid])
+        return False
+    conn.execute(f'INSERT INTO "{table}" ({", ".join(chr(34) + c + chr(34) for c in cols)}) '
+                 f'VALUES ({", ".join("?" * len(cols))})', vals)
+    return True
+
+
+def _orphans(conn, inserted: dict) -> list:
+    """Re-inserted rows whose parent row is missing (e.g. a problem whose component was
+    deleted after it): [(table, id, parent table)]."""
+    out = []
+    for table, ids in inserted.items():
+        try:
+            bad = conn.execute(f'PRAGMA foreign_key_check("{table}")').fetchall()
+        except sqlite3.DatabaseError:
+            continue
+        out += [(table, r[1], r[2]) for r in bad if r[1] in ids]
+    return out
 
 
 def undo(db_path: Path, project_id: int, record_type: str, record_id: int,
@@ -271,19 +315,28 @@ def undo(db_path: Path, project_id: int, record_type: str, record_id: int,
             conn.rollback()
             raise HistoryError("nothing_to_undo",
                                f"No recorded change to {record_type} #{record_id} to undo.")
+        if last["tool"] == "history/undo" and last["undo_of"]:
+            orig = conn.execute("SELECT tool FROM record_history WHERE edit_id = ? LIMIT 1",
+                                (last["undo_of"],)).fetchone()
+            if orig and (orig["tool"] or "").startswith("delete/"):
+                conn.rollback()
+                raise HistoryError("delete_needs_approval",
+                                   f"{record_type} #{record_id} was restored after a delete; undoing "
+                                   f"that would delete it again without the user. To delete it, make "
+                                   f"a new delete request for the user to approve.")
         group = conn.execute("SELECT * FROM record_history WHERE edit_id = ? ORDER BY id",
                              (last["edit_id"],)).fetchall()
         def allowed(g) -> bool:  # the project it was in when edited, or the one it is in now
             if g["project_id"] in (None, project_id):
                 return True
-            now_row = _rows(conn, g["table_name"], "id", g["record_id"]).get(g["record_id"])
+            now_row = _row(conn, g["table_name"], g["record_id"])
             return _project_of(conn, g["table_name"], now_row) == project_id
         if not all(allowed(g) for g in group):
             conn.rollback()
             raise HistoryError("project_mismatch",
                                f"That change belongs to another project; repeat with that project.")
         for g in group:   # refuse if something changed the rows since (outside history)
-            current = _rows(conn, g["table_name"], "id", g["record_id"]).get(g["record_id"])
+            current = _row(conn, g["table_name"], g["record_id"])
             expected = json.loads(g["new_row"]) if g["new_row"] else None
             if current != expected:
                 conn.rollback()
@@ -292,12 +345,20 @@ def undo(db_path: Path, project_id: int, record_type: str, record_id: int,
                                    f"#{g['record_id']} changed again after that edit; undo the "
                                    f"newer change first (see history).")
         undo_id, now = uuid.uuid4().hex[:16], _now()
-        restored = []
+        restored, inserted = [], {}
         for g in group:
             old = json.loads(g["old_row"]) if g["old_row"] else None
-            before = _rows(conn, g["table_name"], "id", g["record_id"]).get(g["record_id"])
-            _restore(conn, g["table_name"], g["record_id"], old)
-            after = _rows(conn, g["table_name"], "id", g["record_id"]).get(g["record_id"])
+            before = _row(conn, g["table_name"], g["record_id"])
+            try:
+                if _restore(conn, g["table_name"], g["record_id"], old):
+                    inserted.setdefault(g["table_name"], set()).add(g["record_id"])
+            except sqlite3.IntegrityError as e:
+                conn.rollback()
+                raise HistoryError("restore_conflict",
+                                   f"Can't put {TYPE_OF.get(g['table_name'], g['table_name'])} "
+                                   f"#{g['record_id']} back: {e} (for example a new project now has "
+                                   f"the same name; rename it first). Nothing was changed.")
+            after = _row(conn, g["table_name"], g["record_id"])
             identity.insert(conn, "record_history", {
                 "edit_id": undo_id, "table_name": g["table_name"], "record_id": g["record_id"],
                 "project_id": g["project_id"], "tool": "history/undo",
@@ -308,6 +369,14 @@ def undo(db_path: Path, project_id: int, record_type: str, record_id: int,
             restored.append({"record_type": TYPE_OF.get(g["table_name"], g["table_name"]),
                              "record_id": g["record_id"],
                              "now": "deleted" if old is None else "restored"})
+        missing = _orphans(conn, inserted)
+        if missing:
+            conn.rollback()
+            t, i, parent = missing[0]
+            raise HistoryError("parent_missing",
+                               f"{TYPE_OF.get(t, t)} #{i} can't come back on its own: the "
+                               f"{TYPE_OF.get(parent, parent)} it belongs to was deleted after "
+                               f"it. Undo that delete first. Nothing was changed.")
         conn.execute("UPDATE record_history SET undone_at = ?, undone_by_edit = ? WHERE edit_id = ?",
                      (now, undo_id, last["edit_id"]))
         conn.commit()

@@ -58,6 +58,11 @@ WRITES = {
     ("handoff", "pickup"): None,
     ("verify", "mark"): None,
     ("verify", "source"): None,
+    # User-approved deletes (deletes.py): these only queue a request; deletes.py checks the
+    # record is the project's. A project names itself; a component is checked here.
+    ("delete_request", "project"): None,
+    ("delete_request", "component"): "component_id",
+    ("delete_request", "record"): None,
 }
 # Not project records: create_project names itself; git syncs the data repo.
 EXEMPT = {"create_project", "git"}
@@ -153,7 +158,7 @@ def check_write(db_path: Path, name: str, args: dict) -> int:
             "error": "project_required",
             "message": (f"{what} writes to FlowState, so it must name a project. Repeat the call "
                         f"with project=\"<project name>\" (or project_id). If this is new work, "
-                        f"call create_project first."),
+                        f"call manage_projects(action=\"create\") first."),
             "candidates": res.get("candidates", []),
         })
     res = resolve_project(db_path, named, fuzzy=False)
@@ -161,7 +166,7 @@ def check_write(db_path: Path, name: str, args: dict) -> int:
         raise GuardError({
             "error": "project_not_found",
             "message": f"No single project matches {named!r} ({res.get('reason')}). "
-                       f"Use one of the names below, or create_project.",
+                       f"Use one of the names below, or manage_projects(action=\"create\").",
             "candidates": res.get("candidates", []),
         })
     pid = res["project"]["id"]

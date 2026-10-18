@@ -139,12 +139,18 @@ def test_wording_and_remote_policy(backend):
                 backend.server, client_info=types.Implementation(name="x", version="1")) as c:
             return await go(c)
     tools = run(with_client())
-    d = tools["review_mode"].description
-    assert "ONLY when the user has explicitly asked you" in d and "user_request" in d
+    d = tools["manage_review"].description
+    assert "set_mode: ONLY call this when the user has explicitly told you" in d and "user_request" in d
+    assert "change the mode to get your own writes saved" in d
     assert "never change it unless the user asks" in backend.server.instructions
     from flowstate.remote_auth import refusal
+    from flowstate.surface import translate
     assert refusal("review_mode", {"action": "set"}, ["flowstate:read"])[0] == "read_only_client"
     assert refusal("review_mode", {"action": "get"}, ["flowstate:read"]) is None
+    # the public name is checked as the same internal operation
+    assert refusal(*translate("manage_review", {"action": "set_mode"}),
+                   ["flowstate:read"])[0] == "read_only_client"
+    assert refusal(*translate("manage_review", {"action": "get_mode"}), ["flowstate:read"]) is None
     # secrets in the quote are refused like any write
     r = call(backend, "review_mode", {"action": "set", "mode": "off",
                                       "user_request": "password=hunter2hunter2hunter2"})

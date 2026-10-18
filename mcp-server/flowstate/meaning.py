@@ -30,20 +30,20 @@ TYPES = ("todo", "decision", "change", "learning", "problem", "solution")
 MAX_LAZY = 64                         # records embedded during one search call
 
 _SQL = {
-    "todo": """SELECT t.id, t.project_id, t.title, COALESCE(t.description, '') body, t.status
+    "todo": """SELECT t.id, t.project_id, t.title, COALESCE(t.description, '') body, t.status, t.created_at
                FROM todos t""",
     "decision": """SELECT d.id, d.project_id, COALESCE(d.key_decisions, d.user_prompt_summary) title,
-                   COALESCE(d.assistant_response_summary, '') body, NULL status
+                   COALESCE(d.assistant_response_summary, '') body, NULL status, d.created_at
                    FROM conversations d WHERE d.key_decisions IS NOT NULL""",
     "change": """SELECT ch.id, c.project_id, ch.field_name title,
-                 COALESCE(ch.reason, '') || ' ' || COALESCE(ch.new_value, '') body, NULL status
+                 COALESCE(ch.reason, '') || ' ' || COALESCE(ch.new_value, '') body, NULL status, ch.created_at
                  FROM changes ch JOIN components c ON c.id = ch.component_id""",
     "learning": """SELECT l.id, l.project_id, l.insight title, COALESCE(l.context, '') body,
-                   NULL status FROM learnings l""",
-    "problem": """SELECT p.id, c.project_id, p.title, COALESCE(p.description, '') body, p.status
+                   NULL status, l.created_at FROM learnings l""",
+    "problem": """SELECT p.id, c.project_id, p.title, COALESCE(p.description, '') body, p.status, p.created_at
                   FROM problems p JOIN components c ON c.id = p.component_id""",
     "solution": """SELECT s.id, c.project_id, s.summary title, COALESCE(s.key_insight, '') body,
-                   NULL status FROM solutions s JOIN problems p ON p.id = s.problem_id
+                   NULL status, s.created_at FROM solutions s JOIN problems p ON p.id = s.problem_id
                    JOIN components c ON c.id = p.component_id""",
 }
 
@@ -139,7 +139,8 @@ def records(conn, project_id: Optional[int] = None, kinds=TYPES) -> list[dict]:
             params.append(project_id)
         for r in conn.execute(sql, params):
             out.append({"type": k, "id": r["id"], "project_id": r["project_id"],
-                        "title": _title(k, r["title"]), "body": r["body"] or "", "status": r["status"]})
+                        "title": _title(k, r["title"]), "body": r["body"] or "", "status": r["status"],
+                        "created_at": r["created_at"]})
     return out
 
 
@@ -319,3 +320,31 @@ def search(db_path: Path, query: str, project_id: Optional[int] = None, kinds=No
         return out
     finally:
         conn.close()
+
+
+def recent(db_path: Path, project_id: Optional[int] = None, kinds=None,
+           hours: Optional[int] = None, limit: int = 10) -> dict:
+    """search without a query: the newest records, optionally from the last `hours` only."""
+    from datetime import datetime, timedelta, timezone
+    limit = max(1, min(int(limit or 10), 50))
+    kinds = tuple(k for k in (kinds or TYPES) if k in TYPES) or TYPES
+    cutoff = None
+    if hours not in (None, ""):
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=max(0, int(hours)))
+                  ).strftime("%Y-%m-%d %H:%M:%S")
+    conn = _conn(db_path)
+    try:
+        names = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM projects")}
+        recs = [r for r in records(conn, project_id, kinds)
+                if cutoff is None or (r["created_at"] or "") >= cutoff]
+    finally:
+        conn.close()
+    recs.sort(key=lambda r: (r["created_at"] or "", r["id"]), reverse=True)
+    results = [{"content_type": r["type"], "content_id": r["id"], "project_id": r["project_id"],
+                "project": names.get(r["project_id"]), "title": r["title"][:160],
+                "snippet": r["body"][:200], **({"status": r["status"]} if r.get("status") else {}),
+                "created_at": r["created_at"]} for r in recs[:limit]]
+    out = {"query": None, "mode": "newest", "results": results, "count": len(results)}
+    if cutoff is not None:
+        out["since_hours"] = int(hours)
+    return out
