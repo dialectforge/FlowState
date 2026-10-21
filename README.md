@@ -339,11 +339,9 @@ gets a certificate for your address.
 <venv python> -m flowstate relay forget                   # delete the device token, keys and certificate
 ```
 
-During the beta the relay has room for 10 computers (and at most 40 new
-ones a week, to stay within Let's Encrypt's limits). If it is full, `relay enroll` says so
-in plain words with your place in line ("The FlowState Relay beta is full right now. You're
-on the waitlist (number N). ..." or, for the weekly limit, "... try again after <time>") and
-saves nothing. Places are first come, first served: when there is room, it is held for the
+During the beta the relay has room for 10 computers, one per account. If it is full,
+`relay enroll` says so in plain words with your place in line ("The FlowState Relay beta is
+full right now. You're on the waitlist (number N). ...") and saves nothing. Places are first come, first served: when there is room, it is held for the
 oldest code in line for 48 hours. Your code stays valid for 7 days after that, so just run
 the same command again.
 
