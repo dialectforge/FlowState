@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "flowstate"
-version = "2.3.0"
+version = "2.4.0"
 description = "Local-first shared project memory for AI apps (MCP server)"
 readme = "README.md"
 license = "MIT"

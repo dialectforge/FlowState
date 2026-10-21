@@ -30,6 +30,10 @@ A decision that reads like a current one (and doesn't say it replaces it) is sti
 flagged as a *possible* conflict (`D31 vs D12` in the brief) for the agent and then you to settle
 in the review queue; FlowState matches words (and meaning, if the local model is installed), it doesn't judge.
 
+Each window of an app gets its own session, and the brief opens with one line about what the
+others did meanwhile (`Since your last visit (Oct 19): Claude Desktop and Grok saved 3 decisions,
+5 changes, 2 todos.`), and nothing when nothing changed.
+
 <p align="center"><a href="docs/media/flowstate-side-by-side.mp4"><img src="docs/media/flowstate-side-by-side.gif" width="520" alt="Claude and Grok on an iPhone, side by side, both reading the same FlowState project brief and both knowing what was just shipped from the PC"></a></p>
 
 <p align="center"><em>Worked on my PC with Grok Build, then asked Claude and Grok on my iPhone. Both knew what I did last. (Click for the full-quality video.)</em></p>
@@ -134,12 +138,19 @@ prompt `flowstate-start`.
   characters), `standard` (4,000, the default) or `deep` (up to 12,000).
 - **`log_work`**: one simple tool to record a decision, change, problem, learning or todo.
   Every write must name a project, so nothing lands in the wrong place.
-- **Automatic sessions**: a session opens on the first call for a project and closes after
-  2 hours idle (or when the app quits), with a short summary marked `[auto-captured, needs review]`.
+- **Write receipts**: every write's answer says what it saved (`receipt: {change: "3f9a1d2c4b5e",
+  saved: ["decision #31"]}`). A write that timed out but saved a moment later is reported on the
+  next answer, and the same write repeated within 2 minutes returns the first receipt instead
+  of saving a copy.
+- **Automatic sessions**: a session opens on the first call for a project (one per app window
+  or connection) and closes after 2 hours idle (or when the app quits), with a short summary
+  marked `[auto-captured, needs review]`. FlowState keeps a lean record of each session's
+  reads and writes (record ids and hashes, never the text).
 
 **You stay in charge**
 - **Review queue**: auto-captured summaries, and anything the AI marks as a suggestion, wait
-  for your OK. Approve, edit or reject them in chat or on the review page.
+  for your OK. Approve, edit or reject them in chat or on the review page. An AI can't decide
+  its own items: FlowState refuses unless it passes your own words.
 - **Review mode** (yours to set): `off`, `auto_only` (default), chosen record types, or
   `everything`. Set it for the whole install or per project. The AI may change it only when you
   ask in the chat, and every change is logged with your words.
@@ -147,7 +158,9 @@ prompt `flowstate-start`.
 - **Handoff notes**: an AI that has to stop mid-task leaves "where I was / next step"; the next
   AI sees it first until it picks it up.
 - **Undo and history**: edits made through FlowState are kept; you can see them and undo the
-  last change to a record (an undo can itself be undone).
+  last change to a record (an undo can itself be undone). The app that created a record can
+  take it back with undo while nothing refers to it yet. If part of a change was changed again
+  since, undo puts back the rest and lists what it skipped and why.
 - **Deletes need your OK**: an AI can only *ask* to delete a project, a component or a record.
   The request shows what would go (for a project or component, how many todos, decisions,
   changes, ... go with it) and waits in the review queue; nothing is removed until you
@@ -215,6 +228,12 @@ prompt `flowstate-start`.
 - **Nightly backups**: integrity-checked; the newest per day for 14 days and per week for
   8 weeks are kept. Restore always goes to a new file unless you add `--force` (and then the
   current file is backed up first).
+- **Safety copies**: right before an approved delete, clean-up or markdown edit, and before a
+  restore or a migration, FlowState takes a verified copy that is kept at least 7 days whatever
+  the limits above say; if it can't, the change isn't made. This doesn't depend on nightly
+  backups, and FlowState never adds a daily copy you didn't ask for.
+- **Health check**: on start, a quick check of the database. Only a problem shows, first in the
+  brief, with the newest good backup. FlowState never repairs anything by itself.
 - **Optional private GitHub off-site copy**: opt-in. FlowState checks the repo is private
   before every push and refuses otherwise. It pushes only the backup file and a manifest, to its
   own branch, using your existing `gh` or git login. It never stores a GitHub token.
@@ -383,7 +402,9 @@ protocol is in [docs/relay-protocol.md](docs/relay-protocol.md).
   are the app's own say-so. Changes recorded before this was added show "not recorded".
 - **"Only when the user asks" is enforced by wording**, not cryptography: approving review items,
   changing the review mode and removing rules require the AI to quote your words, but a
-  misbehaving AI could make them up. Hard rules are shown first in every brief; FlowState can't
+  misbehaving AI could make them up. Since 2.4 an AI deciding an item it queued itself is
+  refused in code unless it passes at least a few words that aren't the item's own text; that
+  stops a reflexive self-approval, not a determined lie. Hard rules are shown first in every brief; FlowState can't
   stop an AI from doing something outside FlowState.
 - **Answers are extractive** (`search` with `answer=true`): it quotes the best-matching sentences of your records; it doesn't write new answers.
 - **Tested mainly on Windows and macOS.** Linux should work but is less tested.
@@ -396,8 +417,12 @@ protocol is in [docs/relay-protocol.md](docs/relay-protocol.md).
   secret values in `variable`. Older records are not re-scanned automatically; run `flowstate scan-secrets`.
 - **The off-site copy keeps one backup** (a single commit, replaced each night); history depth
   comes from your local backups. Pushing it means your memory leaves your machine, to your private repo.
-- **Undo covers edits made through FlowState.** Creating a record isn't undone (mark it done or
-  cancelled instead), and changes made directly in SQLite aren't tracked.
+- **Undo covers changes made through FlowState.** Creating a record can be undone only by the
+  app that made it and only while nothing refers to it (records created before 2.4, projects
+  and components can't; ask for a delete instead). Changes made directly in SQLite aren't tracked.
+- **Receipts are per connection.** A repeated write is recognised only from the same app window
+  within 2 minutes and while the server keeps running; a late-save notice reaches the
+  connection that made the write, not another one.
 - **A delete is recoverable, not an erasure.** The deleted rows stay in the edit history (that is
   what undo uses) and in your backups, so the text is still in the database file. There is no
   "erase for good" yet. Approving a file attachment's delete keeps the file itself.

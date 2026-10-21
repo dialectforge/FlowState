@@ -130,7 +130,10 @@ Backups go to `FLOWSTATE_BACKUP_DIR` or the per-OS default (Windows
 `%LOCALAPPDATA%\flowstate\backups`, macOS `~/Library/Application Support/flowstate/backups`,
 Linux `~/.local/share/flowstate/backups`). Each is integrity-checked; the newest per day for
 14 days and per week for 8 weeks are kept. Restore never replaces an existing database
-unless `--force` is given, and then backs it up first. The off-site copy pushes only the
+unless `--force` is given, and then backs it up first. Copies taken right before a restore, a
+migration or an approved delete / clean-up / markdown edit are labelled `pre-restore`,
+`pre-migration` or `pre-bulk` and kept at least 7 days regardless of those limits. FlowState
+takes them even without nightly backups, and never adds a daily copy of its own. The off-site copy pushes only the
 backup file and a manifest, to its own branch (`flowstate-backup`), after checking the repo
 is private.
 
@@ -332,11 +335,15 @@ don't show server instructions:
    your model name, pass it as `model="<name>"` on writes; never guess or invent it.
 4. Sessions open and close automatically (closed after 2 hours idle or when the app quits,
    with a summary marked `[auto-captured, needs review]`).
-5. If FlowState is slow or errors, tell the user once and carry on without it.
+5. If FlowState is slow or errors, tell the user once and carry on without it. Every write's
+   answer has a `receipt` (`change` id and `saved` record ids). If a write times out, don't
+   repeat it: the next FlowState answer says whether it saved. The same write repeated within
+   2 minutes returns the first receipt (`already_saved`) instead of a copy.
 6. Auto-captured session summaries, and anything logged with `suggested=true`, wait in the
    review queue (`manage_review(action="list")`). Only call `manage_review` with
    `action="approve"` / `"reject"` when the user explicitly asks in the chat, quoting their
-   words in `user_request`.
+   words in `user_request`. Deciding an item your own app queued is refused (`own_item`)
+   unless `user_request` holds the user's own words.
 7. The **review mode** (`off`, `auto_only` default, `types`, `everything`; shown in the brief)
    decides what else waits for review. Only call `manage_review(action="set_mode")` when the
    user asks for that change in the chat, quoting their words in `user_request`; every change
@@ -349,7 +356,8 @@ don't show server instructions:
 9. Other helpers: `manage_todos(action="next")` (what to do next; `update` to mark done;
    other agents' claims are listed last, so pick something else),
    `manage_problems` (attempts and solve), `manage_history` (see edits; undo the last change
-   to a record), `manage_memory(action="cleanup")` (duplicates / stale / misfiled, as review
+   to a record, or take back a record you created while nothing refers to it; rows changed
+   since are skipped and listed), `manage_memory(action="cleanup")` (duplicates / stale / misfiled, as review
    suggestions only), `manage_memory(action="import")` (memory exports into the review queue),
    `manage_projects` (projects and components). **Deletes only ask:** `manage_projects(action=
    "delete" / "delete_component")` and `manage_memory(action="delete", record_type=...,
@@ -364,7 +372,9 @@ don't show server instructions:
    remove one only when the user asks, quoting them in `user_request`) and any **handoff** note
    from the last AI (continue from it, then `manage_handoffs(action="pickup")`; leave one with
    `manage_handoffs(action="leave", where_i_was=..., next_step=...)` if you stop mid-task).
-   `start_here(size="quick"|"deep")` for a shorter or longer brief.
+   `start_here(size="quick"|"deep")` for a shorter or longer brief. A line `Since your last
+   visit (...)` says what other sessions saved since this app last read the brief; after a
+   long gap, use the `manage_history(action="who", since=...)` call it gives.
 11. Todo priorities are critical / urgent / normal / low (older names high and medium still
    work). `log_work(source=user_stated|ai_inferred|from_code)` says where a record came from.
    `manage_memory(action="stale")` lists facts (paths, ports, config) not checked for 60 days;

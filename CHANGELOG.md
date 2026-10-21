@@ -1,5 +1,90 @@
 # Changelog
 
+## 2.4.0 - 2026-10-21
+
+### In short
+- More reliable and easier to trust; no new tools, no new required arguments, nothing new
+  for the user to do. The tool lists are exactly as long as in 2.3.0.
+- Writes say what they saved, and a write that timed out is no longer a mystery (or a
+  duplicate when the agent tries again).
+- Four bugs fixed: timed-out writes, pre-restore backups pruned the same day, two windows of
+  one app sharing a session, and undo that couldn't take back a new record or refused a
+  whole change over one row.
+
+### Fixed
+- **Timed-out writes.** A write that hit the call timeout usually still saved a moment later,
+  but the agent was told "may or may not have been saved", so it often logged it again. The
+  timeout answer now says not to repeat it, the connection's next answer reports how it ended
+  (`your earlier log_work from 14:14:05 UTC that timed out did save, as learning #31 (change
+  3f9a1d2c4b5e). Don't log it again.`), and a repeat while it is still saving waits for it
+  instead of saving a copy.
+- **Pre-restore backups pruned the same day.** Retention kept only the newest backup per day,
+  so any later backup that day removed the copy taken just before a restore. Copies labelled
+  `pre-restore`, `pre-migration` or `pre-bulk` are now kept at least 7 days regardless of the
+  14-daily / 8-weekly limits. Also: two backups in the same second could let the newer one
+  remove itself; the copy just made is never pruned.
+- **Two windows, one session.** Automatic sessions were keyed by app name + project, so two
+  windows of the same app (two stdio processes, or two HTTP MCP sessions) shared one session
+  and one summary. Each connection now gets its own session; the app keeps its name.
+- **Undo.** Creating a record is now recorded in the edit history (with the links and conflict
+  flags saved with it), so undo can take a new record back: only for the app that made it, and
+  only while nothing else refers to it (another app's record, or one the user approved, still
+  needs a delete request the user approves). Undo again brings it back with the same id. And
+  when only some rows of a change were changed again since, undo now restores the rest and
+  returns `skipped: [{record_type, record_id, why}]` instead of refusing all of it; it refuses
+  only when nothing could be undone.
+
+### Write receipts
+- Every saved write's answer has `receipt: {"change": "3f9a1d2c4b5e", "saved": ["decision #31"]}`.
+  The change id is also the edit id in `manage_history(action="list")`.
+- The same write (same arguments) from the same connection within 2 minutes of a saved one
+  returns `already_saved: true` with the first receipt and saves nothing. Different content,
+  another window or app, or a later repeat is saved as usual. Undo (undo again = redo) and
+  claim renewals are never treated as repeats.
+
+### Agents can't decide their own review items
+- `manage_review` approve / reject is refused in code (`own_item`: "You queued review item
+  #12, so you can't decide it yourself. Ask the user; pass their exact words as
+  user_request.") when the calling app (on the same machine, when recorded) queued the item,
+  including its own session summary, unless `user_request` holds the user's own words (at
+  least two words, not the item's own text). Another app relaying the user, the review page
+  and the command line work as before.
+
+### Safety copies and health check
+- Right before an approved delete, clean-up or markdown edit, FlowState takes a verified
+  `pre-bulk` copy (approvals within a minute share one). If it can't, nothing is changed
+  (`safety_copy_failed`). This does not depend on nightly backups; FlowState adds no daily or
+  nightly copy of its own, so a user who said no to backups gets none.
+- On start, `PRAGMA quick_check`. Only a problem (or a failed migration) is shown, as the first
+  line of `start_here`, with the newest backup that passes its own check. Nothing is repaired
+  automatically.
+
+### Run ledger and "since your last visit"
+- Per automatic session FlowState records its start, end, app and machine, and the ids of
+  what it read and wrote (for a brief: every rule, handoff and record it showed; for other
+  reads a hash of the answer). Never the text. Record only; there is no new tool. Pruned with
+  the activity log (90 days by default).
+- `start_here` shows at most one line about other sessions' work in the project since this
+  app's previous brief there: `Since your last visit (Oct 19): Claude Desktop and Grok saved 3
+  decisions, 5 changes, 2 todos.` After more than 14 days it is just counts plus a
+  `manage_history(action="who", since=...)` call. Nothing on a first visit or when nothing
+  changed; capped at 240 characters and inside the brief's size limits.
+
+### Speed
+- Measured through the MCP call path on a temp database with 2,000 records (450 saves):
+  median save 8.3 ms in 2.3.0, 9.7 ms in 2.4.0; p95 10.2 ms and 11.8 ms.
+
+### Database
+- Migration 015 adds `session_runs` (session -> connection key, app, model, machine,
+  identity source), 016 `run_writes` (one row per write: change id, connection, session,
+  project, app, machine, tool, action, a hash of the arguments, saved / failed, record ids,
+  error code, times), 017 `run_views` (one row per read in a session: tool, a hash of the
+  answer, and for a brief the record ids it showed). New tables only; no existing table is
+  changed, so a v2.3.0 database upgrades cleanly (tested with a database made by the v2.3.0
+  code). A backup is taken first, as for every migration.
+- Edit history rows for created records use the tool names `create/<type>` and
+  `approve/<type>`. "Who did what" still lists each creation once.
+
 ## 2.3.0 - 2026-10-21
 
 ### In short
