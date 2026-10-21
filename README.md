@@ -304,6 +304,37 @@ apps are refused.
 
 ---
 
+## Optional relay: cloud AIs without your own domain
+
+**Local FlowState stays free and MIT-licensed. It needs no account, and it makes no network
+calls.** The relay is off by default. Nothing in it runs until you enroll.
+
+If you want claude.ai, ChatGPT or Cursor to reach the FlowState on your computer, and you don't
+want to set up your own domain and Cloudflare Tunnel ([docs/REMOTE-ACCESS.md](docs/REMOTE-ACCESS.md)),
+the relay agent connects out to `relay.flowstatemcp.com`, an optional hosted service by
+DialectForge. Your apps then use `https://<handle>.relay.flowstatemcp.com/mcp`.
+
+The relay can't read your traffic. The TLS key for your address is made on your computer and
+never leaves it. Your computer gets its own Let's Encrypt certificate (the relay only publishes
+the DNS check value), and it ends every encrypted connection itself. The relay just passes the
+encrypted bytes through. Sign-in is the same OAuth + passphrase consent page as above, served by
+your FlowState. A daily Certificate Transparency check warns you loudly if anyone else ever
+gets a certificate for your address.
+
+```bash
+<venv python> -m flowstate remote passphrase              # once, if not set yet
+<venv python> -m flowstate relay enroll --code <one-time code>
+<venv python> -m flowstate relay run                      # keep it running
+<venv python> -m flowstate relay status                   # handle, URL, certificate, tunnel, CT check
+<venv python> -m flowstate relay disable                  # stop (keeps keys); `enable` to turn back on
+<venv python> -m flowstate relay forget                   # delete the device token, keys and certificate
+```
+
+The relay uses the Python package `cryptography`, which comes with `mcp` today. The wire
+protocol is in [docs/relay-protocol.md](docs/relay-protocol.md).
+
+---
+
 ## Honest limits
 
 - **Search by meaning needs a model download.** FlowState never downloads a model or calls a

@@ -615,16 +615,24 @@ class Gate:
 
     def __init__(self, app, checker: TokenChecker, mcp_path: str,
                  allowed_hosts: Optional[set[str]] = None, trust_proxy: bool = False,
-                 resource_metadata_url: Optional[str] = None):
+                 resource_metadata_url: Optional[str] = None, peer_resolver=None):
         self.app, self.checker, self.mcp_path = app, checker, mcp_path
         self.allowed_hosts = {h.lower() for h in allowed_hosts} if allowed_hosts else None
         self.trust_proxy = trust_proxy
         self.rmd = resource_metadata_url
+        # relay agent (relay/tunnel.py): maps its own loopback source port to the real client
+        # IP, so no client-supplied header is trusted for rate limits
+        self.peer_resolver = peer_resolver
         self.per_client = RateLimiter(_int_env("FLOWSTATE_RATE_LIMIT", 300))
         self.per_ip = RateLimiter(_int_env("FLOWSTATE_RATE_LIMIT_ANON", 60))
 
     def _ip(self, scope, headers) -> str:
-        peer = (scope.get("client") or ("?", 0))[0]
+        client = scope.get("client") or ("?", 0)
+        peer = client[0]
+        if self.peer_resolver and peer in ("127.0.0.1", "::1"):
+            real = self.peer_resolver(client)
+            if real:
+                return real
         if self.trust_proxy and peer in ("127.0.0.1", "::1"):
             fwd = headers.get(b"cf-connecting-ip", b"").decode("latin-1").strip()
             if fwd:

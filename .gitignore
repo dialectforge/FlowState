@@ -48,3 +48,15 @@ http-token.txt
 *token*.txt
 *.pem
 *.key
+
+# Relay agent state and other credentials (never commit)
+/relay/
+relay-state/
+device-token*
+acme-account*
+*.p8
+*.p12
+*.pfx
+master.key
+*recovery*code*
+*.crt

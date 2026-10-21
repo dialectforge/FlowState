@@ -12,6 +12,8 @@
                                 clients | revoke --client ID | allow-redirect --name HOST
     flowstate keys              add --name N [--read-only] [--workspace W] | list |
                                 revoke --id ID | --name N   (per-app LAN keys: app_keys.py)
+    flowstate relay             enroll --code C | run | status | renew | enable | disable |
+                                forget | ct-check | ct-ack   (optional, off by default: relay/)
     (Phase D commands: see cli_more.py)
 
 Plain-language output; exit code 0 = OK, 1 = failed / refused. Never prints a token.
@@ -28,7 +30,7 @@ from . import paths
 from . import cli_more
 
 COMMANDS = ("migrate", "backup", "restore", "offsite", "schedule-backups", "token",
-            "scan-secrets", "remote", "keys") + cli_more.COMMANDS
+            "scan-secrets", "remote", "keys", "relay") + cli_more.COMMANDS
 
 
 def say(msg: str) -> None:
@@ -388,6 +390,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(fn=cmd_remote)
     from . import app_keys
     app_keys.register(sub)
+    from .relay import cli as relay_cli
+    relay_cli.register(sub)
     cli_more.register(sub)
     return ap
 

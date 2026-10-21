@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Optional relay agent (off by default)
+- `flowstate relay enroll --code <code>` / `run` / `status` / `renew` / `enable` / `disable` /
+  `forget` / `ct-check` / `ct-ack`: reach this computer's FlowState from claude.ai, ChatGPT or
+  Cursor at `https://<handle>.relay.flowstatemcp.com/mcp` without your own domain. TLS is
+  end-to-end: the key is generated locally and never leaves, the certificate comes from Let's
+  Encrypt via ACME DNS-01 run by the agent (`--staging` for testing), renewal 30 days before
+  expiry, and the relay only splices encrypted bytes. Sign-in is the existing OAuth 2.1 + PKCE
+  consent page, unchanged.
+- Daily Certificate Transparency check (crt.sh): a certificate for your relay address with a
+  key that isn't yours is logged as an error, shown by `flowstate relay status` and at the top
+  of `start_here`.
+- Wire protocol for the relay server: `docs/relay-protocol.md`.
+- Nothing changes for local use: no account, no network calls, the relay code isn't loaded.
+
 ## 2.1.0 - 2026-10-18
 
 ### Working with your AI
