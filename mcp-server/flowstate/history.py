@@ -224,44 +224,59 @@ _ENDPOINT = {"conversations": "decision", "changes": "change", "learnings": "lea
 
 
 def record_created(db_path: Path, rtype: str, rid: int, tool: str = "create",
-                   client: str = "unknown", edit_id: Optional[str] = None) -> Optional[str]:
+                   client: str = "unknown", edit_id: Optional[str] = None,
+                   conn: Optional[sqlite3.Connection] = None) -> Optional[str]:
     """Record that a call created `rtype` #rid (tool create|approve): the new row plus the
-    links it made and the conflict flags its save raised, as one edit."""
+    links it made and the conflict flags its save raised, as one edit. With `conn` it joins
+    that connection's transaction (receipts.finish: one commit per write)."""
     if rtype not in CREATED:
         return None
     table = TABLES[rtype]
-    conn = connect(db_path)
+    own = conn is None
+    conn = conn or connect(db_path)
     try:
-        if not available(conn):
+        if not _has(conn, "record_history", db_path):
             return None
         row = _row(conn, table, int(rid))
         if row is None:
             return None
         rows = [(table, int(rid), row)]
-        if table in _ENDPOINT and _has(conn, "record_links"):
+        if table in _ENDPOINT and _has(conn, "record_links", db_path):
             rows += [("record_links", r["id"], {k: _val(r[k]) for k in r.keys()}) for r in
                      conn.execute("SELECT * FROM record_links WHERE from_type = ? AND from_id = ? "
                                   "AND removed_at IS NULL", (_ENDPOINT[table], int(rid)))]
-        if table == "conversations" and _has(conn, "decision_conflicts"):
+        if table == "conversations" and _has(conn, "decision_conflicts", db_path):
             rows += [("decision_conflicts", r["id"], {k: _val(r[k]) for k in r.keys()}) for r in
                      conn.execute("SELECT * FROM decision_conflicts WHERE new_id = ?", (int(rid),))]
         pid = _project_of(conn, table, row)
         edit_id = edit_id or new_edit_id()
+        who = identity.fields(conn, "record_history", client)   # once, not per row
+        cols = ["edit_id", "table_name", "record_id", "project_id", "tool", "old_row", "new_row",
+                "client", "created_at", *who]
+        sql = (f'INSERT INTO record_history ({", ".join(cols)}) '
+               f'VALUES ({", ".join("?" * len(cols))})')
         now = _now()
-        for t, k, new in rows:
-            identity.insert(conn, "record_history", {
-                "edit_id": edit_id, "table_name": t, "record_id": k, "project_id": pid,
-                "tool": f"{tool}/{rtype}", "old_row": None, "new_row": json.dumps(new),
-                "client": (client or "")[:80], "created_at": now}, client)
-        conn.commit()
+        conn.executemany(sql, [(edit_id, t, k, pid, f"{tool}/{rtype}", None, json.dumps(new),
+                                (client or "")[:80], now, *who.values()) for t, k, new in rows])
+        if own:
+            conn.commit()
         return edit_id
     finally:
-        conn.close()
+        if own:
+            conn.close()
 
 
-def _has(conn, table: str) -> bool:
-    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-                        (table,)).fetchone() is not None
+_HAS: set = set()   # (database, table) known to exist: tables are only ever added
+
+
+def _has(conn, table: str, db_path=None) -> bool:
+    if (str(db_path), table) in _HAS:
+        return True
+    ok = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                      (table,)).fetchone() is not None
+    if ok and db_path is not None:
+        _HAS.add((str(db_path), table))
+    return ok
 
 
 @contextmanager

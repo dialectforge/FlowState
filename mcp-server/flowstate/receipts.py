@@ -11,7 +11,8 @@ saved or failed, and the record ids. Never the text.
 - Duplicates: the same arguments from the same connection within WINDOW_SECONDS of a saved
   write return that write's receipt instead of saving a copy. If the first one is still
   saving (it timed out), the repeat waits for it. Undo (undo again = redo) and claim renewals
-  are never treated as repeats.
+  are never treated as repeats. This check is in memory: a connection's writes all pass
+  through this process, so it costs the write nothing.
 
 Nothing here may break a write: callers wrap these in try/except, and a database without
 run_writes simply gets no receipts.
@@ -22,9 +23,10 @@ import itertools
 import json
 import sqlite3
 import threading
+import time
 import uuid
 import weakref
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -33,6 +35,9 @@ NOT_REPEATS = {("history", "undo"), ("todo", "renew")}
 _IGNORED_ARGS = ("model", "project_id")   # the same content however the caller names itself
 
 _inflight: dict = {}            # (conn_key, hash) -> threading.Event while a write runs
+_recent: dict = {}              # (conn_key, hash) -> (monotonic time, receipt, started utc)
+_told: set = set()              # change ids whose caller already has the outcome
+_ready: set = set()             # databases known to have run_writes
 _late: dict = {}                # conn_key -> [(change_id, tool, started utc)] timed out
 _lock = threading.Lock()
 _conns: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
@@ -50,9 +55,14 @@ def _conn(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def available(conn) -> bool:
-    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
-                        "AND name='run_writes'").fetchone() is not None
+def available(conn, db_path=None) -> bool:
+    if db_path is not None and str(db_path) in _ready:
+        return True
+    ok = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                      "AND name='run_writes'").fetchone() is not None
+    if ok and db_path is not None:
+        _ready.add(str(db_path))   # tables are only ever added
+    return ok
 
 
 def new_change_id() -> str:
@@ -87,23 +97,6 @@ def _receipt(row) -> dict:
     return {"change": row["change_id"], "saved": [r.replace(":", " #", 1) for r in recs]}
 
 
-def _find_saved(conn, conn_key: str, h: str) -> Optional[sqlite3.Row]:
-    since = (datetime.now(timezone.utc) - timedelta(seconds=WINDOW_SECONDS)).strftime(
-        "%Y-%m-%d %H:%M:%S")
-    return conn.execute(
-        """SELECT * FROM run_writes WHERE conn_key = ? AND content_hash = ? AND status = 'saved'
-           AND started_at > ? ORDER BY id DESC LIMIT 1""", (conn_key, h, since)).fetchone()
-
-
-def _duplicate_reply(conn, row) -> dict:
-    conn.execute("UPDATE run_writes SET told_at = ? WHERE id = ? AND told_at IS NULL",
-                 (_now(), row["id"]))
-    conn.commit()
-    return {"already_saved": True, "receipt": _receipt(row),
-            "note": f"This exact write was already saved at {row['started_at'][11:19]} UTC in "
-                    f"this session, so it was not saved again."}
-
-
 class Pending:
     """One write in progress (between begin and finish)."""
 
@@ -117,7 +110,8 @@ class Pending:
 
 def begin(db_path: Path, change_id: str, conn_key: Optional[str], name: str, args: dict,
           wait: float) -> tuple[Optional[Pending], Optional[dict]]:
-    """(pending write, None) to go ahead, or (None, reply) for a repeat of a saved write."""
+    """(pending write, None) to go ahead, or (None, reply) for a repeat of a saved write.
+    In memory only: every write of a connection passes through this process."""
     p = Pending(change_id, conn_key, name, args)
     if not conn_key or (name, args.get("action")) in NOT_REPEATS:
         return p, None
@@ -126,16 +120,13 @@ def begin(db_path: Path, change_id: str, conn_key: Optional[str], name: str, arg
         running = _inflight.get(key)
     if running is not None:   # the same write is still saving (it timed out): wait for it
         running.wait(max(0.1, wait))
-    conn = _conn(db_path)
-    try:
-        if not available(conn):
-            return p, None
-        row = _find_saved(conn, conn_key, p.hash)
-        if row is not None:
-            return None, _duplicate_reply(conn, row)
-    finally:
-        conn.close()
     with _lock:
+        hit = _recent.get(key)
+        if hit is not None and time.monotonic() - hit[0] < WINDOW_SECONDS:
+            _told.add(hit[1]["change"])
+            return None, {"already_saved": True, "receipt": hit[1],
+                          "note": f"This exact write was already saved at {hit[2][11:19]} UTC "
+                                  f"in this session, so it was not saved again."}
         if key in _inflight:   # still running after the wait: don't start a second copy
             return None, {"error": "still_saving",
                           "message": "The same write from this session is still being saved. "
@@ -146,13 +137,20 @@ def begin(db_path: Path, change_id: str, conn_key: Optional[str], name: str, arg
 
 
 def finish(db_path: Path, p: Pending, result, project_id: Optional[int],
-           session_id: Optional[int], ident, created: Optional[tuple] = None) -> Optional[dict]:
-    """Record how the write ended; returns the receipt for a saved write (else None)."""
+           session_id: Optional[int], ident, created: Optional[tuple] = None,
+           client: str = "unknown") -> Optional[dict]:
+    """Record how the write ended, in one transaction with the created record's history
+    row (if any); returns the receipt for a saved write (else None)."""
+    receipt = None
     try:
         failed = result is None or (isinstance(result, dict) and "error" in result)
         conn = _conn(db_path)
         try:
-            if not available(conn):
+            if created and not failed:
+                from .history import record_created
+                record_created(db_path, *created, "create", client, conn=conn)
+            if not available(conn, db_path):
+                conn.commit()
                 return None
             recs = [] if failed else _records(conn, p.change_id, result, created)
             who = ident.as_dict() if ident is not None else {}
@@ -166,14 +164,23 @@ def finish(db_path: Path, p: Pending, result, project_id: Optional[int],
                  (str(result.get("error"))[:60] if isinstance(result, dict) and failed
                   else None), p.started, _now()))
             conn.commit()
-            return None if failed else {"change": p.change_id,
-                                        "saved": [r.replace(":", " #", 1) for r in recs]}
+            if not failed:
+                receipt = {"change": p.change_id,
+                           "saved": [r.replace(":", " #", 1) for r in recs]}
+            return receipt
         finally:
             conn.close()
     finally:
-        if p.event is not None:
-            with _lock:
+        with _lock:
+            if receipt is not None and p.conn_key:
+                now = time.monotonic()
+                _recent[(p.conn_key, p.hash)] = (now, receipt, p.started)
+                if len(_recent) > 500:   # forget what is past the window
+                    for k in [k for k, v in _recent.items() if now - v[0] >= WINDOW_SECONDS]:
+                        _recent.pop(k, None)
+            if p.event is not None:
                 _inflight.pop((p.conn_key, p.hash), None)
+        if p.event is not None:
             p.event.set()
 
 
@@ -230,6 +237,11 @@ def timed_out(conn_key: Optional[str], change_id: Optional[str], tool: str) -> N
             _late.setdefault(conn_key, []).append((change_id, tool, _now()))
 
 
+def waiting(conn_key: Optional[str]) -> bool:
+    """Does this connection have a timed-out write whose outcome it wasn't told yet?"""
+    return bool(conn_key) and bool(_late.get(conn_key))
+
+
 def late_news(db_path: Path, conn_key: Optional[str]) -> list[str]:
     """One line per earlier write of this connection that timed out and has ended since."""
     with _lock:
@@ -247,7 +259,8 @@ def late_news(db_path: Path, conn_key: Optional[str]) -> list[str]:
             if row is None:
                 continue                       # still saving: say so next time
             done.add(change_id)
-            if row["told_at"]:
+            if row["told_at"] or change_id in _told:
+                _told.discard(change_id)
                 continue                       # a repeat already got its receipt
             when = f"{tool} from {at[11:19]} UTC"
             if row["status"] == "saved":

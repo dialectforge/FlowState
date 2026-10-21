@@ -272,7 +272,8 @@ async def _call_internal(name: str, arguments: dict, shown: str = "") -> types.C
         out = _ok(result)
         return out
     finally:
-        news = await asyncio.to_thread(_safe_call, receipts.late_news, backend.db_path, conn_key)
+        news = await asyncio.to_thread(_safe_call, receipts.late_news, backend.db_path, conn_key) \
+            if receipts.waiting(conn_key) else None
         if out is not None and news:   # how earlier timed-out writes of this connection ended
             out.content.extend(TextContent(type="text", text=line) for line in news)
         if out is not None and not out.isError and not write:   # the run ledger (ledger.py)
@@ -327,20 +328,21 @@ def handle_call(name: str, args: dict, client: str = "unknown", meta: Optional[d
     receipt, or the receipt of the same write saved moments ago (receipts.py)."""
     meta = meta if meta is not None else {}
     change = identity.change_id()
-    if not change:
-        return _handle(name, args, client, meta)
-    pending, reply = _safe_call(receipts.begin, backend.db_path, change, identity.call_key(),
-                                name, dict(args), call_timeout() - 1) or (None, None)
+    pending, reply = (_safe_call(receipts.begin, backend.db_path, change, identity.call_key(),
+                                 name, dict(args), call_timeout() - 1) or (None, None)) \
+        if change else (None, None)
     if reply is not None:
         return reply
     result = receipt = None
     try:
         result = _handle(name, args, client, meta)
-    finally:
+    finally:   # a created record goes into the edit history (undo takes it back)
         if pending is not None:
             receipt = _safe_call(receipts.finish, backend.db_path, pending, result,
                                  meta.get("project_id"), meta.get("session_id"),
-                                 identity.current(), meta.get("record"))
+                                 identity.current(), meta.get("record"), client)
+        elif meta.get("record"):
+            _safe_call(history.record_created, backend.db_path, *meta["record"], "create", client)
     return receipts.attach(result, receipt)
 
 
@@ -464,8 +466,6 @@ def _handle(name: str, args: dict, client: str, meta: dict) -> Any:
                                       args.get("field_name") or "")
             if alerted:
                 result = {**result, "alerted_projects": alerted}
-    if meta.get("record"):   # a created record goes into the edit history (undo takes it back)
-        _safe_call(history.record_created, db_path, *meta["record"], "create", client)
     if sid and tracker:
         failed = isinstance(result, dict) and "error" in result
         if pid and not failed:

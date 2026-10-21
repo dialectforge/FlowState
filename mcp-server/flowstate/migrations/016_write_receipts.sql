@@ -10,8 +10,7 @@
 --   content_hash  first 32 hex of sha256(tool + arguments): spots an exact repeat
 --   status        saved | failed (error: the error code only)
 --   records       JSON list of "type:id" the write saved, e.g. ["decision:31"]
---   told_at       when the caller was told how a timed-out write ended (or got its receipt
---                 again for a repeat)
+--   told_at       when the caller was told how a timed-out write ended
 -- Times are UTC 'YYYY-MM-DD HH:MM:SS'.
 CREATE TABLE IF NOT EXISTS run_writes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
