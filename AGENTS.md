@@ -122,6 +122,7 @@ All commands run with the venv Python: `<venv python> -m flowstate <command>`.
 | set up the off-site copy | `flowstate offsite setup --repo <owner>/<repo>` (refused unless the repo is private) |
 | check off-site without pushing | `flowstate offsite push --dry-run` |
 | restore | `flowstate restore <backup file>` (into a new file, verified; `--to <new file>`) |
+| review queue (user) | `flowstate review` lists it; `flowstate approve <id> [<id> ...]` / `flowstate reject <id> [--reason ...]` ask for `y` on the terminal (never piped input; no terminal = refused) |
 | review page (user) | `flowstate review-page` (127.0.0.1:8770 only; opens the browser with a one-time link; includes "Who did what") |
 | per-app keys for the local/LAN HTTP server (user) | `flowstate keys add --name NAME [--read-only] [--workspace W]` (shows the key once) / `keys list` / `keys revoke --id ID` (or `--name NAME`) |
 | pause an app (user) | `flowstate apps list` / `apps pause --app NAME` / `apps resume --app NAME` |
@@ -342,8 +343,10 @@ don't show server instructions:
 6. Auto-captured session summaries, and anything logged with `suggested=true`, wait in the
    review queue (`manage_review(action="list")`). Only call `manage_review` with
    `action="approve"` / `"reject"` when the user explicitly asks in the chat, quoting their
-   words in `user_request`. Deciding an item your own app queued is refused (`own_item`)
-   unless `user_request` holds the user's own words.
+   words in `user_request`. With review mode on, deciding an item your own app queued is
+   refused (`own_item`) whatever you pass: tell the user to run `flowstate approve <id>` (or
+   `flowstate reject <id>`) in their own terminal. Don't run it for them: it asks for their `y`
+   on the terminal and refuses piped input. (Review off: your own item needs the user's words.)
 7. The **review mode** (`off`, `auto_only` default, `types`, `everything`; shown in the brief)
    decides what else waits for review. Only call `manage_review(action="set_mode")` when the
    user asks for that change in the chat, quoting their words in `user_request`; every change
@@ -363,7 +366,8 @@ don't show server instructions:
    "delete" / "delete_component")` and `manage_memory(action="delete", record_type=...,
    record_id=...)` queue a request that shows what would go; tell the user, and only when they
    say so call `manage_review(action="approve", item_id=..., user_request=<their words>)` (a
-   project also needs `confirm_name=<its exact name, typed by the user>`). Undo with
+   project also needs `confirm_name=<its exact name, typed by the user>`); with review on, a
+   request your own app made is approved by the user with `flowstate approve <id>`. Undo with
    `manage_history(action="undo")`. The review page, pausing apps and git commit
    capture are the user's controls (command line / `flowstate review-page`); there is no tool
    for them.
@@ -424,7 +428,12 @@ The same guidance is available as the MCP prompt `flowstate-start`.
   migrations use the standard library only. There is no Node.js part; don't add one.
 - Test tools: `<venv python> -m pip install -e "mcp-server[dev]"` (pytest, pytest-asyncio, httpx).
 - Tests: `.venv/Scripts/python -m pytest tests -q` (Windows) or `.venv/bin/python -m pytest tests -q`.
-  They use temporary databases and fake config folders only.
+  They use temporary databases and fake config folders only: `tests/conftest.py` points HOME
+  and every FlowState path (database, backups, config, token store, auth DB, relay, project
+  files, data-git) into a session temp folder before FlowState is imported, and
+  `tests/guard_site/sitecustomize.py` makes pytest and every server it starts refuse (and
+  record) any touch of the real FlowState folders; the run fails if anything was refused.
+  End-to-end: `.venv/bin/python tests/e2e/run_e2e.py` (about 5 minutes; same guard).
 - Never point tests or experiments at a real database or a real app config.
 - Server code: `mcp-server/flowstate/` (`server.py` tools and transports, `tooldefs.py` tool
   definitions, `surface.py` public and older tool names -> internal operations,
@@ -433,7 +442,8 @@ The same guidance is available as the MCP prompt `flowstate-start`.
   `rules.py`, `handoffs.py`, `provenance.py`, `ask.py`, `meaning.py`, `cleanup.py`,
   `activity.py`, `review_page.py`, `markdown_io.py`, `memory_import.py`, `git_capture.py`, `deletes.py`,
   `secrets_scan.py`, `secret_store.py`, `remote_auth.py`, `app_keys.py`, `identity.py`,
-  `who.py`, `claims.py`, `conflicts.py`, `backup.py`, `offsite.py`, `scheduler.py`, `cli.py`, `cli_more.py`; the optional
+  `who.py`, `claims.py`, `conflicts.py`, `backup.py`, `offsite.py`, `scheduler.py`, `cli.py`, `cli_more.py`,
+  `cli_review.py` (the user-only `review` / `approve` / `reject`), `connections.py`, `http_app.py`; the optional
   relay agent in `relay/`, wire protocol in `docs/relay-protocol.md`). Schema:
   `database/schema.sql` (base) plus numbered migrations in `mcp-server/flowstate/migrations/`
   (new tables only, or `ADD COLUMN ... DEFAULT NULL` on FlowState's own v2 tables as in 012;

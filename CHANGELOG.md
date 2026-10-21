@@ -3,13 +3,14 @@
 ## 2.4.0 - 2026-10-21
 
 ### In short
-- More reliable and easier to trust; no new tools, no new required arguments, nothing new
-  for the user to do. The tool lists are exactly as long as in 2.3.0.
+- More reliable and easier to trust; no new tools and no new required arguments. With review
+  mode on, an app can't approve or reject what it queued itself: you do that with
+  `flowstate approve <id>` in your own terminal (or on the review page).
 - Writes say what they saved, and a write that timed out is no longer a mystery (or a
   duplicate when the agent tries again).
 - Four bugs fixed: timed-out writes, pre-restore backups pruned the same day, two windows of
   one app sharing a session, and undo that couldn't take back a new record or refused a
-  whole change over one row.
+  whole change over one row. Then 14 more found by an end-to-end mock-project test (below).
 
 ### Fixed
 - **Timed-out writes.** A write that hit the call timeout usually still saved a moment later,
@@ -34,6 +35,37 @@
   returns `skipped: [{record_type, record_id, why}]` instead of refusing all of it; it refuses
   only when nothing could be undone.
 
+- **Found by the end-to-end test** (`tests/e2e/run_e2e.py`, 12 scenarios, four agents):
+  - Window A never heard about window B's work: "Since your last visit" now counts from this
+    window's own previous brief, so other windows of the same app count too. A save in the
+    same second as a brief is no longer reported again on the next one.
+  - `manage_sessions current` answered with another window's session; now this connection's.
+  - Data-git sync said `pushed: true` with the remote unreachable; now `success: false,
+    pushed: false, offline: true` ("committed locally"). The first sync to a brand-new empty
+    remote failed as a "conflict"; now it pushes. Only a real conflict is called one, and the
+    rebase is undone so the data folder is left as it was.
+  - An agent could approve its own review item with invented "user words": see below.
+  - File search never found anything (also in 2.3): attached text files are now indexed when
+    attached, older ones on the first search. No new dependency.
+  - A claim outlived its app: when a session ends (quit, ended, idle) its claims are
+    released, and the same app reconnecting may take over its old claim. Other apps still
+    wait until it expires or is released.
+  - Receipts listed nothing for rules, links, file attachments, imports, skills, sessions and
+    the review mode; now every write names what it saved.
+  - A repeat naming the project by number (or another case) saved a second copy; the
+    project is now compared by its id.
+  - A fully locked database could delay the answer past `FLOWSTATE_CALL_TIMEOUT` by up to
+    5 s; the whole call, bookkeeping included, now answers by the timeout.
+  - `manage_problems tree` with an unknown id answered `{}`; now `record_not_found`.
+  - With `flowstate --db <file>`, attachments and data-git used the default folder; they now
+    live next to that database. And the test suite's "never touch real data" guard now covers
+    every path (see "Working on FlowState").
+- **Wording.** To-do priorities are shown as critical / urgent / normal / low in every answer
+  (high and medium are still accepted). An empty database says "no projects yet".
+  `manage_history who` shows each row's session. The variables and methods tools say delete is
+  refused for HTTP app keys; `manage_skills` says which actions need a project. `log_work`
+  details over 10,000 characters are refused with a clear message (`too_long`), never cut.
+
 ### Write receipts
 - Every saved write's answer has `receipt: {"change": "3f9a1d2c4b5e", "saved": ["decision #31"]}`.
   The change id is also the edit id in `manage_history(action="list")`.
@@ -42,13 +74,23 @@
   another window or app, or a later repeat is saved as usual. Undo (undo again = redo) and
   claim renewals are never treated as repeats.
 
-### Agents can't decide their own review items
-- `manage_review` approve / reject is refused in code (`own_item`: "You queued review item
-  #12, so you can't decide it yourself. Ask the user; pass their exact words as
-  user_request.") when the calling app (on the same machine, when recorded) queued the item,
-  including its own session summary, unless `user_request` holds the user's own words (at
-  least two words, not the item's own text). Another app relaying the user, the review page
-  and the command line work as before.
+### Agents can't decide their own review items; you approve them yourself
+- With review mode on (anything but `off`), `manage_review` approve / reject of an item the
+  calling app queued (same machine, when recorded), including its own session summary and
+  its own delete requests, is refused whatever `user_request` says (`own_item`: "You queued
+  review item #12; only the user can decide it. Ask them to run `flowstate approve 12` (or
+  reject) in their terminal."). Suggestions and session summaries stay that way even if review
+  is turned off later.
+- The user-only step: `flowstate review` lists what waits; `flowstate approve <id> [<id> ...]`
+  and `flowstate reject <id> [--reason ...]` show the items and ask you to type `y`. The answer
+  is read from the terminal itself (`/dev/tty`, the Windows console), never from piped input,
+  so an agent running the command in its own shell can't confirm; with no terminal it refuses.
+  The review page (`flowstate review-page`) also still approves; `--print-url` now shows its
+  one-time link on the terminal only.
+- Another app relaying the user (`user_request` with their words) works as before. With review
+  off nothing changes: an app may decide its own item only with the user's own words.
+- This stops an agent approving its own work through FlowState. An agent with full control of
+  your own terminal window could still type into it.
 
 ### Safety copies and health check
 - Right before an approved delete, clean-up or markdown edit, FlowState takes a verified
@@ -72,7 +114,9 @@
 
 ### Speed
 - Measured through the MCP call path on a temp database with 2,000 records (450 saves):
-  median save 8.3 ms in 2.3.0, 9.7 ms in 2.4.0; p95 10.2 ms and 11.8 ms.
+  median save 8.3 ms in 2.3.0, 9.7 ms in 2.4.0; p95 10.2 ms and 11.8 ms. Re-measured after
+  the end-to-end fixes on the same Mac (it ran a little slower that day): 8.9 ms for 2.3.0,
+  10.5 ms before the fixes and 10.3 ms after; p95 12.7 ms.
 
 ### Database
 - Migration 015 adds `session_runs` (session -> connection key, app, model, machine,
@@ -81,7 +125,8 @@
   error code, times), 017 `run_views` (one row per read in a session: tool, a hash of the
   answer, and for a brief the record ids it showed). New tables only; no existing table is
   changed, so a v2.3.0 database upgrades cleanly (tested with a database made by the v2.3.0
-  code). A backup is taken first, as for every migration.
+  code). A backup is taken first, as for every migration. 018 adds one nullable column,
+  `run_views.upto_write` (the newest save a brief counted).
 - Edit history rows for created records use the tool names `create/<type>` and
   `approve/<type>`. "Who did what" still lists each creation once.
 

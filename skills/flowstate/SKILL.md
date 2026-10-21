@@ -92,8 +92,9 @@ never guess or invent one. `manage_history(action="who", ...)` shows who did wha
 - **Never approve or reject review items yourself**, including your own suggestions. Only
   call `manage_review(action="approve")` / `(action="reject")` when the user tells you to in
   this chat, and quote their words in `user_request`. Tell the user when items are waiting; don't ask them to
-  approve in the same breath as creating them. (FlowState refuses an app deciding its own
-  items, `own_item`, unless `user_request` holds the user's words.)
+  approve in the same breath as creating them. (With review on, FlowState refuses an app
+  deciding what it queued itself, `own_item`, whatever you pass: ask the user to run
+  `flowstate approve <id>` in their own terminal. Don't run it for them.)
 - **Writes come with a receipt** (`receipt.saved`). If a write times out, don't repeat it:
   the next FlowState answer says whether it saved.
 - **Deleting only asks.** Only when the user wants something gone: `manage_projects(action=

@@ -150,7 +150,8 @@ prompt `flowstate-start`.
 **You stay in charge**
 - **Review queue**: auto-captured summaries, and anything the AI marks as a suggestion, wait
   for your OK. Approve, edit or reject them in chat or on the review page. An AI can't decide
-  its own items: FlowState refuses unless it passes your own words.
+  what its own app queued: it asks you to run `flowstate approve <id>` (or `reject`) in your
+  terminal, which asks you to type `y` there. Another app can still pass on your OK from chat.
 - **Review mode** (yours to set): `off`, `auto_only` (default), chosen record types, or
   `everything`. Set it for the whole install or per project. The AI may change it only when you
   ask in the chat, and every change is logged with your words.
@@ -285,6 +286,8 @@ the venv active). Add `-h` to any command for its options.
 
 | Command | What it does |
 |---|---|
+| `review [--project NAME]` | List what waits in the review queue |
+| `approve ID [ID ...]` / `reject ID [--reason TEXT]` | Decide review items; asks you to type `y` in this terminal (piped input doesn't count) |
 | `review-page` | Review page in your browser (127.0.0.1 only): approve / edit / reject, review mode, pause apps, "Who did what" (with undo) |
 | `keys add --name N [--read-only] [--workspace W]` / `keys list` / `keys revoke --id ID` (or `--name N`) | Per-app keys for the local/LAN HTTP server; the key is shown once, only a hash is kept; a revoked key stops at once |
 | `apps list` / `apps activity` / `apps pause --app NAME` / `apps resume --app NAME` | Which app did what; stop one app from writing |
@@ -402,10 +405,13 @@ protocol is in [docs/relay-protocol.md](docs/relay-protocol.md).
   are the app's own say-so. Changes recorded before this was added show "not recorded".
 - **"Only when the user asks" is enforced by wording**, not cryptography: approving review items,
   changing the review mode and removing rules require the AI to quote your words, but a
-  misbehaving AI could make them up. Since 2.4 an AI deciding an item it queued itself is
-  refused in code unless it passes at least a few words that aren't the item's own text; that
-  stops a reflexive self-approval, not a determined lie. Hard rules are shown first in every brief; FlowState can't
-  stop an AI from doing something outside FlowState.
+  misbehaving AI could make them up. Since 2.4, with review mode on, an AI can't approve or
+  reject what its own app queued through FlowState at all, whatever words it passes: you do it
+  with `flowstate approve`, which reads your `y` from the terminal itself, not from piped
+  input. That stops an AI approving its own work through FlowState; an AI with full control of
+  your own terminal window could still type into it, and one that makes up your words could
+  still change the review mode for future writes (logged, and shown in the brief). Hard rules
+  are shown first in every brief; FlowState can't stop an AI from doing something outside FlowState.
 - **Answers are extractive** (`search` with `answer=true`): it quotes the best-matching sentences of your records; it doesn't write new answers.
 - **Tested mainly on Windows and macOS.** Linux should work but is less tested.
 - **Remote access is optional and takes setup**: your own domain on Cloudflare, `cloudflared`
@@ -454,7 +460,7 @@ FlowState/
 ├── skills/flowstate/       # the Agent Skill
 ├── scripts/                # helpers: HTTP check, Cloudflare Tunnel template, Windows launchers
 ├── docs/                   # REMOTE-ACCESS.md and notes
-└── tests/                  # pytest suite (temporary databases only)
+└── tests/                  # pytest suite (temporary folders only; guard_site/ refuses real data)
 ```
 
 The database is created at `FLOWSTATE_DB` if set, else Windows
