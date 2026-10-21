@@ -32,6 +32,7 @@ from typing import Optional
 
 WINDOW_SECONDS = 120
 NOT_REPEATS = {("history", "undo"), ("todo", "renew")}
+NO_RECEIPT = {"git"}   # runs git on the data repo (status, history, sync): not a record write
 _IGNORED_ARGS = ("model", "project_id")   # the same content however the caller names itself
 
 _inflight: dict = {}            # (conn_key, hash) -> threading.Event while a write runs
@@ -112,6 +113,8 @@ def begin(db_path: Path, change_id: str, conn_key: Optional[str], name: str, arg
           wait: float) -> tuple[Optional[Pending], Optional[dict]]:
     """(pending write, None) to go ahead, or (None, reply) for a repeat of a saved write.
     In memory only: every write of a connection passes through this process."""
+    if name in NO_RECEIPT:
+        return None, None
     p = Pending(change_id, conn_key, name, args)
     if not conn_key or (name, args.get("action")) in NOT_REPEATS:
         return p, None

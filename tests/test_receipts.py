@@ -193,3 +193,10 @@ def test_receipts_store_ids_and_a_hash_never_text(backend):
     session(S, steps)
     rows = _q(db, "SELECT * FROM run_writes")
     assert rows and LESSON["summary"] not in json.dumps(rows) and "Receipts" not in json.dumps(rows)
+
+
+def test_git_tool_calls_are_never_treated_as_repeats(backend):
+    async def steps(c):
+        return [await c.call_tool("manage_data_git", {"action": "status"}) for _ in range(2)]
+    a, b = session(backend, steps)
+    assert "already_saved" not in b.content[0].text and "receipt" not in b.content[0].text
