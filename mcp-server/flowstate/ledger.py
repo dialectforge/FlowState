@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-from . import activity
+from . import activity, identity
 
 
 def _now() -> str:
@@ -51,12 +51,13 @@ def record_read(db_path: Path, tool: str, action: Optional[str], meta: dict, ans
     try:
         if not available(conn):
             return
-        conn.execute(
-            """INSERT INTO run_views (session_id, conn_key, project_id, app, machine, tool,
-               action, at, answer_hash, records) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (sid, conn_key, pid, who.get("app"), who.get("machine"), tool[:60],
-             (action or None) and str(action)[:40], _now(), answer_hash(answer),
-             json.dumps(shown[:200]) if shown is not None else None))
+        row = [sid, conn_key, pid, who.get("app"), who.get("machine"), tool[:60],
+               (action or None) and str(action)[:40], _now(), answer_hash(answer),
+               json.dumps(shown[:200]) if shown is not None else None]
+        cols = "session_id, conn_key, project_id, app, machine, tool, action, at, answer_hash, records"
+        if meta.get("upto_write") is not None and _has_upto(conn):
+            cols, row = cols + ", upto_write", row + [int(meta["upto_write"])]
+        conn.execute(f"INSERT INTO run_views ({cols}) VALUES ({', '.join('?' * len(row))})", row)
         if random.random() < 0.01:   # prune now and then, like the activity log
             cutoff = (datetime.now(timezone.utc) - timedelta(days=activity.keep_days())).strftime(
                 "%Y-%m-%d %H:%M:%S")
@@ -65,6 +66,19 @@ def record_read(db_path: Path, tool: str, action: Optional[str], meta: dict, ans
         conn.commit()
     finally:
         conn.close()
+
+
+_UPTO: set = set()   # databases known to have run_views.upto_write (018)
+
+
+def _has_upto(conn) -> bool:
+    key = conn.execute("PRAGMA database_list").fetchone()[2]
+    if key in _UPTO:
+        return True
+    ok = any(r[1] == "upto_write" for r in conn.execute("PRAGMA table_info(run_views)"))
+    if ok:
+        _UPTO.add(key)
+    return ok
 
 
 def run(db_path: Path, session_id: int) -> Optional[dict]:
@@ -121,27 +135,53 @@ def _names(apps: list, room: int = 3) -> str:
 
 
 def since_line(db_path: Path, project: dict, ident, session_id: Optional[int],
-               now: Optional[datetime] = None) -> Optional[str]:
-    """One line for the brief: what other sessions saved in this project since this app's
-    previous brief here. None on a first visit or when nothing changed."""
+               meta: Optional[dict] = None, now: Optional[datetime] = None) -> Optional[str]:
+    """One line for the brief: what other sessions (other apps, and other windows of this
+    app) saved in this project since this window's previous brief here (a new window: since
+    this app's latest brief here). None on a first visit or when nothing changed. Sets
+    meta["upto_write"]: the newest save counted, so the next brief starts after it."""
     if ident is None:
         return None
     now = now or datetime.now(timezone.utc)
+    key = identity.call_key()
     conn = _conn(db_path)
     try:
         if not available(conn):
             return None
+        upto = conn.execute("SELECT COALESCE(MAX(id), 0) FROM run_writes").fetchone()[0]
+        if meta is not None:
+            meta["upto_write"] = upto
+        cols = "at, session_id, conn_key" + (", upto_write" if _has_upto(conn) else ", NULL AS upto_write")
         last = conn.execute(
-            """SELECT at, session_id FROM run_views WHERE project_id = ? AND app = ?
-               AND machine IS ? AND tool = 'start_here' ORDER BY id DESC LIMIT 1""",
-            (project["id"], ident.app, ident.machine)).fetchone()
+            f"""SELECT {cols} FROM run_views WHERE project_id = ? AND conn_key = ?
+                AND tool = 'start_here' ORDER BY id DESC LIMIT 1""",
+            (project["id"], key)).fetchone() if key else None
+        mine = last is not None
+        if last is None:   # this window's first brief here: since this app's latest one
+            last = conn.execute(
+                f"""SELECT {cols} FROM run_views WHERE project_id = ? AND app = ?
+                    AND machine IS ? AND tool = 'start_here' ORDER BY id DESC LIMIT 1""",
+                (project["id"], ident.app, ident.machine)).fetchone()
         if last is None:
             return None
+        # Not counted: this window's own saves, and (for a new window) those of the app's
+        # previous window if it has closed (most likely this one before a restart).
+        skip_keys = [key] if key else []
+        if not mine and last["conn_key"]:
+            closed = conn.execute("SELECT closed_at FROM auto_sessions WHERE session_id = ?",
+                                  (last["session_id"] or -1,)).fetchone()
+            if closed is None or closed[0] is not None:
+                skip_keys.append(last["conn_key"])
+        after, arg = (("id > ?", last["upto_write"]) if last["upto_write"] is not None
+                      else ("finished_at >= ?", last["at"]))
+        marks = ", ".join("?" * len(skip_keys))
         rows = conn.execute(
-            """SELECT app, session_id, records FROM run_writes WHERE project_id = ?
-               AND status = 'saved' AND finished_at >= ?
-               AND (session_id IS NULL OR session_id NOT IN (?, ?)) ORDER BY id""",
-            (project["id"], last["at"], last["session_id"] or -1, session_id or -1)).fetchall()
+            f"""SELECT app, session_id, records FROM run_writes WHERE project_id = ?
+                AND status = 'saved' AND {after} AND id <= ?
+                AND (session_id IS NULL OR session_id != ?)
+                {f"AND (conn_key IS NULL OR conn_key NOT IN ({marks}))" if skip_keys else ""}
+                ORDER BY id""",
+            (project["id"], arg, upto, session_id or -1, *skip_keys)).fetchall()
     finally:
         conn.close()
     if not rows:

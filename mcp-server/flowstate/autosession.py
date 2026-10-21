@@ -185,6 +185,24 @@ class AutoSessions:
         finally:
             conn.close()
 
+    def own(self, client: str, project_id: Optional[int], conn_key: Optional[str]) -> Optional[dict]:
+        """This connection's open automatic session (in `project_id`, else its latest in any
+        project). Never another connection's: two windows of one app each get their own."""
+        if not conn_key:
+            return self.current(client, project_id) if project_id else None
+        conn = self._conn()
+        try:
+            if not _has_runs(conn):
+                return None
+            sql = ("SELECT a.* FROM auto_sessions a WHERE a.closed_at IS NULL AND a.client = ?"
+                   + (" AND a.project_id = ?" if project_id else "") + _BY_CONN + _LATEST)
+            args = (client[:80] if client else "unknown",) + ((project_id,) if project_id else ()) \
+                + (conn_key[:80],)
+            row = conn.execute(sql, args).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
     def is_auto(self, session_id: int) -> bool:
         conn = self._conn()
         try:
@@ -207,10 +225,14 @@ class AutoSessions:
         """Agent ended the session itself: keep its summary, just stop tracking."""
         conn = self._conn()
         try:
-            conn.execute(
+            cur = conn.execute(
                 """UPDATE auto_sessions SET closed_at = ?, close_reason = 'explicit'
                    WHERE session_id = ? AND closed_at IS NULL""",
                 (_ts(_utcnow()), session_id))
+            if cur.rowcount:
+                pid = conn.execute("SELECT project_id FROM auto_sessions WHERE session_id = ?",
+                                   (session_id,)).fetchone()
+                self._release_claims(conn, session_id, pid["project_id"], "explicit")
             conn.commit()
         finally:
             conn.close()
@@ -268,6 +290,18 @@ class AutoSessions:
         conn.execute(
             "UPDATE auto_sessions SET closed_at = ?, close_reason = ? WHERE session_id = ?",
             (_ts(_utcnow()), reason, row["session_id"]))
+        self._release_claims(conn, row["session_id"], row["project_id"], reason)
+
+    @staticmethod
+    def _release_claims(conn, session_id: int, project_id: int, reason: str) -> None:
+        """A claim ends with its session (claims.py): drop what this connection held here."""
+        if not _has_runs(conn):
+            return
+        key = conn.execute("SELECT conn_key, app FROM session_runs WHERE session_id = ?",
+                           (session_id,)).fetchone()
+        if key and key["conn_key"]:
+            from . import claims
+            claims.release_for_session(conn, key["conn_key"], key["app"], project_id, reason)
 
 
 _REASON_TEXT = {"idle": "closed after idle timeout", "shutdown": "client disconnected",

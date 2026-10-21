@@ -28,6 +28,7 @@ from . import activity
 from . import claims
 from . import cleanup
 from . import conflicts
+from . import connections
 from . import deletes
 from . import history
 from . import identity
@@ -404,6 +405,8 @@ def _handle(name: str, args: dict, client: str, meta: dict) -> Any:
         if args.get("suggested") and isinstance(result, dict) and "error" not in result:
             off = "Review mode is off, so this was saved directly."
             result["note"] = f"{off} {result['note']}" if result.get("note") else off
+    elif name == "session" and args.get("action") == "current":
+        result = connections.current_session(db_path, tracker, client, pid)
     elif name in ("review_approve", "review_reject"):
         result = _review_decide(name, pid, args, client)
     elif name == "delete_request" or (name, args.get("action")) in _DELETE_ACTIONS:
@@ -490,7 +493,7 @@ def _start_here(args: dict, client: str, meta: Optional[dict] = None) -> str:
     session = _safe_track(tracker.current, client, project["id"], identity.conn()[0]) \
         if (sid and tracker) else None
     try:
-        since = _safe_call(ledger.since_line, db_path, project, identity.current(), sid)
+        since = _safe_call(ledger.since_line, db_path, project, identity.current(), sid, meta)
         text = build_brief(db_path, project, session, size=args.get("size") or "standard",
                            shown=(meta or {}).get("shown"), since=since)
     except Exception as e:  # noqa: BLE001 - brief problems must not break the agent

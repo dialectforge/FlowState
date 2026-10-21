@@ -441,3 +441,51 @@ def test_session_comes_from_the_mcp_session_header_over_http():
     assert a.as_dict() == b.as_dict() == {"app": "Cursor", "model": None, "machine": "mac-mini",
                                           "identity_source": "app_key"}   # logs unchanged
     assert identity.resolve("Cursor").session == identity.PROCESS_SESSION
+
+
+# ---------------------------------------------------------------- 2.4.0: a claim ends with its session
+def _claims(S):
+    conn = sqlite3.connect(S.backend.db_path)
+    try:
+        return conn.execute("SELECT todo_id, app, session FROM todo_claims").fetchall()
+    finally:
+        conn.close()
+
+
+def test_quitting_the_app_releases_its_claims(S, clock):
+    ok(todo(S, {"action": "claim", "todo_id": 1}))
+    fail(todo(S, {"action": "claim", "todo_id": 1}, app="Grok"), "claimed_by_other")
+    S.backend.tracker.close_instance("shutdown")          # Cursor quits: its session closes
+    assert _claims(S) == []
+    ok(todo(S, {"action": "claim", "todo_id": 1}, app="Grok"))
+    conn = sqlite3.connect(S.backend.db_path)
+    ev = [r[0] for r in conn.execute("SELECT summary FROM todo_claim_events WHERE event='release'")]
+    conn.close()
+    assert ev and "its session ended (shutdown)" in ev[0]
+
+
+def test_the_same_app_reconnecting_takes_over_its_old_claim(S, clock, monkeypatch):
+    ok(todo(S, {"action": "claim", "todo_id": 1}))
+    # the old session closed without its claims being dropped (e.g. by an older FlowState)
+    conn = sqlite3.connect(S.backend.db_path)
+    conn.execute("UPDATE auto_sessions SET closed_at = '2026-10-21 12:00:00', close_reason = 'shutdown'")
+    conn.commit()
+    conn.close()
+    fail(todo(S, {"action": "claim", "todo_id": 1}, app="Grok"), "claimed_by_other")   # others still wait
+    monkeypatch.setattr(identity, "PROCESS_SESSION", "cursor-reopened")
+    body = ok(todo(S, {"action": "claim", "todo_id": 1}))
+    assert body["claimed"] is True and [r[2] for r in _claims(S)] == ["cursor-reopened"]
+
+
+def test_a_second_live_window_of_the_same_app_is_still_blocked(S, clock, monkeypatch):
+    ok(todo(S, {"action": "claim", "todo_id": 1}))
+    monkeypatch.setattr(identity, "PROCESS_SESSION", "cursor-window-2")
+    fail(todo(S, {"action": "claim", "todo_id": 1}), "claimed_by_other")
+
+
+def test_ending_the_session_explicitly_releases_its_claims(S, clock):
+    ok(todo(S, {"action": "claim", "todo_id": 1}))
+    sid = S.backend.tracker.own("Cursor", None, identity.PROCESS_SESSION)["session_id"]
+    ok(call(S, "manage_sessions", {"action": "end", "project": "Alpha", "session_id": sid,
+                                    "summary": "done for today"}))
+    assert _claims(S) == []

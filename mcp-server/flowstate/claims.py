@@ -8,6 +8,10 @@ so the second agent picks something else instead of doing the same work silently
   todo is unclaimed, its claim has expired, or the same claimer holds it (then it renews).
 - The same claimer = same app, machine and session (identity.py; the session is this server
   process for stdio, the MCP session id over HTTP), so two sessions of one app are told apart.
+- A claim ends with its session (2.4.0): when the session closes (the app quits, the agent
+  ends it, or it goes idle) its claims are released, and the same app on the same machine
+  may take over a claim whose session is no longer open (it reconnected as a new session).
+  Other apps stay blocked until the claim expires or is released.
 - No hard lock: anyone may still update a claimed todo; they get a warning and an `override`
   event. done / cancelled clears the claim.
 - Every event goes into todo_claim_events, which manage_history who lists.
@@ -201,6 +205,34 @@ def _todo(conn, pid: int, todo_id) -> sqlite3.Row:
     return t
 
 
+def _ended_session_sql(conn) -> Optional[str]:
+    """SQL (for the claim upsert) that is true when the existing claim's session is known
+    and no longer open for its app. None before migration 015."""
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_runs'"
+                    ).fetchone() is None:
+        return None
+    return ("EXISTS (SELECT 1 FROM session_runs r WHERE r.conn_key = todo_claims.session) "
+            "AND NOT EXISTS (SELECT 1 FROM session_runs r JOIN auto_sessions a USING (session_id) "
+            "WHERE r.conn_key = todo_claims.session AND r.app IS todo_claims.app "
+            "AND a.closed_at IS NULL)")
+
+
+def release_for_session(conn, session_key: Optional[str], app: Optional[str], project_id: int,
+                        reason: str) -> int:
+    """Inside the caller's transaction: drop the claims a closed session (this connection
+    and app) held in this project, with a `release` event each. Returns how many."""
+    if not session_key or not available(conn):
+        return 0
+    rows = conn.execute("SELECT * FROM todo_claims WHERE session = ? AND app IS ? AND project_id = ?",
+                        (session_key, app, project_id)).fetchall()
+    for r in rows:
+        conn.execute("DELETE FROM todo_claims WHERE todo_id = ?", (r["todo_id"],))
+        _event(conn, r["todo_id"], project_id, "release",
+               f"claim on todo #{r['todo_id']} released: its session ended ({reason})",
+               {k: r[k] for k in _ID})
+    return len(rows)
+
+
 def _held_elsewhere(t, row, now: datetime, mine: str) -> ClaimError:
     return ClaimError(
         "claimed_by_other",
@@ -228,7 +260,11 @@ def claim(db_path: Path, pid: int, todo_id, minutes=None, client: Optional[str] 
             vals = {"todo_id": t["id"], "project_id": pid, "holder": who["holder"],
                     **{k: who.get(k) for k in _ID}, "claimed_at": _ts(now), "expires_at": expires}
             # The decision is this one statement: insert, or take over only when the current
-            # claim is ours or has expired.
+            # claim is ours, has expired, or is this app's on this machine from a session
+            # that is no longer open (the app reconnected).
+            ended = _ended_session_sql(conn)
+            same_app = (f" OR (todo_claims.app IS excluded.app AND todo_claims.machine IS "
+                        f"excluded.machine AND {ended})" if ended else "")
             cur = conn.execute(
                 f"""INSERT INTO todo_claims ({', '.join(vals)}) VALUES ({', '.join('?' * len(vals))})
                     ON CONFLICT(todo_id) DO UPDATE SET
@@ -239,7 +275,8 @@ def claim(db_path: Path, pid: int, todo_id, minutes=None, client: Optional[str] 
                       app = excluded.app, model = excluded.model, machine = excluded.machine,
                       identity_source = excluded.identity_source, session = excluded.session,
                       expires_at = excluded.expires_at
-                    WHERE todo_claims.holder = excluded.holder OR todo_claims.expires_at <= ?""",
+                    WHERE todo_claims.holder = excluded.holder OR todo_claims.expires_at <= ?"""
+                + same_app,
                 (*vals.values(), _ts(now), _ts(now)))
             if cur.rowcount != 1:
                 row = conn.execute("SELECT * FROM todo_claims WHERE todo_id = ?",
@@ -251,8 +288,10 @@ def claim(db_path: Path, pid: int, todo_id, minutes=None, client: Optional[str] 
             if renewed:
                 _event(conn, t["id"], pid, "renew", f"renewed claim on todo #{t['id']} ({mins}m)", who)
             else:
-                took = (f" (took over an expired claim by {holder_name(before)})"
-                        if before is not None and before["holder"] != who["holder"] else "")
+                took = ""
+                if before is not None and before["holder"] != who["holder"]:
+                    took = (f" (took over the claim of an ended {holder_name(before)} session)"
+                            if live else f" (took over an expired claim by {holder_name(before)})")
                 _event(conn, t["id"], pid, "claim",
                        f"claimed todo #{t['id']} {title} for {mins}m{took}", who)
             conn.execute("COMMIT")
