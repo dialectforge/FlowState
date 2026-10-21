@@ -80,7 +80,7 @@
       "type": "string"
      },
      "details": {
-      "description": "Why, what was rejected, old / new values.",
+      "description": "Why, what was rejected, old / new values. Max 10,000 chars.",
       "type": "string"
      },
      "kind": {

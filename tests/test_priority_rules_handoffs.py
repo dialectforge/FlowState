@@ -99,7 +99,8 @@ def test_priority_in_brief_next_log_work_and_review(backend, seeded_db):
     S = backend
     r = _j(call(S, "log_work", {"project": "Alpha", "kind": "todo", "summary": "Ship it",
                                 "priority": "urgent"}))
-    assert r["record"]["priority"] == "high"
+    assert r["record"]["priority"] == "urgent"           # shown by its name (stored as high)
+    assert _q(seeded_db, "SELECT priority FROM todos WHERE title = 'Ship it'") == [("high",)]
     call(S, "log_work", {"project": "Alpha", "kind": "problem", "summary": "Bad crash",
                          "priority": "critical"})
     assert _q(seeded_db, "SELECT severity FROM problems WHERE title = 'Bad crash'") == [("critical",)]

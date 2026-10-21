@@ -52,7 +52,7 @@ LOG_WORK = _tool("log_work", guide.LOG_WORK_DESCRIPTION, {
     "kind": _p("The record kind (see the description).",
                enum=["decision", "change", "problem", "learning", "todo"]),
     "summary": _p("The record in one short line."),
-    "details": _p("Why, what was rejected, old / new values."),
+    "details": _p("Why, what was rejected, old / new values. Max 10,000 chars."),
     "component": _p("Component name (created if missing; change / problem default General); "
                     "shared ones too."),
     "priority": {**_PRIORITY, "description": "todo / problem only. Default normal; high and medium "
@@ -338,7 +338,7 @@ MANAGE_METHODS = _tool("manage_methods", guide.METHODS_DESCRIPTION, {
 _SKILL_ACTIONS = ("list", "get_state", "list_metrics", "learn", "confirm", "save_state", "log_metric")
 MANAGE_SKILLS = _tool("manage_skills", guide.SKILLS_DESCRIPTION, {
     "action": _action(_SKILL_ACTIONS),
-    "project": _p("Project name or id. Required for learn, save_state and get_state; list adds "
+    "project": _p("Project name or id. Required except for list and list_metrics; list adds "
                   "global skills.", ["string", "integer"]),
     "skill": _p("learn: what was learned (required)."),
     "skill_type": _p("learn (required) / list (filter): the kind of skill.",

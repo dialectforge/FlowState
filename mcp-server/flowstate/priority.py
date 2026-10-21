@@ -41,6 +41,17 @@ def label(stored: Optional[str]) -> str:
     return _LABEL.get((stored or "").strip().lower(), "normal")
 
 
+def show(value):
+    """An answer with every to-do "priority" shown by its name (high -> urgent, medium ->
+    normal), however deep. Only todos have a priority; problems' severity is left alone."""
+    if isinstance(value, dict):
+        return {k: (_LABEL.get(v, v) if k == "priority" and isinstance(v, str) else show(v))
+                for k, v in value.items()}
+    if isinstance(value, list):
+        return [show(v) for v in value]
+    return value
+
+
 def rank(stored: Optional[str]) -> int:
     return RANK.get((stored or "").strip().lower(), 2)
 

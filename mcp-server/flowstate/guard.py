@@ -151,8 +151,23 @@ def _project_name(db_path: Path, pid) -> str:
         conn.close()
 
 
+DETAILS_MAX = 10_000   # log_work details: a few pages; longer text belongs in an attached file
+
+
+def check_size(name: str, args: dict) -> None:
+    """Refuse (never cut) a log_work whose details are over DETAILS_MAX characters."""
+    details = args.get("details") if name == "log_work" else None
+    if isinstance(details, str) and len(details) > DETAILS_MAX:
+        raise GuardError({
+            "error": "too_long",
+            "message": f"details is {len(details):,} characters; log_work keeps at most "
+                       f"{DETAILS_MAX:,}. Nothing was saved. Log the key points, or attach the "
+                       f"full text as a file (manage_files attach) and mention it."})
+
+
 def check_write(db_path: Path, name: str, args: dict) -> int:
     """Return the resolved project id for a write, or raise GuardError."""
+    check_size(name, args)
     key = write_key(name, args)
     named = explicit_project(args)
     what = name + (f"(action={args['action']})" if args.get("action") else "")

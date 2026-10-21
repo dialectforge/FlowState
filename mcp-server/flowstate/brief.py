@@ -329,9 +329,14 @@ def candidates_text(resolution: dict, cap: int = BRIEF_CAP) -> str:
     """Brief-sized reply when no single project matched."""
     b = _Budget(cap - 40)
     b.add(f"FlowState: {resolution.get('reason', 'no project chosen')}.")
+    names = resolution.get("candidates", [])
+    if not names:
+        b.add("There are no projects yet. Create one with manage_projects(action=\"create\", "
+              "name=\"<name>\") when the user starts new work.")
+        return b.text()
     b.add("Call start_here again with project=\"<name>\" (or manage_projects(action=\"create\") if this is new work).")
     b.add("Projects:")
-    for n in resolution.get("candidates", []):
+    for n in names:
         if not b.add(f"- {n}"):
             break
     return b.text()

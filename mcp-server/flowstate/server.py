@@ -189,7 +189,7 @@ def _ok(result: Any) -> types.CallToolResult:
         return types.CallToolResult(
             content=[TextContent(type="text", text=json.dumps(result, indent=2, default=str))],
             isError=True)
-    text = result if isinstance(result, str) else json.dumps(result, indent=2, default=str)
+    text = result if isinstance(result, str) else json.dumps(priority.show(result), indent=2, default=str)
     return types.CallToolResult(content=[TextContent(type="text", text=text)], isError=False)
 
 
@@ -798,6 +798,8 @@ def _who(pid: Optional[int], args: dict) -> Any:
     for r in res["rows"]:   # keep it short for the model's context
         for k in ("at_utc", "project_id", "identity_source"):
             r.pop(k, None)
+        if r.get("session") is None:
+            r.pop("session", None)
         if r["undo"] is None:
             r.pop("undo")
         else:

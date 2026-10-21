@@ -351,6 +351,9 @@ def route_tool(name: str, args: dict, db_path) -> Any:
                 estimated_tokens=args.get("estimated_tokens")
             )
         elif action == "get_state":
+            if args.get("project_id") is None:
+                return {"error": "project_required",
+                        "message": "get_state needs project=\"<name>\" (a checkpoint is per project)."}
             return tools.get_latest_state(args["project_id"])
         elif action == "log_metric":
             return tools.log_metric(

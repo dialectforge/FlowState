@@ -154,7 +154,8 @@ DATA_GIT_DESCRIPTION = (
 VARIABLES_DESCRIPTION = (
     "Non-secret project settings: hosts, ports, endpoints, config. create, list (read), "
     "update (undo with manage_history), delete (queues a request the user approves in "
-    "manage_review; undo restores it). Secrets are refused; is_secret only "
+    "manage_review; undo restores it; refused for HTTP app keys and remote apps). Secrets "
+    "are refused; is_secret only "
     "labels a value and does not hide it, so never store passwords, tokens or keys. "
     "Requires project. Returns variable rows."
 )
@@ -162,8 +163,8 @@ VARIABLES_DESCRIPTION = (
 METHODS_DESCRIPTION = (
     "Documented reusable procedures of a project (deploy, test, a code convention), with "
     "ordered steps. create, list (read), update (steps replaces the whole list; undo with "
-    "manage_history), delete (queues a request the user approves in manage_review). A "
-    "one-off choice is log_work kind=decision; a "
+    "manage_history), delete (queues a request the user approves in manage_review; refused "
+    "for HTTP app keys and remote apps). A one-off choice is log_work kind=decision; a "
     "lesson is kind=learning. Requires project. Returns method rows."
 )
 

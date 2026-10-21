@@ -199,6 +199,39 @@ def _edit_what(conn, row: dict) -> str:
     return out[:120]
 
 
+_TYPE_OF_EVENT = {"link_added": "link", "link_removed": "link", "handoff_left": "handoff",
+                  "handoff_picked_up": "handoff", "rule_added": "rule", "rule_removed": "rule",
+                  "queued": "review_item", "decided": "review_item", "mode": "review_mode_change"}
+
+
+def _session_of(conn, row: dict, rtype: Optional[str], has: dict) -> Optional[int]:
+    """The automatic session (sessions.id) behind a row, from the 2.4 run ledger, so two
+    windows of one app are told apart. None when it wasn't recorded (before 2.4)."""
+    if "run_writes" not in has:
+        return None
+    if row["kind"] == "edit":
+        r = conn.execute("SELECT w.session_id FROM record_history h JOIN run_writes w "
+                         "ON w.change_id = h.edit_id WHERE h.id = ?", (row["ref"],)).fetchone()
+        return r[0] if r else None
+    if row["kind"] == "queued" and "session_id" in has.get("review_items", ()):
+        r = conn.execute("SELECT session_id FROM review_items WHERE id = ?", (row["ref"],)).fetchone()
+        if r and r[0]:
+            return r[0]
+    if row["kind"].startswith("todo_") and "session_runs" in has:
+        r = conn.execute(
+            "SELECT r.session_id FROM todo_claim_events e JOIN session_runs r ON r.conn_key = e.session "
+            "JOIN auto_sessions a ON a.session_id = r.session_id AND a.project_id IS e.project_id "
+            "WHERE e.id = ? ORDER BY r.session_id DESC LIMIT 1", (row["ref"],)).fetchone()
+        return r[0] if r else None
+    kind = _TYPE_OF_EVENT.get(row["kind"], rtype)
+    if not kind or row["record_id"] is None:
+        return None
+    r = conn.execute("SELECT session_id FROM run_writes WHERE status = 'saved' AND records LIKE ? "
+                     "ORDER BY abs(julianday(finished_at) - julianday(?)) LIMIT 1",
+                     (f'%"{kind}:{row["record_id"]}"%', row["at"])).fetchone()
+    return r[0] if r else None
+
+
 def recent(db_path: Path, app: Optional[str] = None, model: Optional[str] = None,
            machine: Optional[str] = None, project_id: Optional[int] = None,
            since=None, until=None, page: int = 1, per_page: int = PER_PAGE) -> dict:
@@ -209,7 +242,8 @@ def recent(db_path: Path, app: Optional[str] = None, model: Optional[str] = None
     conn = sqlite3.connect(str(db_path), timeout=5.0)
     conn.row_factory = sqlite3.Row
     try:
-        parts = _sources(_tables(conn))
+        has = _tables(conn)
+        parts = _sources(has)
         if not parts:
             return {"rows": [], "total": 0, "page": 1, "pages": 1, "per_page": per_page}
         where, params = ["u.at IS NOT NULL"], []
@@ -244,6 +278,7 @@ def recent(db_path: Path, app: Optional[str] = None, model: Optional[str] = None
                         "model": r["model"], "machine": r["machine"],
                         "identity_source": r["identity_source"],
                         "identity": identity.label(r["identity_source"]),
+                        "session": _session_of(conn, r, rtype, has),
                         "project_id": r["project_id"], "project": r["project"],
                         "record_type": rtype, "record_id": r["record_id"],
                         "what": " ".join(what.split())[:120], "event": r["kind"],
