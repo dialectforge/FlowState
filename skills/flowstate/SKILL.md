@@ -50,6 +50,8 @@ user switches project mid-chat, say so and switch. Pick the kind:
 
 - a choice between options: `decision` (say why, and what was rejected). If it replaces an
   earlier decision, pass `replaces=<that decision's id>` so only the current one shows.
+  If the answer says "Possible conflict with D12 ...", decide: if yours replaces it, link
+  them with `manage_links(link_type="supersedes", ...)` as the note says; otherwise tell the user.
 - something changed in code or setup: `change`
 - something broke: `problem`
 - a lesson worth reusing: `learning`

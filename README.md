@@ -26,6 +26,10 @@ at the end, and a second claim is refused with the holder's name. Nothing is hid
 a claim simply runs out if the agent goes away, and anyone (you included) can still update or
 finish a claimed todo; they just get a warning, and `manage_history(action="who")` shows it.
 
+A decision that reads like a current one (and doesn't say it replaces it) is still saved, but
+flagged as a *possible* conflict (`D31 vs D12` in the brief) for the agent and then you to settle
+in the review queue; FlowState matches words (and meaning, if the local model is installed), it doesn't judge.
+
 <p align="center"><a href="docs/media/flowstate-side-by-side.mp4"><img src="docs/media/flowstate-side-by-side.gif" width="520" alt="Claude and Grok on an iPhone, side by side, both reading the same FlowState project brief and both knowing what was just shipped from the PC"></a></p>
 
 <p align="center"><em>Worked on my PC with Grok Build, then asked Claude and Grok on my iPhone. Both knew what I did last. (Click for the full-quality video.)</em></p>

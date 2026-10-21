@@ -380,6 +380,12 @@ don't show server instructions:
    `renew` to extend). If it is claimed by another agent, pick another one. When you stop,
    `release` it, or `handoff` (with `where_i_was` / `next_step`) to leave a note for the next
    agent; marking it done or cancelled clears the claim.
+   If `log_work` answers a decision with **"Possible conflict with D12 ..."** (or the brief
+   lists `Possible conflicts: D31 vs D12`), decide: if yours replaces it, link them
+   (`manage_links(action="add", link_type="supersedes", item_type="decision", item_id=31,
+   target_type="decision", target_id=12)`; next time log with `replaces=12` up front); if both
+   can stand, or you're not sure, tell the user. Only the user dismisses one (review item kind
+   `conflict`: reject = compatible, approve = they really conflict).
 14. 12 tools are listed by default (`FLOWSTATE_TOOLS=core` lists 6, `full` lists 18). The
    v2.0 tool names (`todo`, `link`, `handoff`, `review_approve`, `list_projects`, ...) still
    work when called, with a one-line pointer to the new name; see
@@ -417,7 +423,7 @@ The same guidance is available as the MCP prompt `flowstate-start`.
   `rules.py`, `handoffs.py`, `provenance.py`, `ask.py`, `meaning.py`, `cleanup.py`,
   `activity.py`, `review_page.py`, `markdown_io.py`, `memory_import.py`, `git_capture.py`, `deletes.py`,
   `secrets_scan.py`, `secret_store.py`, `remote_auth.py`, `app_keys.py`, `identity.py`,
-  `who.py`, `backup.py`, `offsite.py`, `scheduler.py`, `cli.py`, `cli_more.py`; the optional
+  `who.py`, `claims.py`, `conflicts.py`, `backup.py`, `offsite.py`, `scheduler.py`, `cli.py`, `cli_more.py`; the optional
   relay agent in `relay/`, wire protocol in `docs/relay-protocol.md`). Schema:
   `database/schema.sql` (base) plus numbered migrations in `mcp-server/flowstate/migrations/`
   (new tables only, or `ADD COLUMN ... DEFAULT NULL` on FlowState's own v2 tables as in 012;

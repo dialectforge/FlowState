@@ -6,6 +6,9 @@
 - Several agents at once: an agent can **claim** a todo for a while, so a second agent that
   starts at the same moment sees the claim and picks something else, instead of both quietly
   doing the same work. Claims run out by themselves; nothing is locked or hidden.
+- Possible conflicting decisions: a decision that reads like a current one on the same project
+  or component, logged without `replaces=`, is still saved but flagged, so the next agent
+  doesn't silently get two answers. The user settles it in the review queue.
 
 ### Todo claims
 - New actions on `manage_todos` (no new tool; the tool count is unchanged):
@@ -32,11 +35,43 @@
 - `manage_todos` and `start_here` descriptions mention claims; to keep the tool list within
   its size budget, the other `manage_todos` parameter descriptions are shorter.
 
+### Possible conflicting decisions
+- FlowState has no language model, so it can't know that two decisions contradict each other.
+  When a decision is logged without `replaces=`, it compares it with the project's current
+  (not replaced) decisions, newest 2,000 at most: word overlap and word order, with the same
+  word endings as search, plus search by meaning when the optional local model is installed.
+  Decisions about the same component (or with none) need a similarity of 0.55; decisions about
+  different components need 0.65. At most 3 per save. Tuned so that unrelated decisions on
+  the same component are not flagged: it would rather miss a weak match than nag.
+- The decision is always saved (the review mode applies exactly as before; a decision held for
+  review is checked when the user approves it). The `log_work` answer adds `possible_conflicts`
+  and a short note: `Possible conflict with D12 "Use Postgres for hosted storage" (same
+  component). If D31 replaces it, link them: manage_links(...supersedes...). If they fit
+  together, tell the user: only they can mark them compatible (manage_review).`
+- The `start_here` brief shows one line, `Possible conflicts: D31 vs D12, D30 vs D7 (+2 more)`
+  (open pairs, newest first, at most 3), and nothing when there are none.
+- Each pair is stored once and waits in the review queue as an item of kind `conflict`.
+  Approve = "they really conflict" (it stays in the brief until one decision replaces the
+  other); reject = "compatible" (dismissed). As for every review item, only with the user's
+  own words in `user_request`. The review page has the same buttons.
+- A later decision that replaces either one (`log_work replaces=` or a `supersedes` link via
+  `manage_links`) resolves the pair and closes its review item. Decisions logged with
+  `replaces=` are not checked. Other record kinds are not checked.
+- Flagged, resolved and dismissed pairs show in `manage_history(action="who")`.
+- The check takes about 25 ms on a project with 2,000 decisions.
+- `log_work`, `start_here` and `manage_review` descriptions mention it; a few `log_work`,
+  `start_here` and `manage_review` parameter descriptions are shorter, to keep the core tool
+  list within its size budget.
+
 ### Database
 - Migration 013 adds two new tables, `todo_claims` (one row per claimed todo: holder, app,
   model, machine, identity source, session, claimed_at, expires_at, UTC) and
   `todo_claim_events` (the trail). The v1 `todos` table is not changed, so older servers can
   still open the database. A backup is taken first, as for every migration.
+- Migration 014 adds one new table, `decision_conflicts` (new and older decision, score, same
+  component, status open / resolved_replaced / dismissed_compatible, created_at, confirmed_at,
+  resolved_at, the replacing decision, the review item, and who flagged and resolved it). No
+  existing table is changed.
 
 ## 2.2.0 - 2026-10-21
 
