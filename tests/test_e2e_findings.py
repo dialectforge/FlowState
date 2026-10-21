@@ -1,7 +1,8 @@
-"""Repros for bugs found by the end-to-end mock project test (tests/e2e/run_e2e.py, task 24).
-
-These fail on 2.4.0 as committed; each one names the behaviour it expects. Fixes come later.
-"""
+"""Regression tests for bugs the end-to-end mock project test found (tests/e2e/run_e2e.py):
+window A hears about window B, a save isn't reported twice, manage_sessions current is this
+window's, a rule's receipt names it, and attached files are searchable. They failed on the
+first 2.4.0 build and pass since its fixes; the other findings have their own test files
+(test_realdata_guard, test_user_approval, test_data_git_sync, test_todo_claims, ...)."""
 
 import asyncio
 import json
@@ -55,7 +56,7 @@ def _two_windows(db, steps, apps=("claude-code", "claude-code")):
     return asyncio.run(go())
 
 
-def test_repro_since_line_tells_window_a_about_window_b(seeded_db):
+def test_since_line_tells_window_a_about_window_b(seeded_db):
     """Window A, then window B read the brief; B saves; A's next brief must mention it."""
     async def steps(a, b):
         await _call(a, *BRIEF)
@@ -69,7 +70,7 @@ def test_repro_since_line_tells_window_a_about_window_b(seeded_db):
     assert lines and "another claude-code session" in lines[0], lines
 
 
-def test_repro_since_line_not_repeated_for_a_save_in_the_same_second(seeded_db):
+def test_since_line_not_repeated_for_a_save_in_the_same_second(seeded_db):
     """A save already shown must not be shown again when it finished in the same second as
     the brief that showed it (here: claude-code reads, cursor saves)."""
 
@@ -88,7 +89,7 @@ def test_repro_since_line_not_repeated_for_a_save_in_the_same_second(seeded_db):
     assert _since(second) == [], _since(second)
 
 
-def test_repro_sessions_current_is_this_windows_session(seeded_db):
+def test_sessions_current_is_this_windows_session(seeded_db):
     async def steps(a, b):
         sa = _session_no(await _call(a, *BRIEF))
         sb = _session_no(await _call(b, *BRIEF))
@@ -100,7 +101,7 @@ def test_repro_sessions_current_is_this_windows_session(seeded_db):
     assert current == briefs, f"briefs say {briefs}, manage_sessions current says {current}"
 
 
-def test_repro_rule_receipt_names_the_rule(backend):
+def test_rule_receipt_names_the_rule(backend):
     async def go():
         async with create_connected_server_and_client_session(
                 backend.server, client_info=types.Implementation(name="cursor", version="1")) as c:
@@ -110,7 +111,7 @@ def test_repro_rule_receipt_names_the_rule(backend):
     assert r["receipt"]["saved"] == [f"rule #{r['rule']['id']}"], r["receipt"]
 
 
-def test_repro_attached_file_text_is_searchable(backend, tmp_path, monkeypatch):
+def test_attached_file_text_is_searchable(backend, tmp_path):
     f = tmp_path / "menu.md"
     f.write_text("# Menu\nCroissant, sourdough, lemon tart.\n", encoding="utf-8")
 
@@ -126,3 +127,17 @@ def test_repro_attached_file_text_is_searchable(backend, tmp_path, monkeypatch):
     assert "id" in att, att
     assert (backend.backend.db_path.parent / "projects" / "alpha.flowstate" / "attachments" / "menu.md").exists()
     assert hits, "manage_files search found nothing in the attached file"
+
+
+def test_sessions_current_without_a_project_is_the_one_this_window_used_last(backend):
+    """A window with sessions in two projects: current (no project) is the last one it used."""
+    async def go():
+        async with create_connected_server_and_client_session(
+                backend.server, client_info=types.Implementation(name="cursor", version="1")) as c:
+            alpha = _session_no(await _call(c, *BRIEF))
+            beta = _session_no(await _call(c, "start_here", {"project": "Beta Project"}))
+            assert _session_no(await _call(c, *BRIEF)) == alpha     # back to Alpha, same second
+            cur = json.loads(await _call(c, "manage_sessions", {"action": "current"}))
+            return alpha, beta, cur.get("id")
+    alpha, beta, cur = asyncio.run(go())
+    assert alpha != beta and cur == alpha
