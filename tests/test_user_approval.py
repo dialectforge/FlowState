@@ -17,6 +17,9 @@ from mcp.shared.memory import create_connected_server_and_client_session
 from conftest import SERVER_DIR, server_env
 from flowstate import review_mode
 
+# pty.fork() in pytest's multi-threaded process: safe here, the child execs at once
+pytestmark = pytest.mark.filterwarnings("ignore:This process .* is multi-threaded:DeprecationWarning")
+
 
 def _j(r):
     return json.loads(r.content[0].text)

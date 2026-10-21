@@ -130,7 +130,7 @@ def route_tool(name: str, args: dict, db_path) -> Any:
                 args.get("code_snippet")
             )
         elif action == "get_tree":
-            return tools.get_problem_tree(args["problem_id"])
+            return tools.get_problem_tree(args.get("problem_id"))
     
     elif name == "attempt":
         action = args["action"]

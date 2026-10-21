@@ -132,7 +132,7 @@ def mark_problem_solved(
     return solution.model_dump()
 
 
-def get_problem_tree(problem_id: int) -> dict:
+def get_problem_tree(problem_id: Optional[int]) -> dict:
     """
     Get full decision tree of all attempts for a problem.
     
@@ -142,11 +142,13 @@ def get_problem_tree(problem_id: int) -> dict:
     Returns:
         Problem with all attempts and solution if solved
     """
+    if problem_id is None:
+        return {"error": "problem_id_required", "message": "Give problem_id (#id in the brief)."}
     db = get_db()
     problem = db.get_problem(problem_id)
     if not problem:
-        return {}
-    
+        return {"error": "record_not_found", "message": f"No problem with id {problem_id}."}
+
     attempts = db.get_attempts_for_problem(problem_id)
     solution = db.get_solution(problem_id)
     
