@@ -66,8 +66,23 @@ def ensure_schema(db_path: Path) -> None:
         conn.close()
 
 
+def _has_runs(conn) -> bool:
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                        "AND name='session_runs'").fetchone() is not None
+
+
+_OPEN = """SELECT a.* FROM auto_sessions a WHERE a.closed_at IS NULL AND a.client = ?
+           AND a.project_id = ?"""
+# 2.4.0 (migration 015): one session per connection; conn_key None = the old matching
+_BY_CONN = " AND a.session_id IN (SELECT session_id FROM session_runs WHERE conn_key = ?)"
+_LATEST = " ORDER BY a.session_id DESC LIMIT 1"
+
+
 class AutoSessions:
-    """Tracks implicit sessions keyed by (client, project)."""
+    """Tracks implicit sessions keyed by (client, project, connection). The connection
+    (`conn_key`: identity.Identity.session, i.e. the stdio server process or the HTTP MCP
+    session) keeps two windows of one app apart; without one (or on a database before
+    migration 015) sessions are keyed by (client, project) as before."""
 
     def __init__(self, db_path: Path, idle_minutes: Optional[float] = None,
                  instance: Optional[str] = None):
@@ -84,17 +99,23 @@ class AutoSessions:
         return conn
 
     # ---------------------------------------------------------------- touch
-    def touch(self, client: str, project_id: int, event: Optional[str] = None) -> int:
-        """Record activity; open a session if none is open. Returns sessions.id."""
+    def _find(self, conn, client: str, project_id: int, conn_key: Optional[str]):
+        if conn_key and _has_runs(conn):
+            return conn.execute(_OPEN + _BY_CONN + _LATEST,
+                                (client, project_id, conn_key)).fetchone()
+        return conn.execute(_OPEN + _LATEST, (client, project_id)).fetchone()
+
+    def touch(self, client: str, project_id: int, event: Optional[str] = None,
+              conn_key: Optional[str] = None, ident=None) -> int:
+        """Record activity; open a session if none is open for this connection. Returns
+        sessions.id. `ident` (identity.Identity) is recorded with a new session."""
         client = (client or "unknown")[:80]
+        conn_key = (conn_key or "")[:80] or None
         now = _utcnow()
         conn = self._conn()
         try:
             conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                """SELECT * FROM auto_sessions WHERE closed_at IS NULL
-                   AND client = ? AND project_id = ? ORDER BY session_id DESC LIMIT 1""",
-                (client, project_id)).fetchone()
+            row = self._find(conn, client, project_id, conn_key)
             if row is not None and now - _parse(row["last_activity"]) > self.idle:
                 self._close_row(conn, row, "stale")
                 row = None
@@ -108,6 +129,13 @@ class AutoSessions:
                        server_instance, opened_at, last_activity, call_count, events)
                        VALUES (?, ?, ?, ?, ?, ?, 0, '[]')""",
                     (sid, project_id, client, self.instance, _ts(now), _ts(now)))
+                if conn_key and _has_runs(conn):
+                    who = ident.as_dict() if ident is not None else {}
+                    conn.execute(
+                        """INSERT INTO session_runs (session_id, conn_key, app, model, machine,
+                           identity_source) VALUES (?, ?, ?, ?, ?, ?)""",
+                        (sid, conn_key, who.get("app") or client, who.get("model"),
+                         who.get("machine"), who.get("identity_source")))
                 events: list = []
                 count = 0
             else:
@@ -147,13 +175,12 @@ class AutoSessions:
         finally:
             conn.close()
 
-    def current(self, client: str, project_id: int) -> Optional[dict]:
+    def current(self, client: str, project_id: int,
+                conn_key: Optional[str] = None) -> Optional[dict]:
         conn = self._conn()
         try:
-            row = conn.execute(
-                """SELECT * FROM auto_sessions WHERE closed_at IS NULL
-                   AND client = ? AND project_id = ? ORDER BY session_id DESC LIMIT 1""",
-                ((client or "unknown")[:80], project_id)).fetchone()
+            row = self._find(conn, (client or "unknown")[:80], project_id,
+                             (conn_key or "")[:80] or None)
             return dict(row) if row else None
         finally:
             conn.close()

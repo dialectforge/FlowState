@@ -372,7 +372,7 @@ def test_migration_from_v220_is_additive(v220_db, tmp_path):
     db = v220_db
     before = {t: rows(db, f'SELECT * FROM "{t}" ORDER BY rowid') for t in ("projects", "conversations")}
     res = M.migrate(db, tmp_path / "bk")
-    assert res["applied"] == ["013_todo_claims", "014_decision_conflicts"] and res["backup"]
+    assert res["applied"][:2] == ["013_todo_claims", "014_decision_conflicts"] and res["backup"]
     assert {t: rows(db, f'SELECT * FROM "{t}" ORDER BY rowid') for t in before} == before
     assert rows(db, "PRAGMA integrity_check") == [("ok",)]
     assert M.migrate(db, tmp_path / "bk") == {"applied": [], "backup": None}

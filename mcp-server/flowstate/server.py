@@ -343,7 +343,8 @@ def handle_call(name: str, args: dict, client: str = "unknown", meta: Optional[d
 
     meta["project_id"] = pid
     # (no session for a deleted project being restored: its row isn't back yet)
-    sid = _safe_track(tracker.touch, client, pid, None) if (pid and tracker and gone is None) else None
+    sid = _safe_track(tracker.touch, client, pid, None, *identity.conn()) \
+        if (pid and tracker and gone is None) else None
 
     # Session tool: adopt / end the automatic session instead of duplicating it.
     if name == "session" and args.get("action") == "start" and sid:
@@ -440,8 +441,10 @@ def _start_here(args: dict, client: str, meta: Optional[dict] = None) -> str:
     if meta is not None:
         meta["project_id"] = project["id"]
     _capture_git(project["id"])
-    sid = _safe_track(tracker.touch, client, project["id"], "read:start_here") if tracker else None
-    session = _safe_track(tracker.current, client, project["id"]) if (sid and tracker) else None
+    sid = _safe_track(tracker.touch, client, project["id"], "read:start_here", *identity.conn()) \
+        if tracker else None
+    session = _safe_track(tracker.current, client, project["id"], identity.conn()[0]) \
+        if (sid and tracker) else None
     try:
         text = build_brief(db_path, project, session, size=args.get("size") or "standard")
     except Exception as e:  # noqa: BLE001 - brief problems must not break the agent

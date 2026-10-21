@@ -105,6 +105,13 @@ def current() -> Optional[Identity]:
     return _current.get()
 
 
+def conn() -> tuple[Optional[str], Optional[Identity]]:
+    """(connection key, identity) of the current call. Each connection (a stdio server
+    process, an HTTP MCP session) gets its own automatic session; None outside a tool call."""
+    ident = current()
+    return (ident.session if ident is not None else None), ident
+
+
 def set_current(ident: Identity) -> contextvars.Token:
     return _current.set(ident)
 
