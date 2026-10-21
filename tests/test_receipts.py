@@ -151,6 +151,29 @@ def test_repeat_after_the_window_is_saved(backend, monkeypatch):
     assert "already_saved" not in b and _count(db) == 2
 
 
+def test_a_repeat_naming_the_project_differently_is_still_a_repeat(backend):
+    """By number, "#1" or any case of its name: the same project (bug 10)."""
+    S, db = backend, backend.backend.db_path
+
+    async def steps(c):
+        first = _j(await c.call_tool("log_work", LESSON))
+        rest = [_j(await c.call_tool("log_work", {**LESSON, "project": p})) for p in ("1", "#1", "alpha")]
+        return first, rest
+    first, rest = session(S, steps)
+    assert all(r.get("already_saved") is True and r["receipt"] == first["receipt"] for r in rest), rest
+    assert _count(db) == 1
+
+
+def test_the_same_content_in_another_project_is_saved(backend):
+    S, db = backend, backend.backend.db_path
+
+    async def steps(c):
+        await c.call_tool("log_work", LESSON)
+        return _j(await c.call_tool("log_work", {**LESSON, "project": "Beta Project"}))
+    b = session(S, steps)
+    assert "already_saved" not in b and _count(db) == 2
+
+
 def test_different_content_is_never_a_duplicate(backend):
     S, db = backend, backend.backend.db_path
 

@@ -33,7 +33,8 @@ from typing import Optional
 WINDOW_SECONDS = 120
 NOT_REPEATS = {("history", "undo"), ("todo", "renew")}
 NO_RECEIPT = {"git"}   # runs git on the data repo (status, history, sync): not a record write
-_IGNORED_ARGS = ("model", "project_id")   # the same content however the caller names itself
+_IGNORED_ARGS = ("model",)   # the same content however the caller names itself
+_PROJECT_ARGS = ("project", "project_id", "project_name")   # compared by the project's id
 
 _inflight: dict = {}            # (conn_key, hash) -> threading.Event while a write runs
 _recent: dict = {}              # (conn_key, hash) -> (monotonic time, receipt, started utc)
@@ -87,8 +88,39 @@ def connection_key(ident, session_obj=None) -> Optional[str]:
     return f"{ident.session}.{n}"
 
 
-def content_hash(name: str, args: dict) -> str:
-    body = {k: v for k, v in (args or {}).items() if k not in _IGNORED_ARGS}
+_pkeys: dict = {}               # (db, how the project was named) -> (monotonic time, id)
+PROJECT_KEY_SECONDS = 60
+
+
+def project_key(db_path: Path, args: dict):
+    """The project a write names, as its id ("1", "#1" and "Alpha" are the same project),
+    so a repeat is spotted however it names the project. Cached for a minute (in memory)."""
+    from .guard import explicit_project
+    named = explicit_project(args or {})
+    if named is None:
+        return None
+    k = (str(db_path), str(named).strip().lower())
+    now = time.monotonic()
+    hit = _pkeys.get(k)
+    if hit is not None and now - hit[0] < PROJECT_KEY_SECONDS:
+        return hit[1]
+    from .brief import resolve_project
+    res = resolve_project(db_path, named, fuzzy=False)
+    if "project" not in res:
+        return f"?{k[1]}"
+    with _lock:
+        if len(_pkeys) > 500:
+            _pkeys.clear()
+        _pkeys[k] = (now, res["project"]["id"])
+    return res["project"]["id"]
+
+
+def content_hash(name: str, args: dict, project=None) -> str:
+    body = {k: v for k, v in (args or {}).items() if k not in _IGNORED_ARGS + _PROJECT_ARGS}
+    if project is not None:
+        body["\u0000project"] = project
+    elif any(k in (args or {}) for k in _PROJECT_ARGS):   # no database to ask: as given
+        body["\u0000project"] = str(next(args[k] for k in _PROJECT_ARGS if k in args))
     raw = json.dumps([name, body], sort_keys=True, default=str, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
@@ -101,10 +133,11 @@ def _receipt(row) -> dict:
 class Pending:
     """One write in progress (between begin and finish)."""
 
-    def __init__(self, change_id: str, conn_key: Optional[str], name: str, args: dict):
+    def __init__(self, change_id: str, conn_key: Optional[str], name: str, args: dict,
+                 project=None):
         self.change_id, self.conn_key, self.name = change_id, conn_key, name
         self.action = args.get("action")
-        self.hash = content_hash(name, args)
+        self.hash = content_hash(name, args, project)
         self.started = _now()
         self.event: Optional[threading.Event] = None
 
@@ -115,7 +148,8 @@ def begin(db_path: Path, change_id: str, conn_key: Optional[str], name: str, arg
     In memory only: every write of a connection passes through this process."""
     if name in NO_RECEIPT:
         return None, None
-    p = Pending(change_id, conn_key, name, args)
+    p = Pending(change_id, conn_key, name, args,
+                project_key(db_path, args) if conn_key else None)
     if not conn_key or (name, args.get("action")) in NOT_REPEATS:
         return p, None
     key = (conn_key, p.hash)
