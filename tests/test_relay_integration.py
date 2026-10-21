@@ -106,7 +106,13 @@ class RelayThread:
         raise AssertionError(f"relay agent did not come up: {self.store.status()}")
 
     def stop(self):
-        self.loop.call_soon_threadsafe(self.stop_ev.set)
+        # The agent may already have shut itself down (e.g. after `relay disable`),
+        # in which case its event loop is closed and there is nothing to signal.
+        if self.t.is_alive() and not self.loop.is_closed():
+            try:
+                self.loop.call_soon_threadsafe(self.stop_ev.set)
+            except RuntimeError:  # loop closed between the check and the call
+                pass
         self.t.join(30)
 
 
