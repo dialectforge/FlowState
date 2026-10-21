@@ -346,7 +346,8 @@ don't show server instructions:
    target_component=...)`). Log changes to a shared component by its name; every linked
    project gets an update todo and a "changed since you last looked" note. FlowState only
    alerts; it never changes code in other apps.
-9. Other helpers: `manage_todos(action="next")` (what to do next; `update` to mark done),
+9. Other helpers: `manage_todos(action="next")` (what to do next; `update` to mark done;
+   other agents' claims are listed last, so pick something else),
    `manage_problems` (attempts and solve), `manage_history` (see edits; undo the last change
    to a record), `manage_memory(action="cleanup")` (duplicates / stale / misfiled, as review
    suggestions only), `manage_memory(action="import")` (memory exports into the review queue),
@@ -374,7 +375,12 @@ don't show server instructions:
    workspace, and how the app was identified (`app_key`, `oauth_client`, `remote_token`,
    `shared_token` or `self_reported`). `manage_history(action="who", by_app=..., by_model=...,
    by_machine=..., since=..., until=...)` lists who did what (read-only).
-13. 12 tools are listed by default (`FLOWSTATE_TOOLS=core` lists 6, `full` lists 18). The
+13. Several agents can work on one project at once. Before you start a todo,
+   `manage_todos(action="claim", project=..., todo_id=<id>)` (`minutes`, default 15, max 120;
+   `renew` to extend). If it is claimed by another agent, pick another one. When you stop,
+   `release` it, or `handoff` (with `where_i_was` / `next_step`) to leave a note for the next
+   agent; marking it done or cancelled clears the claim.
+14. 12 tools are listed by default (`FLOWSTATE_TOOLS=core` lists 6, `full` lists 18). The
    v2.0 tool names (`todo`, `link`, `handoff`, `review_approve`, `list_projects`, ...) still
    work when called, with a one-line pointer to the new name; see
    `docs/TOOL_CONSOLIDATION.md`.

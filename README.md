@@ -15,6 +15,17 @@ access through your own Cloudflare Tunnel).
 
 Claude, ChatGPT, Cursor and Grok can all use FlowState at once, on your computer, across your network, or from your phone. When one AI logs a decision or a change, the others see it the next time they check. Hard rules and handoff notes reach every AI, and every change records which AI made it, so you always know who did what. Work across projects is linked too, so a change to something shared shows up in every project that uses it.
 
+### Several agents at once
+
+When two agents start on the same project at the same time, both can see the same "next" todo
+and quietly do the same work. So an agent claims a todo before it starts
+(`manage_todos(action="claim", todo_id=4)`, 15 minutes by default, up to 120) and releases it, or
+hands it off with a note, when it stops. Other agents see the claim in their brief
+(`#4 Fix login (claimed by cursor on mac-mini, expires in 9m)`), `next` skips it and lists it
+at the end, and a second claim is refused with the holder's name. Nothing is hidden or locked:
+a claim simply runs out if the agent goes away, and anyone (you included) can still update or
+finish a claimed todo; they just get a warning, and `manage_history(action="who")` shows it.
+
 <p align="center"><a href="docs/media/flowstate-side-by-side.mp4"><img src="docs/media/flowstate-side-by-side.gif" width="520" alt="Claude and Grok on an iPhone, side by side, both reading the same FlowState project brief and both knowing what was just shipped from the PC"></a></p>
 
 <p align="center"><em>Worked on my PC with Grok Build, then asked Claude and Grok on my iPhone. Both knew what I did last. (Click for the full-quality video.)</em></p>
@@ -277,7 +288,7 @@ the venv active). Add `-h` to any command for its options.
 | `start_here` | **Call first.** Project brief (`size`: quick / standard / deep; deep is the full context); lists projects when called without one |
 | `log_work` | Record a new decision, change, problem, learning or todo (`replaces=`, `source=`, `suggested=`) |
 | `search` | Find records by words (and by meaning, if set up); `answer=true` answers a plain question from your records with their ids; no query lists the newest records (`since_hours`) |
-| `manage_todos` | list, next, update (done / cancelled), block / unblock; add for subtasks, blockers and due dates |
+| `manage_todos` | list, next, update (done / cancelled), block / unblock; add for subtasks, blockers and due dates; claim / renew / release / handoff so several agents don't do the same todo |
 | `manage_problems` | list, tree, add_attempt, end_attempt, solve |
 | `manage_review` | The review queue and review mode: list, get_mode; approve (also carries out a delete request), reject, set_mode only when you ask |
 | `manage_handoffs` | Leave / list / pick up "where I was, next step" notes |

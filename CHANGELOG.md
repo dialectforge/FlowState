@@ -1,5 +1,43 @@
 # Changelog
 
+## 2.3.0 - 2026-10-21
+
+### In short
+- Several agents at once: an agent can **claim** a todo for a while, so a second agent that
+  starts at the same moment sees the claim and picks something else, instead of both quietly
+  doing the same work. Claims run out by themselves; nothing is locked or hidden.
+
+### Todo claims
+- New actions on `manage_todos` (no new tool; the tool count is unchanged):
+  - `claim` (`todo_id`, `minutes` 1-120, default 15): succeeds if the todo is unclaimed, its
+    claim has expired, or you already hold it (then it renews). If another agent holds it,
+    it is refused with the holder's name and when the claim expires, and suggests `next`.
+  - `renew`: extends your own claim. `release`: drops it. `handoff`: drops it and leaves a
+    handoff note (`where_i_was`, `next_step`, both optional) naming the todo, shown first in
+    the next brief.
+  - Setting a todo to done or cancelled clears its claim.
+- Who "you" are is the app, the machine and the session (stdio: this server process; HTTP:
+  the MCP session id), recorded the same way as every other write, so two sessions of one app
+  are told apart.
+- Nothing silently hidden: the `start_here` brief shows
+  `#4 Fix login (claimed by cursor on mac-mini, expires in 9m)` (expired claims show nothing;
+  the brief keeps its size limits); `next` lists your own claims first, skips other agents'
+  and lists them at the end under `claimed_by_others`; `list` shows the claim on each row.
+- No hard lock: anyone can still update, block or finish a claimed todo. The answer includes
+  a `claim_warning` naming the holder. Claim, renew, release, handoff, override and cleared
+  events show in `manage_history(action="who")`.
+- Claiming is a write: read-only remote apps (read scope over HTTP or the relay) can't claim.
+- The claim is decided by one conditional write inside one transaction, so when two agents
+  claim at the same instant exactly one wins.
+- `manage_todos` and `start_here` descriptions mention claims; to keep the tool list within
+  its size budget, the other `manage_todos` parameter descriptions are shorter.
+
+### Database
+- Migration 013 adds two new tables, `todo_claims` (one row per claimed todo: holder, app,
+  model, machine, identity source, session, claimed_at, expires_at, UTC) and
+  `todo_claim_events` (the trail). The v1 `todos` table is not changed, so older servers can
+  still open the database. A backup is taken first, as for every migration.
+
 ## 2.2.0 - 2026-10-21
 
 ### In short

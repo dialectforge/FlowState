@@ -74,7 +74,7 @@ it MUST NOT contain secrets. The agent never follows redirects.
 No authentication; the one-time code is the credential. Request:
 
 ```json
-{"code": "ABCD-1234", "agent": "flowstate/2.2.0", "protocol": 1}
+{"code": "ABCD-1234", "agent": "flowstate/2.3.0", "protocol": 1}
 ```
 
 `code` matches `^[A-Za-z0-9-]{4,64}$`. The relay MUST make codes single use, short lived
@@ -182,7 +182,7 @@ Agent -> relay, first line:
 
 ```json
 {"type": "hello", "v": 1, "role": "control", "proto": "flowstate-relay/1",
- "handle": "k7q3m2", "token": "<device token>", "agent": "flowstate/2.2.0"}
+ "handle": "k7q3m2", "token": "<device token>", "agent": "flowstate/2.3.0"}
 ```
 
 Relay -> agent, within 15 s:
