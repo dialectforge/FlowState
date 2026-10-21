@@ -443,7 +443,9 @@ def _start_here(args: dict, client: str, meta: Optional[dict] = None) -> str:
         links.mark_looked(db_path, project["id"], client)
     except Exception as e:  # noqa: BLE001
         log.warning("could not record start_here time: %s", e)
-    return text
+    from .relay.store import tool_warning  # None unless the relay CT watch raised an alert
+    warning = tool_warning()
+    return f"{warning}\n\n{text}" if warning else text
 
 
 def _capture_git(pid: int) -> None:
@@ -1070,14 +1072,16 @@ def _load_token(args) -> str:
 
 def create_http_app(token: Optional[str], path: str = "/mcp", db_path: Optional[Path] = None,
                     public_url: Optional[str] = None, allow_master_token: bool = False,
-                    auth_db: Optional[Path] = None):
+                    auth_db: Optional[Path] = None, trust_proxy: Optional[bool] = None,
+                    peer_resolver=None):
     """Starlette app: bearer-protected streamable HTTP MCP at `path`, plus GET /health.
 
     LAN mode (no public_url): the owner token, per-app keys from `flowstate keys add`, plus
     per-client tokens from `flowstate remote add-client`. Public mode (public_url = the tunnel's https URL; bind
     127.0.0.1): per-client tokens and OAuth 2.1 (consent page + owner passphrase), Host
     allow-list, CF-Connecting-IP for rate limits; the owner token only with
-    allow_master_token. See remote_auth.py and docs/REMOTE-ACCESS.md."""
+    allow_master_token. See remote_auth.py and docs/REMOTE-ACCESS.md. The relay agent
+    (relay/runner.py) uses public mode with trust_proxy=False and its own peer_resolver."""
     import contextlib
     from starlette.applications import Starlette
     from starlette.responses import JSONResponse
@@ -1145,7 +1149,8 @@ def create_http_app(token: Optional[str], path: str = "/mcp", db_path: Optional[
 
     app = Starlette(routes=routes + [Mount("/", app=mcp_asgi)], lifespan=lifespan)
     return RA.Gate(app, checker, path, allowed_hosts=allowed_hosts,
-                   trust_proxy=bool(public_url), resource_metadata_url=rmd)
+                   trust_proxy=bool(public_url) if trust_proxy is None else trust_proxy,
+                   resource_metadata_url=rmd, peer_resolver=peer_resolver)
 
 
 def urlparse_host(url: str) -> str:

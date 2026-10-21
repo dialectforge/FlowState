@@ -5,6 +5,10 @@ home network (the HTTP server in [AGENTS.md](../AGENTS.md#http-server)). Read on
 cloud AIs such as claude.ai (web and phone), ChatGPT or the Grok app to reach your FlowState
 over HTTPS, without opening a port on your router.
 
+No domain? The optional relay agent (`flowstate relay enroll`, see the README section
+"Optional relay") gives you `https://<handle>.fsmcp.com` with end-to-end TLS and
+the same sign-in. This page covers running it on your own domain instead.
+
 What you need: a domain on Cloudflare (free plan is fine), `cloudflared` on the computer that
 runs FlowState, and a few minutes. Placeholders below: `flowstate.example.com` (your hostname),
 `<TUNNEL-UUID>`, `<path-to-repo>` (this repository), `<path-to-db>` (your database file),

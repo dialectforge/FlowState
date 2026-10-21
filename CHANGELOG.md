@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+### Optional relay agent (off by default)
+- `flowstate relay enroll --code <code>` / `run` / `status` / `renew` / `enable` / `disable` /
+  `forget` / `ct-check` / `ct-ack`: reach this computer's FlowState from claude.ai, ChatGPT or
+  Cursor at `https://<handle>.fsmcp.com/mcp` without your own domain. TLS is
+  end-to-end: the key is generated locally and never leaves, the certificate comes from Let's
+  Encrypt via ACME DNS-01 run by the agent (`--staging` for testing), renewal 30 days before
+  expiry, and the relay only splices encrypted bytes. Sign-in is the existing OAuth 2.1 + PKCE
+  consent page, unchanged.
+- Daily Certificate Transparency check (crt.sh): a certificate for your relay address with a
+  key that isn't yours is logged as an error, shown by `flowstate relay status` and at the top
+  of `start_here`.
+- The relay lives on its own domain, `fsmcp.com` (`<handle>.fsmcp.com`, `api.fsmcp.com`,
+  `tunnel.fsmcp.com`), instead of `relay.flowstatemcp.com`, so its DNS access can never touch
+  the website or mail, and it has its own Let's Encrypt limit. All names come from one setting
+  (`RELAY_DOMAIN` in `flowstate/relay/__init__.py`). Reserved names (`api`, `tunnel`, `www`,
+  `mail`, `relay`, `status`, `admin`, `app`, `docs`, `help`) are refused as handles.
+- When the relay is full, `relay enroll` says so in plain words with your place in line; the
+  code is not used and nothing is saved. Beta full: "The FlowState Relay beta is full right
+  now. You're on the waitlist (number N). Your code wasn't used, so try again later and you'll
+  get in when it's your turn." 40 new computers this week: "FlowState Relay is full this week,
+  you're on the waitlist (number N), try again after <time>". Places are first come, first
+  served (the relay holds an opening for the oldest code for 48 hours). Other `429` answers
+  say "busy, try again later".
+- `FLOWSTATE_RELAY_DOMAIN` (relay developers only): every `flowstate relay` command now prints
+  a warning when it points anywhere other than `fsmcp.com`.
+- Wire protocol for the relay server: `docs/relay-protocol.md`.
+- Nothing changes for local use: no account, no network calls, the relay code isn't loaded.
+
 ## 2.1.0 - 2026-10-18
 
 ### Working with your AI

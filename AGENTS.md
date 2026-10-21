@@ -411,7 +411,8 @@ The same guidance is available as the MCP prompt `flowstate-start`.
   `rules.py`, `handoffs.py`, `provenance.py`, `ask.py`, `meaning.py`, `cleanup.py`,
   `activity.py`, `review_page.py`, `markdown_io.py`, `memory_import.py`, `git_capture.py`, `deletes.py`,
   `secrets_scan.py`, `secret_store.py`, `remote_auth.py`, `app_keys.py`, `identity.py`,
-  `who.py`, `backup.py`, `offsite.py`, `scheduler.py`, `cli.py`, `cli_more.py`). Schema:
+  `who.py`, `backup.py`, `offsite.py`, `scheduler.py`, `cli.py`, `cli_more.py`; the optional
+  relay agent in `relay/`, wire protocol in `docs/relay-protocol.md`). Schema:
   `database/schema.sql` (base) plus numbered migrations in `mcp-server/flowstate/migrations/`
   (new tables only, or `ADD COLUMN ... DEFAULT NULL` on FlowState's own v2 tables as in 012;
   never touch v1.1 tables, never DROP or rewrite, so a v1.1 server can still open the same database).
