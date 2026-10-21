@@ -1,7 +1,8 @@
 """The relay's HTTPS API (standard library only). Two calls:
 
     POST /api/enroll         {"code"}                     -> {"handle", "device_token", "hostname"}
-                             429 {"error": "waitlisted", "retry_after"}: relay full, code NOT used
+                             429 {"error": "waitlisted", "reason", "retry_after", "position"}:
+                             relay full, code NOT used
     POST /api/dns-challenge  {"action": "set"|"clear", "name", "value"?}   (Bearer device token)
 
 The relay can only ever publish the `_acme-challenge` TXT value the agent hands it, for the
@@ -84,11 +85,24 @@ def _retry_time(data: dict, headers, now: Optional[float] = None) -> Optional[fl
     return float(ts) if now - 60 <= ts <= now + 60 * 86400 else None
 
 
-def waitlisted_message(retry_after: Optional[float]) -> str:
+def _position(data: dict) -> Optional[int]:
+    p = data.get("position")
+    return p if isinstance(p, int) and not isinstance(p, bool) and 1 <= p <= 1_000_000 else None
+
+
+def waitlisted_message(retry_after: Optional[float], reason: Optional[str] = None,
+                       position: Optional[int] = None) -> str:
+    """Plain words (docs/relay-protocol.md section 2.1): the beta cap has no known opening
+    time, the weekly cap has."""
+    number = f" (number {position})" if position else ""
+    if reason == "active":
+        return (f"The FlowState Relay beta is full right now. You're on the waitlist{number}. "
+                "Your code wasn't used, so try again later and you'll get in when it's your turn.")
     when = (datetime.fromtimestamp(retry_after).astimezone().strftime("%A %Y-%m-%d %H:%M %Z")
             if retry_after else "a few days")
-    return (f"FlowState Relay is full this week, you're on the waitlist, try again after {when}. "
-            "Your enrollment code was not used, so keep it and run the same command again then.")
+    return (f"FlowState Relay is full this week, you're on the waitlist{number}, try again after "
+            f"{when}. Your enrollment code was not used, so keep it and run the same command "
+            "again then.")
 
 
 def _json_call(method, url, payload, token=None, ctx=None) -> dict:
@@ -103,8 +117,9 @@ def _json_call(method, url, payload, token=None, ctx=None) -> dict:
     if status >= 400:
         err = data.get("error") if isinstance(data, dict) else None
         if status == 429 and err == "waitlisted":
-            when = _retry_time(data, rheaders)
-            raise RelayWaitlisted(waitlisted_message(when), when)
+            when, pos = _retry_time(data, rheaders), _position(data)
+            reason = "active" if data.get("reason") == "active" else "weekly"
+            raise RelayWaitlisted(waitlisted_message(when, reason, pos), when, reason, pos)
         if status == 429:
             raise RelayError("the relay is busy or you tried too often (429); wait a while and "
                              "try again" + (f" ({str(err)[:80]})" if err else ""))

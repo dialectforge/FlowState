@@ -100,18 +100,45 @@ HTTP/1.1 429 Too Many Requests
 Retry-After: <seconds>
 
 {"error": "waitlisted", "reason": "weekly" | "active", "retry_after": <unix time>,
- "message": "<plain words for people>"}
+ "position": <place in line, 1 = next>, "message": "<plain words for people>"}
 ```
 
-and MUST NOT use the code: it stays valid until at least `retry_after` (the hosted relay
-keeps it 7 days past that), and the relay records the code (only its hash, with timestamps,
-nothing personal) on a waitlist. `retry_after` is when the oldest enrollment in the 7-day
-window ages out; for the beta device cap, which only opens when a device is removed, a
-one-day hint. The agent shows, in plain words: "FlowState Relay is full this week, you're
-on the waitlist, try again after <local time of retry_after>", says the code was not used,
-saves nothing, and exits non-zero. If `retry_after` is missing or unusable it uses the
-`Retry-After` header. Certificate renewals (section 2.2 for an existing handle) are never
-capped. Any other `429` is shown as "busy, try again later".
+and MUST NOT use the code. The relay records the code (only its hash, with timestamps and its
+place in line, nothing personal) on a waitlist.
+
+*First come, first served.* When a slot opens (the 7-day window rolls, or a beta slot is
+freed by a revoke or unenroll; a suspended device keeps its slot), the relay reserves it for
+the oldest code in line. That code has a claim window (hosted relay: 48 hours,
+`RELAY_WAITLIST_CLAIM_HOURS`) to retry and enroll; during the window every other code stays
+waitlisted, however often it retries. If the window passes unused, the reservation lapses
+and the slot goes to the next oldest. A lapsed code keeps its original place: if it is
+retried while still valid, it is back in line ahead of newer codes. Several open slots are
+reserved the same way, in order. `position` counts the reserved codes first, then the
+waiting ones, oldest first.
+
+*Code validity.* A waitlisted code stays valid until 7 days after its `retry_after` or its
+reservation expiry, whichever is later. After that it is expired and the user needs a new
+code (`400 invalid_code`).
+
+*`retry_after`.* For `reason: "weekly"` it is when this code's slot is expected to open (the
+enrollment that frees it turns 7 days old). For `reason: "active"` (the beta device cap,
+which only opens when a device is removed) it is a one-day hint. `reason` is `"weekly"`
+whenever the weekly cap is what blocks the code, and `"active"` only when the beta cap alone
+does.
+
+*What the agent says* (then saves nothing and exits non-zero):
+
+- Beta cap full (`reason: "active"`): "The FlowState Relay beta is full right now. You're on
+  the waitlist (number N). Your code wasn't used, so try again later and you'll get in when
+  it's your turn."
+- Weekly cap full (`reason: "weekly"`, or anything else): "FlowState Relay is full this week,
+  you're on the waitlist (number N), try again after <local time of retry_after>. Your
+  enrollment code was not used, so keep it and run the same command again then."
+
+N is `position`; if it is missing or not a sensible number, "(number N)" is left out. If
+`retry_after` is missing or unusable the agent uses the `Retry-After` header. Certificate
+renewals (section 2.2 for an existing handle) are never capped. Any other `429` is shown as
+"busy, try again later".
 
 ### 2.2 `POST /api/dns-challenge`
 
@@ -285,7 +312,11 @@ of every `start_here` result until the user runs `flowstate relay ct-ack --id <c
 
 ## 8. Agent environment overrides (development only)
 
-`FLOWSTATE_RELAY_DOMAIN` (default `fsmcp.com`; every name below derives from it),
+These are for people developing the relay itself, never for normal use.
+
+`FLOWSTATE_RELAY_DOMAIN` (default `fsmcp.com`; every name below derives from it; when it is
+set to anything else, every `flowstate relay` command first prints a warning on stderr that
+the agent is not using the FlowState relay and that the setting is for developers only),
 `FLOWSTATE_RELAY_API` (API base URL, default `https://api.fsmcp.com`), `FLOWSTATE_RELAY_TUNNEL`
 (`host:port` to dial, default `tunnel.fsmcp.com:443`),
 `FLOWSTATE_RELAY_TUNNEL_SNI` (SNI / name to verify, default `tunnel.fsmcp.com`),

@@ -30,7 +30,7 @@ def _never_live(monkeypatch, tmp_path):
     # relay state (keys, device token) too
     monkeypatch.setenv("FLOWSTATE_RELAY_DIR", str(tmp_path / "relay"))
     for k in ("FLOWSTATE_RELAY_API", "FLOWSTATE_RELAY_TUNNEL", "FLOWSTATE_RELAY_TUNNEL_SNI",
-              "FLOWSTATE_RELAY_CA_FILE", "FLOWSTATE_RELAY_ACME_DIRECTORY"):
+              "FLOWSTATE_RELAY_CA_FILE", "FLOWSTATE_RELAY_ACME_DIRECTORY", "FLOWSTATE_RELAY_DOMAIN"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.delenv("FLOWSTATE_TOKEN", raising=False)
     yield

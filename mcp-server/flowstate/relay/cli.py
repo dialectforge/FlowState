@@ -12,10 +12,12 @@
 For relay developers only: FLOWSTATE_RELAY_DOMAIN (default fsmcp.com), FLOWSTATE_RELAY_API,
 FLOWSTATE_RELAY_TUNNEL (host:port), FLOWSTATE_RELAY_TUNNEL_SNI, FLOWSTATE_RELAY_CA_FILE,
 FLOWSTATE_RELAY_ACME_DIRECTORY and FLOWSTATE_RELAY_DIR point the agent somewhere else (https
-only, except loopback).
+only, except loopback). Every relay command prints a warning first when FLOWSTATE_RELAY_DOMAIN
+is anything other than fsmcp.com.
 """
 
 import os
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -272,6 +274,10 @@ def register(sub) -> None:
 
 def _guard(fn):
     def run(a) -> int:
+        from . import domain_warning
+        warn = domain_warning()
+        if warn:
+            print(warn, file=sys.stderr, flush=True)
         try:
             return fn(a)
         except RelayError as e:

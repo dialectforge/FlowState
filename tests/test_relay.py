@@ -141,6 +141,77 @@ def test_waitlisted_falls_back_to_retry_after_header(relay_api):
     assert not isinstance(e.value, RelayWaitlisted) and "try again" in str(e.value)
 
 
+BETA_FULL = ("The FlowState Relay beta is full right now. You're on the waitlist (number 3). "
+             "Your code wasn't used, so try again later and you'll get in when it's your turn.")
+
+
+def test_beta_cap_wording(relay_api, monkeypatch, capsys):
+    """The beta (active device) cap has no known opening time: no date, the place in line."""
+    monkeypatch.setenv("FLOWSTATE_RELAY_API", relay_api.url)
+    relay_api.waitlist_until = time.time() + 86400
+    relay_api.waitlist_body = {"error": "waitlisted", "reason": "active", "position": 3,
+                               "retry_after": int(relay_api.waitlist_until)}
+    assert _cli("relay", "enroll", "--code", "TEST-CODE-1234", "--skip-cert") == 1
+    out = capsys.readouterr().out
+    assert BETA_FULL in out
+    assert "this week" not in out and "try again after" not in out and "429" not in out
+    assert not S.RelayStore().enrolled()
+    from flowstate.relay import RelayWaitlisted
+    with pytest.raises(RelayWaitlisted) as e:
+        api.enroll(relay_api.url, "TEST-CODE-1234")
+    assert (e.value.reason, e.value.position) == ("active", 3)
+
+
+def test_weekly_cap_wording_has_the_position(relay_api, monkeypatch, capsys):
+    monkeypatch.setenv("FLOWSTATE_RELAY_API", relay_api.url)
+    until = time.time() + 2 * 86400
+    relay_api.waitlist_until = until
+    relay_api.waitlist_body = {"error": "waitlisted", "reason": "weekly", "position": 7,
+                               "retry_after": int(until)}
+    assert _cli("relay", "enroll", "--code", "TEST-CODE-1234", "--skip-cert") == 1
+    out = capsys.readouterr().out
+    when = datetime.fromtimestamp(int(until)).astimezone().strftime("%Y-%m-%d %H:%M")
+    assert ("FlowState Relay is full this week, you're on the waitlist (number 7), try again "
+            "after") in out and when in out and "not used" in out
+    assert "beta" not in out
+    # junk positions are left out rather than shown
+    for junk in (0, -1, True, "7", 10 ** 9):
+        relay_api.waitlist_body["position"] = junk
+        msg = api.waitlisted_message(until, "weekly", api._position(relay_api.waitlist_body))
+        assert "number" not in msg and "you're on the waitlist, try again after" in msg
+
+
+def _relay_cmd(env_domain):
+    import subprocess
+    from conftest import SERVER_DIR
+    env = dict(os.environ)
+    env.pop("FLOWSTATE_RELAY_DOMAIN", None)
+    if env_domain is not None:
+        env["FLOWSTATE_RELAY_DOMAIN"] = env_domain
+    code = "import sys; from flowstate import cli; sys.exit(cli.main(['relay', 'status']))"
+    return subprocess.run([sys.executable, "-c", code], cwd=str(SERVER_DIR), env=env,
+                          capture_output=True, text=True, timeout=60)
+
+
+def test_non_default_domain_warns_at_startup():
+    r = _relay_cmd("relay-dev.example")
+    assert r.returncode == 0, r.stderr
+    assert "WARNING: FLOWSTATE_RELAY_DOMAIN is set" in r.stderr
+    assert "relay-dev.example" in r.stderr and "relay developers only" in r.stderr
+    assert "not set up" in r.stdout                       # the command itself still runs
+    for quiet in (None, "fsmcp.com", "FSMCP.com."):       # the default: no warning
+        r = _relay_cmd(quiet)
+        assert r.returncode == 0 and "WARNING" not in r.stderr + r.stdout, r.stderr
+
+
+def test_domain_warning_text(monkeypatch):
+    import flowstate.relay as R
+    assert R.domain_warning() is None
+    monkeypatch.setattr(R, "RELAY_DOMAIN", "localhost.test")
+    w = R.domain_warning()
+    assert "localhost.test" in w and "fsmcp.com" in w and "developers only" in w
+
+
 def test_names_derive_from_one_domain():
     import flowstate.relay as R
     assert R.RELAY_DOMAIN == "fsmcp.com" == R.HOST_SUFFIX

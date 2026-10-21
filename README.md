@@ -332,8 +332,11 @@ gets a certificate for your address.
 
 During the beta the relay has room for a limited number of computers (and at most 40 new
 ones a week, to stay within Let's Encrypt's limits). If it is full, `relay enroll` says so
-in plain words ("FlowState Relay is full this week, you're on the waitlist, try again after
-<time>"), saves nothing, and your code still works when you try again after that time.
+in plain words with your place in line ("The FlowState Relay beta is full right now. You're
+on the waitlist (number N). ..." or, for the weekly limit, "... try again after <time>") and
+saves nothing. Places are first come, first served: when there is room, it is held for the
+oldest code in line for 48 hours. Your code stays valid for 7 days after that, so just run
+the same command again.
 
 The relay uses the Python package `cryptography`, which comes with `mcp` today. The wire
 protocol is in [docs/relay-protocol.md](docs/relay-protocol.md).

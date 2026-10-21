@@ -38,6 +38,16 @@ def _domain() -> str:
 
 
 RELAY_DOMAIN = _domain()
+
+
+def domain_warning():
+    """The startup warning when FLOWSTATE_RELAY_DOMAIN points the agent away from fsmcp.com
+    (relay developers only), else None."""
+    if RELAY_DOMAIN == DEFAULT_DOMAIN:
+        return None
+    return (f"WARNING: FLOWSTATE_RELAY_DOMAIN is set, so this relay agent uses {RELAY_DOMAIN} "
+            f"instead of the FlowState relay ({DEFAULT_DOMAIN}). This is for relay developers "
+            f"only. If you did not set it on purpose, unset FLOWSTATE_RELAY_DOMAIN.")
 HOST_SUFFIX = RELAY_DOMAIN
 API_BASE = f"https://api.{RELAY_DOMAIN}"
 TUNNEL_HOST = f"tunnel.{RELAY_DOMAIN}"
@@ -55,6 +65,8 @@ class RelayError(Exception):
 class RelayWaitlisted(RelayError):
     """The relay is full (signup cap); the enrollment code was not used and can be retried."""
 
-    def __init__(self, msg: str, retry_after=None):
+    def __init__(self, msg: str, retry_after=None, reason=None, position=None):
         super().__init__(msg)
         self.retry_after = retry_after
+        self.reason = reason            # "active" (beta cap) or "weekly"
+        self.position = position        # place in line, if the relay said

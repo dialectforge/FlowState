@@ -18,9 +18,15 @@
   the website or mail, and it has its own Let's Encrypt limit. All names come from one setting
   (`RELAY_DOMAIN` in `flowstate/relay/__init__.py`). Reserved names (`api`, `tunnel`, `www`,
   `mail`, `relay`, `status`, `admin`, `app`, `docs`, `help`) are refused as handles.
-- When the relay is full (beta cap, or 40 new computers a week), `relay enroll` says "FlowState
-  Relay is full this week, you're on the waitlist, try again after <time>"; the code is not
-  used and nothing is saved. Other `429` answers say "busy, try again later".
+- When the relay is full, `relay enroll` says so in plain words with your place in line; the
+  code is not used and nothing is saved. Beta full: "The FlowState Relay beta is full right
+  now. You're on the waitlist (number N). Your code wasn't used, so try again later and you'll
+  get in when it's your turn." 40 new computers this week: "FlowState Relay is full this week,
+  you're on the waitlist (number N), try again after <time>". Places are first come, first
+  served (the relay holds an opening for the oldest code for 48 hours). Other `429` answers
+  say "busy, try again later".
+- `FLOWSTATE_RELAY_DOMAIN` (relay developers only): every `flowstate relay` command now prints
+  a warning when it points anywhere other than `fsmcp.com`.
 - Wire protocol for the relay server: `docs/relay-protocol.md`.
 - Nothing changes for local use: no account, no network calls, the relay code isn't loaded.
 
