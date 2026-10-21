@@ -443,9 +443,23 @@ def _start_here(args: dict, client: str, meta: Optional[dict] = None) -> str:
         links.mark_looked(db_path, project["id"], client)
     except Exception as e:  # noqa: BLE001
         log.warning("could not record start_here time: %s", e)
-    from .relay.store import tool_warning  # None unless the relay CT watch raised an alert
-    warning = tool_warning()
+    warning = _relay_warning()
     return f"{warning}\n\n{text}" if warning else text
+
+
+def _relay_warning() -> Optional[str]:
+    """The relay CT alert line for start_here, else None. Without relay state on disk (never
+    enrolled) this is one file check: no relay module is imported or run."""
+    env = os.environ.get("FLOWSTATE_RELAY_DIR")
+    try:
+        from . import paths
+        root = Path(env).expanduser() if env else paths.data_root() / "relay"
+        if not (root / "ct.json").exists():
+            return None
+    except Exception:  # noqa: BLE001 - a status line must never break a tool
+        return None
+    from .relay.store import tool_warning
+    return tool_warning()
 
 
 def _capture_git(pid: int) -> None:
