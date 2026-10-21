@@ -980,8 +980,11 @@ def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
                            "their words as user_request."}
     done: dict = {}
     try:
+        item = review.get_item(backend.db_path, int(args["item_id"]))
+        own = review.own_item_refusal(item, identity.current(), user_request)
+        if own:   # (identity.current() is None on the review page and the command line)
+            return own
         if name == "review_approve":
-            item = review.get_item(backend.db_path, int(args["item_id"]))
             if item and item["kind"] == "delete":   # checked before anything is claimed
                 from .remote_auth import DELETE_REFUSAL, may_delete
                 if not may_delete(_caller()[1]):

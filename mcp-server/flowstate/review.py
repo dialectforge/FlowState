@@ -120,6 +120,27 @@ def get_item(db_path: Path, item_id: int) -> Optional[dict]:
         conn.close()
 
 
+def _norm(text: str) -> str:
+    return " ".join("".join(c.lower() if c.isalnum() else " " for c in (text or "")).split())
+
+
+def own_item_refusal(item: Optional[dict], ident, user_request: str) -> Optional[dict]:
+    """2.4.0: the app that queued an item (same app, and same machine when recorded) may
+    approve or reject it only with the user's own words: at least two words, not the item's
+    own text. Anyone else relaying the user is checked as before. None = allowed."""
+    if not item or ident is None or not item.get("app") or item["app"] != ident.app:
+        return None
+    if item.get("machine") and ident.machine and item["machine"] != ident.machine:
+        return None
+    words = _norm(user_request)
+    own = " ".join(_norm(item.get(k) or "") for k in ("summary", "details"))
+    if len(words.split()) >= 2 and words not in own:
+        return None
+    return {"error": "own_item",
+            "message": f"You queued review item #{item['id']}, so you can't decide it yourself. "
+                       f"Ask the user; pass their exact words as user_request."}
+
+
 def _claim(db_path: Path, item_id: int, status: str, client: str, user_request: str,
            reason: Optional[str] = None) -> dict:
     conn = _conn(db_path)
