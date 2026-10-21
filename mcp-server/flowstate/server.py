@@ -250,14 +250,15 @@ async def _call_internal(name: str, arguments: dict, shown: str = "") -> types.C
     conn_key = receipts.connection_key(ident, session_obj)
     change = receipts.new_change_id() if write else None
     call_token = identity.set_call(conn_key, change)   # receipts.py: one change id per write
+    deadline = t0 + call_timeout()   # the answer comes by then, whatever is locked
     try:
-        if write and await asyncio.to_thread(_safe_bool, activity.is_paused, backend.db_path, app):
-            out = _error("paused_by_user", PAUSED.format(app=app))
-            return out
         try:
             result = await asyncio.wait_for(
-                asyncio.to_thread(handle_call, name, dict(arguments or {}), client, meta),
+                asyncio.to_thread(_paused_or_call, write, app, name, dict(arguments or {}), client, meta),
                 timeout=call_timeout())
+            if result is _PAUSED:
+                out = _error("paused_by_user", PAUSED.format(app=app))
+                return out
         except asyncio.TimeoutError:
             receipts.timed_out(conn_key, change, shown or name)
             out = _error("flowstate_timeout", f"FlowState took longer than {call_timeout():g}s. "
@@ -272,15 +273,14 @@ async def _call_internal(name: str, arguments: dict, shown: str = "") -> types.C
             return out
         out = _ok(result)
         return out
-    finally:
-        news = await asyncio.to_thread(_safe_call, receipts.late_news, backend.db_path, conn_key) \
+    finally:   # bookkeeping gets what is left of the time; past it, it finishes on its own
+        news = await _bounded(deadline, receipts.late_news, backend.db_path, conn_key) \
             if receipts.waiting(conn_key) else None
         if out is not None and news:   # how earlier timed-out writes of this connection ended
             out.content.extend(TextContent(type="text", text=line) for line in news)
         if out is not None and not out.isError and not write:   # the run ledger (ledger.py)
-            await asyncio.to_thread(_safe_call, ledger.record_read, backend.db_path, name,
-                                    (arguments or {}).get("action"), meta, out.content[0].text,
-                                    conn_key, ident)
+            await _bounded(deadline, ledger.record_read, backend.db_path, name,
+                           (arguments or {}).get("action"), meta, out.content[0].text, conn_key, ident)
         err = None
         if out is not None and out.isError:
             try:
@@ -288,14 +288,35 @@ async def _call_internal(name: str, arguments: dict, shown: str = "") -> types.C
             except (ValueError, AttributeError, IndexError):
                 err = "error"
         try:
-            await asyncio.to_thread(
-                _safe_call, activity.record, backend.db_path, app, name,
-                (arguments or {}).get("action"), meta.get("project_id"), write,
-                out is not None and not out.isError, err, int((time.monotonic() - t0) * 1000),
-                who, meta.get("record"))
+            await _bounded(deadline, activity.record, backend.db_path, app, name,
+                           (arguments or {}).get("action"), meta.get("project_id"), write,
+                           out is not None and not out.isError, err,
+                           int((time.monotonic() - t0) * 1000), who, meta.get("record"))
         finally:
             identity.reset_call(call_token)
             identity.reset(id_token)
+
+
+_PAUSED = object()
+
+
+def _paused_or_call(write: bool, app: str, name: str, args: dict, client: str, meta: dict):
+    """The user paused this app's writes? (inside the call's time limit) Else the call."""
+    if write and _safe_bool(activity.is_paused, backend.db_path, app):
+        return _PAUSED
+    return handle_call(name, args, client, meta)
+
+
+async def _bounded(deadline: float, fn, *a):
+    """Run bookkeeping in a thread, waiting at most until `deadline` (at least 50 ms); a
+    locked database must not hold the answer past the call timeout."""
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(_safe_call, fn, *a),
+                                      max(0.05, deadline - time.monotonic()))
+    except asyncio.TimeoutError:
+        log.warning("%s still waiting on the database; finishing in the background",
+                    getattr(fn, "__name__", "bookkeeping"))
+        return None
 
 
 def _safe_track(fn, *a):
@@ -1144,92 +1165,10 @@ def _load_token(args) -> str:
     return tok
 
 
-def create_http_app(token: Optional[str], path: str = "/mcp", db_path: Optional[Path] = None,
-                    public_url: Optional[str] = None, allow_master_token: bool = False,
-                    auth_db: Optional[Path] = None, trust_proxy: Optional[bool] = None,
-                    peer_resolver=None):
-    """Starlette app: bearer-protected streamable HTTP MCP at `path`, plus GET /health.
-
-    LAN mode (no public_url): the owner token, per-app keys from `flowstate keys add`, plus
-    per-client tokens from `flowstate remote add-client`. Public mode (public_url = the tunnel's https URL; bind
-    127.0.0.1): per-client tokens and OAuth 2.1 (consent page + owner passphrase), Host
-    allow-list, CF-Connecting-IP for rate limits; the owner token only with
-    allow_master_token. See remote_auth.py and docs/REMOTE-ACCESS.md. The relay agent
-    (relay/runner.py) uses public mode with trust_proxy=False and its own peer_resolver."""
-    import contextlib
-    from starlette.applications import Starlette
-    from starlette.responses import JSONResponse
-    from starlette.routing import Mount, Route
-    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-    from . import remote_auth as RA
-
-    path = "/" + path.strip("/")
-    store = RA.AuthStore(auth_db)
-    if public_url:
-        public_url = public_url.rstrip("/")
-        master = token if allow_master_token else None
-    else:
-        if len(token or "") < 16:
-            raise ValueError("HTTP transport requires a bearer token of at least 16 characters")
-        master = token
-    manager = StreamableHTTPSessionManager(app=server, json_response=False, stateless=False)
-
-    async def health(request):
-        # Deliberately says nothing about the data; safe to expose through a tunnel.
-        return JSONResponse({"ok": True, "service": "flowstate"})
-
-    routes = [Route("/health", health, methods=["GET"])]
-    provider = rmd = None
-    allowed_hosts = None
-    if public_url:
-        from pydantic import AnyHttpUrl
-        from mcp.server.auth.routes import (build_resource_metadata_url, create_auth_routes,
-                                            create_protected_resource_routes)
-        from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
-        resource = public_url + path
-        provider = RA.FlowStateOAuthProvider(store, public_url, resource)
-        routes += create_auth_routes(
-            provider, AnyHttpUrl(public_url),
-            client_registration_options=ClientRegistrationOptions(
-                enabled=True, valid_scopes=RA.SCOPES, default_scopes=RA.SCOPES),
-            revocation_options=RevocationOptions(enabled=True))
-        prm = create_protected_resource_routes(AnyHttpUrl(resource), [AnyHttpUrl(public_url)],
-                                               scopes_supported=RA.SCOPES, resource_name="FlowState")
-        # also at the bare well-known path, for clients that don't add the resource path
-        routes += prm + [Route("/.well-known/oauth-protected-resource", prm[0].endpoint,
-                               methods=["GET", "OPTIONS"])]
-        routes += RA.consent_routes(provider)
-        rmd = str(build_resource_metadata_url(AnyHttpUrl(resource)))
-        allowed_hosts = {urlparse_host(public_url), "127.0.0.1", "localhost"}
-    # per-app LAN keys (app_keys.py) on the LAN listener only, never on the public one
-    checker = RA.TokenChecker(store, master, provider, app_keys=not public_url)
-
-    async def mcp_asgi(scope, receive, send):
-        if scope["type"] == "http" and scope.get("path", "").rstrip("/") != path:
-            await JSONResponse({"error": "not found"}, status_code=404)(scope, receive, send)
-            return
-        await manager.handle_request(scope, receive, send)
-
-    @contextlib.asynccontextmanager
-    async def lifespan(app):
-        init_backend(db_path)
-        reaper = asyncio.create_task(_reaper())
-        try:
-            async with manager.run():
-                yield
-        finally:
-            reaper.cancel()
-            _close_own_sessions("shutdown")
-
-    app = Starlette(routes=routes + [Mount("/", app=mcp_asgi)], lifespan=lifespan)
-    return RA.Gate(app, checker, path, allowed_hosts=allowed_hosts,
-                   trust_proxy=bool(public_url) if trust_proxy is None else trust_proxy,
-                   resource_metadata_url=rmd, peer_resolver=peer_resolver)
-
-
-def urlparse_host(url: str) -> str:
-    from urllib.parse import urlparse
-    return (urlparse(url).hostname or "").lower()
+def create_http_app(*args, **kwargs):
+    """Starlette app for the streamable HTTP transport (http_app.py)."""
+    from .http_app import create_http_app as make
+    return make(*args, **kwargs)
 
 
 def run_http(host: str, port: int, token: Optional[str], path: str = "/mcp",
