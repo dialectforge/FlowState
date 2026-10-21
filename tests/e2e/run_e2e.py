@@ -13,7 +13,10 @@ each pass/fail with evidence; every tool and every action it offers is called at
 
 Nothing here touches ~/.flowstate, the per-OS FlowState folders, a real database or a real
 token: every FlowState path (and HOME) points into the /tmp folder, which is deleted at the
-end unless --keep. Only servers this script started are stopped, by their own PIDs.
+end unless --keep, and every server process loads tests/guard_site (it refuses, and
+records, any touch of the real folders; scenario 11 checks that). `flowstate approve` is
+only ever run in a new session without a terminal, or in a pseudo-terminal of its own, so
+it never prompts on yours. Only servers this script started are stopped, by their own PIDs.
 Writes the report to <tmp>/report.md and prints it.
 """
 import argparse
@@ -74,10 +77,10 @@ def err(r):
 class Report:
     TITLES = {
         1: "Fresh install", 2: "Normal day, four agents", 3: "Possible conflicting decisions",
-        4: "Review mode and self-approval", 5: "Receipts, repeats, timed-out writes",
+        4: "Review mode, self-approval, the user-only step", 5: "Receipts, repeats, timed-out writes",
         6: "Two windows of one app; 'since your last visit'", 7: "Undo",
         8: "Backups, safety copies, health check", 9: "Run ledger keeps no text",
-        10: "Upgrade from a v2.3.0 database", 11: "Bad input and edge cases",
+        10: "Upgrade from a v2.3.0 database", 11: "Bad input, edge cases, real-data guard",
         12: "Tool descriptions: size and truthfulness"}
 
     def __init__(self):
@@ -206,6 +209,42 @@ class World:
     def http_agent(self, label, app, token):
         return Agent(label, HttpClient(self.url, token, app))
 
+    def cli_no_terminal(self, *args, stdin=None):
+        """`flowstate ...` the way an agent's shell runs it: a new session with no controlling
+        terminal (so it can never prompt on the terminal this script runs in), stdin piped."""
+        r = subprocess.run([PY, "-m", "flowstate", *args], env=self.env, cwd=str(REPO), input=stdin,
+                           capture_output=True, text=True, timeout=120, start_new_session=True)
+        return r.returncode, r.stdout + r.stderr
+
+    def cli_in_terminal(self, args, answers, env=None):
+        """`flowstate ...` with a pseudo-terminal as its controlling terminal (as when the user
+        types it), answering each "Type ..." prompt in turn. (exit code, what it showed)"""
+        import pty
+        import select
+        import warnings
+        with warnings.catch_warnings():   # forkpty in a threaded process: the child execs at once
+            warnings.simplefilter("ignore", DeprecationWarning)
+            pid, master = pty.fork()
+        if pid == 0:
+            os.execve(PY, [PY, "-m", "flowstate", *args], env or self.env)
+        seen, todo, deadline = b"", list(answers), time.monotonic() + 120
+        try:
+            while time.monotonic() < deadline:
+                if select.select([master], [], [], 0.2)[0]:
+                    try:
+                        data = os.read(master, 4096)
+                    except OSError:
+                        break
+                    if not data:
+                        break
+                    seen += data
+                    if todo and seen.count(b"Type ") > len(answers) - len(todo):
+                        os.write(master, todo.pop(0).encode() + b"\n")
+            _, status = os.waitpid(pid, 0)
+        finally:
+            os.close(master)
+        return os.waitstatus_to_exitcode(status), seen.decode(errors="replace")
+
     def cli(self, *args, env=None):
         r = subprocess.run([PY, "-m", "flowstate", *args], env=env or self.env, cwd=str(REPO),
                            capture_output=True, text=True, timeout=120)
@@ -268,9 +307,8 @@ def s1_fresh(W):
     r = cc1.call("start_here")
     R.check(1, "start_here on an empty database answers (no error) and lists no project",
             isinstance(r, str) and "no project given" in r and "Lakeside" not in r, r)
-    if isinstance(r, str) and r.rstrip().endswith("Projects:"):
-        R.word("start_here on a brand-new database ends with a bare 'Projects:' and nothing under "
-               "it; 'No projects yet. Create one with manage_projects(action=\"create\")' would be clearer.")
+    R.check(1, "an empty database says there are no projects yet (no bare 'Projects:')",
+            isinstance(r, str) and "no projects yet" in r and not r.rstrip().endswith("Projects:"), r)
     R.check(1, "the database was created inside the /tmp sandbox", W.db.exists(), str(W.db))
     r = cc1.call("manage_projects", action="create", name=P,
                  description="Online ordering app for Lakeside Bakery: menu, cart, pickup slots, card payments")
@@ -359,11 +397,8 @@ def s2_day(W):
         r = who.call("log_work", project=P, kind="todo", summary=title, priority=pr)
         todos[title] = r.get("record", {}).get("id")
         got = (r.get("record") or {}).get("priority")
-        if got and got != pr and not getattr(W, "prio_noted", False):
-            W.prio_noted = True
-            R.word(f"log_work kind=todo priority=\"{pr}\" answers with \"priority\": \"{got}\" in the record (older "
-                   "names are stored), while the brief shows the new name. An agent comparing the two may think "
-                   "its priority was changed. Same for the default: 'normal' is stored and shown as 'medium'.")
+        R.check(2, f"a todo logged as {pr!r} answers with priority {pr!r} (one set of names everywhere)",
+                got == pr, got)
     W.todos = todos
     R.check(2, "4 todos logged by three agents", all(todos.values()), todos)
     t_email, t_allerg, t_load, t_apple = todos.values()
@@ -487,8 +522,8 @@ def s2_day(W):
     R.check(2, "manage_skills learn", bool(W.skill) and not err(r), r)
     for act, extra in (("confirm", {"skill_id": W.skill}),
                        ("log_metric", {"metric_type": "tool_choice", "effectiveness_score": 0.9})):
-        r = cc1.call("manage_skills", action=act, **extra)   # description: project needed only for learn/save_state/get_state
-        if r.get("error") == "project_required":
+        r = cc1.call("manage_skills", action=act, **extra)   # description: project needed except list / list_metrics
+        if r.get("error") != "project_required":
             W.skills_mismatch = W.__dict__.get("skills_mismatch", []) + [act]
     for act, extra in (("confirm", {"project": P, "skill_id": W.skill}), ("list", {"project": P}),
                        ("save_state", {"project": P, "focus_summary": "Checkout flow", "key_facts": ["15-min slots"]}),
@@ -665,6 +700,37 @@ def s4_review(W):
                   "'approved' would wrongly trust the user saw it.")
     r = cc2.call("manage_review", action="approve", project=P, item_id=cdn, user_request="ok fine")
     R.check(4, "own item, 'ok fine' (two generic words): refused", r.get("error") == "own_item", r)
+    r = cursor.call("manage_review", action="approve", project=P, item_id=postmark,
+                    user_request="User: yes, approve the Postmark decision, I checked it")
+    msg = r.get("message", "")
+    R.check(4, "own item, the user's real-looking words: still refused, one line naming the user's step",
+            r.get("error") == "own_item" and f"flowstate approve {postmark}" in msg and "\n" not in msg
+            and len(msg) < 200, r)
+    # the user-only step: flowstate review / approve / reject in the user's own terminal
+    code, out = W.cli_no_terminal("review", "--project", P)
+    R.check(4, "`flowstate review` lists what waits (read-only, no terminal needed)",
+            code == 0 and f"#{postmark}" in out and "Postmark" in out, short(out, 200))
+    code, out = W.cli_no_terminal("approve", str(postmark), stdin="y\n")
+    still = W.q("SELECT status FROM review_items WHERE id = ?", (postmark,))[0]["status"]
+    R.check(4, "`flowstate approve` with a piped 'y' and no terminal: refused, nothing changes",
+            code == 2 and "Refused" in out and still == "pending", f"exit {code}: {short(out, 160)}; {still}")
+    code, out = W.cli_no_terminal("reject", str(cdn), stdin="yes\n")
+    R.check(4, "`flowstate reject` with a piped 'yes' and no terminal: refused too",
+            code == 2 and W.q("SELECT status FROM review_items WHERE id = ?", (cdn,))[0]["status"] == "pending",
+            f"exit {code}: {short(out, 160)}")
+    code, out = W.cli_in_terminal(["approve", str(postmark)], ["y"])
+    row = W.q("SELECT status, decided_by, result_id FROM review_items WHERE id = ?", (postmark,))[0]
+    R.check(4, "`flowstate approve` in a terminal, the user types y: approved and the decision saved",
+            code == 0 and row["status"] == "approved" and row["decided_by"] == "command-line"
+            and row["result_id"] and "Postmark" in out, f"exit {code}: {short(out, 200)}; {row}")
+    code, out = W.cli_in_terminal(["reject", str(cdn), "--reason", "Images stay on the server"], ["n"])
+    R.check(4, "answering n in the terminal changes nothing",
+            code == 1 and W.q("SELECT status FROM review_items WHERE id = ?", (cdn,))[0]["status"] == "pending",
+            f"exit {code}: {short(out, 160)}")
+    code, out = W.cli_in_terminal(["reject", str(cdn), "--reason", "Images stay on the server"], ["y"])
+    R.check(4, "`flowstate reject` in a terminal: rejected with the reason",
+            code == 0 and W.q("SELECT status, reject_reason FROM review_items WHERE id = ?", (cdn,))[0]
+            == {"status": "rejected", "reject_reason": "Images stay on the server"}, f"exit {code}: {short(out, 160)}")
     r = cc1.call("manage_review", action="approve", project=P, item_id=gift,
                  user_request="Yes approve the gift card todo, we need it before Christmas", priority="urgent")
     R.check(4, "another agent relays the user's approval: the todo is created",
@@ -847,8 +913,10 @@ def s6_windows(W):
                                           (f'%"change:{W.slots_change}"%', f'%"decision:{W.d_slots}"%'))}
     R.check(6, "the run ledger attributes those two saves to the two different windows' sessions",
             sess == {W.sid1, W.sid2}, f"sessions {sess}")
-    R.word("manage_history who shows app, model and machine but not the session, so two windows of one app "
-           "look like one author there; only the run ledger (no tool) can tell them apart.")
+    by_rec = {(x["record_type"], x["record_id"]): x.get("session") for x in rows}
+    R.check(6, "manage_history who shows each window's session, so two windows of one app are told apart",
+            {by_rec.get(("change", W.slots_change)), by_rec.get(("decision", W.d_slots))} == {W.sid1, W.sid2},
+            {f"{k[0]} #{k[1]}": v for k, v in by_rec.items() if k in (("change", W.slots_change), ("decision", W.d_slots))})
     # long gap: fake the clock (move claude-code's earlier visits 20 days back)
     old = utc(datetime.now(timezone.utc) - timedelta(days=20))
     W.w("UPDATE run_views SET at = ? WHERE app = 'claude-code' AND tool = 'start_here'", (old,))
@@ -1147,7 +1215,12 @@ def s10_upgrade(W, skip):
     R.check(10, "a v2.3.0 review item keeps its app: the same app can't approve it with one word", r.get("error") == "own_item", r)
     r = a.call("manage_review", action="approve", project="Old Bakery", item_id=item,
                user_request="Yes, keep the change v2.3.0 queued about order tickets")
-    R.check(10, "the v2.3.0 review item can be approved after the upgrade (user's words)", not err(r) and "receipt" in r, r)
+    R.check(10, "the same app can't approve it with the user's words either (review is on)",
+            r.get("error") == "own_item" and "flowstate approve" in r.get("message", ""), r)
+    code, out = W.cli_in_terminal(["approve", str(item)], ["y"], env=env24)
+    st = W.q("SELECT status FROM review_items WHERE id = ?", (item,), db=db)[0]["status"]
+    R.check(10, "the user approves the v2.3.0 review item with `flowstate approve` after the upgrade",
+            code == 0 and st == "approved", f"exit {code}: {short(out, 160)}; {st}")
     n.close()
 
 
@@ -1191,11 +1264,10 @@ def s11_edges(W):
     R.check(11, "server still answers after the bad calls", not err(alive), short(alive, 80))
     big = "x" * 120_000
     r = cc1.call("log_work", project=P, kind="learning", summary="Huge note", details=big)
-    stored = W.q("SELECT LENGTH(COALESCE(context,'')) AS n FROM learnings ORDER BY id DESC LIMIT 1")
-    R.check(11, "oversized details (120,000 chars): answered without a crash", isinstance(r, dict), f"{short(r, 120)} stored={stored}")
-    if stored and stored[0]["n"] >= 120_000:
-        R.word("log_work details has no size limit: a 120,000-character text is stored whole (handoffs cap at "
-               "1,000, rules at 300, imports at 200,000). Not harmful by itself; the brief trims it.")
+    stored = W.count("learnings", "insight = 'Huge note'")
+    R.check(11, "oversized details (120,000 chars): refused with a clear message, nothing stored or cut",
+            r.get("error") == "too_long" and "10,000" in r.get("message", "") and stored == 0,
+            f"{short(r, 160)} stored={stored}")
     for size, cap in BRIEF_BUDGET.items():
         b = cc1.call("start_here", project=P, size=size)
         R.check(11, f"with the huge note stored, brief {size} still within {cap} chars", len(b) <= cap, len(b))
@@ -1353,11 +1425,13 @@ def s12_descriptions(W):
             [(t["name"], len(t["description"])) for t in full if len(t["description"]) > 700])
     W.tool_list = full
     mm = getattr(W, "skills_mismatch", [])
-    R.check(12, "manage_skills: only learn/save_state/get_state need a project (as described)", not mm,
-            f"{mm} were refused with project_required")
-    if mm:
-        R.word("manage_skills says 'project ... Required for learn, save_state and get_state', but "
-               f"{', '.join(mm)} are refused with project_required when no project is given.")
+    skills = next(t for t in full if t["name"] == "manage_skills")
+    said = skills["inputSchema"]["properties"]["project"]["description"]
+    R.check(12, "manage_skills: every action but list / list_metrics needs a project, as its description says",
+            not mm and "Required except for list and list_metrics" in said, f"{mm} not refused; says {said!r}")
+    for name in ("manage_variables", "manage_methods"):
+        d = next(t for t in full if t["name"] == name)["description"]
+        R.check(12, f"{name} says delete is refused for HTTP app keys", "refused for HTTP app keys" in d, d)
     # coverage: every tool and every action / kind / size
     expected = set()
     for t in full:

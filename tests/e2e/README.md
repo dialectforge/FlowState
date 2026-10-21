@@ -6,10 +6,11 @@ project ("Lakeside Bakery ordering app") the way AI apps do, only through MCP to
 - claude-code in two windows (two stdio server processes), cursor (stdio), grok (streamable
   HTTP with its own app key), plus a slow-timeout window, two HTTP claude-code sessions and
   a v2.3.0 server for the upgrade check;
-- 12 scenarios (fresh install, a normal day with claims, conflicting decisions, review mode
-  and self-approval, receipts and timed-out writes, two windows and "since your last visit",
-  undo, backups / safety copies / health check, run ledger, upgrade from v2.3.0, bad input
-  and concurrency, tool descriptions), each pass/fail with evidence;
+- 12 scenarios (fresh install, a normal day with claims, conflicting decisions, review mode,
+  self-approval and the user-only `flowstate approve` step, receipts and timed-out writes,
+  two windows and "since your last visit", undo, backups / safety copies / health check, run
+  ledger, upgrade from v2.3.0, bad input, concurrency and the real-data guard, tool
+  descriptions), each pass/fail with evidence;
 - every tool and every action it offers is called at least once (the report says how many).
 
 ```bash
@@ -18,13 +19,17 @@ project ("Lakeside Bakery ordering app") the way AI apps do, only through MCP to
 .venv/bin/python tests/e2e/run_e2e.py --skip-upgrade  # no v2.3.0 worktree
 ```
 
-Safety: every FlowState path (database, backups, config, token file, auth DB, relay, and
-HOME itself) points into a new `/tmp/fs-e2e-<pid>` folder, deleted at the end unless
-`--keep`. The HTTP token is generated per run and never printed. The upgrade step uses
+Safety: every FlowState path (database, backups, config, token file and store, auth DB,
+relay, project files, data-git, and HOME itself) points into a new `/tmp/fs-e2e-<pid>`
+folder, deleted at the end unless `--keep`. Every server process loads
+`tests/guard_site/sitecustomize.py`, which refuses (and records in `guard.log`) any touch of
+the real FlowState folders; scenario 11 fails if anything was refused. `flowstate approve` /
+`reject` run either in a new session with no terminal (to prove a piped "y" is refused) or
+in a pseudo-terminal of their own, never on the terminal you run this from. The HTTP token is generated per run and never printed. The upgrade step uses
 `git worktree add /tmp/fs-230 v2.3.0` and removes it again. Only servers the script started
 are stopped, by their own process. The report's last line checks that the real FlowState
 folders were not touched.
 
 It needs `git`, the repo's `.venv` (the `mcp` and `httpx` packages FlowState already uses)
-and the `v2.3.0` tag. Exit code 0 only if every check passes; on 2.4.0 several fail on
-purpose (they are the bugs found; see `tests/test_repro_e2e_findings.py`).
+and the `v2.3.0` tag. Exit code 0 only if every check passes. The bugs its first run found
+have regression tests in the normal suite (`tests/test_e2e_findings.py` and others).

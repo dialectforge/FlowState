@@ -1,7 +1,8 @@
 """2.4.0 adds receipts, creation history and the run ledger to every write; saves must stay
 fast. On a temp database with ~2,000 records, saves through the real MCP call path stay
 well inside a generous bound (measured on a 2026 Mac: about 8.3 ms median in v2.3.0 and
-9.7 ms in 2.4.0; the bound leaves room for slower CI machines)."""
+9.7 ms in 2.4.0; after the end-to-end fixes 10.3 ms against 8.9 ms for v2.3.0 on a slower
+day; the bound leaves room for slower CI machines)."""
 
 import asyncio
 import sqlite3

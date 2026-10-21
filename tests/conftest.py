@@ -7,6 +7,7 @@ point into a session temp folder; `guard_site/sitecustomize.py` makes this proce
 every Python process the tests start refuse to touch the real folders; and the session
 fails if anything was refused or any FlowState path resolves into the real folders."""
 
+import atexit
 import os
 import shutil
 import socket
@@ -36,6 +37,7 @@ if os.name == "nt":
                                          for v in ("LOCALAPPDATA", "APPDATA") if os.environ.get(v)})
 
 SESSION = Path(tempfile.mkdtemp(prefix="fs-tests-")).resolve()
+atexit.register(shutil.rmtree, SESSION, True)   # also when pytest stops before sessionfinish
 GUARD_LOG = SESSION / "guard-refusals.log"
 _SESSION_ENV = {
     "HOME": SESSION / "home", "USERPROFILE": SESSION / "home",
