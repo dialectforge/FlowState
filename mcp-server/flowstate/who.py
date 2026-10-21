@@ -4,7 +4,8 @@ migration 012), newest first, with the app, model, machine and identity source o
 Sources: edit history (edits and undos), the review queue (queued items, approvals,
 rejections), links (added / removed), handoff notes (left / picked up), hard rules (added /
 removed), review-mode changes, records created by a write (activity log), and todo claims
-(claim, renew, release, handoff, override, cleared; migration 013). Rows written
+(claim, renew, release, handoff, override, cleared; migration 013), and possible conflicting
+decisions (flagged, resolved by a replacing decision, dismissed as compatible; 014). Rows written
 before migration 012 show the app name the older columns kept and "not recorded" for the
 rest.
 
@@ -124,6 +125,20 @@ def _sources(t: dict) -> list[str]:
         q.append(f"SELECT at, {_id_cols(c)}, project_id, 'todo' AS record_type, todo_id AS "
                  f"record_id, summary AS what, 'todo_' || event AS kind, id AS ref, NULL AS "
                  f"extra FROM todo_claim_events")
+    if "decision_conflicts" in t:
+        c = t["decision_conflicts"]
+        pair = "'D' || new_id || ' vs D' || old_id"
+        q.append(_sel("created_at", _id_cols(c), "project_id", "'decision'", "new_id",
+                      f"'possible conflict flagged: ' || {pair} || ' (score ' || "
+                      f"printf('%.2f', score) || ')'", "conflict_flagged", "NULL",
+                      "FROM decision_conflicts"))
+        q.append(_sel("resolved_at", _id_cols(c, "resolved_"), "project_id", "'decision'",
+                      "new_id",
+                      f"'possible conflict ' || {pair} || CASE status WHEN 'resolved_replaced' "
+                      f"THEN ' resolved: D' || resolved_by_decision || ' replaced one' "
+                      f"ELSE ' dismissed: the user said they are compatible' END",
+                      "conflict_resolved", "NULL",
+                      "FROM decision_conflicts WHERE resolved_at IS NOT NULL"))
     return q
 
 

@@ -350,7 +350,7 @@ def v220_db(tmp_path, monkeypatch):
     d.add_todo(a.id, "Old todo", None, "high")
     d.add_todo(a.id, "Older todo", None, "low")
     monkeypatch.setattr(M, "available", real)
-    assert [n for _v, n, _p in M.pending(db)] == ["todo_claims"]
+    assert [n for _v, n, _p in M.pending(db)][0] == "todo_claims"   # later ones may follow
     return db
 
 
@@ -359,7 +359,7 @@ def test_migration_from_v220_is_additive(v220_db, tmp_path):
     before = {t: _rows(db, f'SELECT * FROM "{t}" ORDER BY rowid') for t in ("projects", "todos")}
     cols = _rows(db, 'PRAGMA table_info("todos")')
     res = M.migrate(db, tmp_path / "bk")
-    assert res["applied"] == ["013_todo_claims"] and res["backup"]
+    assert res["applied"][0] == "013_todo_claims" and res["backup"]
     assert {t: _rows(db, f'SELECT * FROM "{t}" ORDER BY rowid') for t in before} == before
     assert _rows(db, 'PRAGMA table_info("todos")') == cols          # v1 table untouched
     names = {r[0] for r in _rows(db, "SELECT name FROM sqlite_master WHERE type='table'")}
@@ -371,7 +371,7 @@ def test_migration_from_v220_is_additive(v220_db, tmp_path):
     conn.execute("DELETE FROM schema_migrations WHERE version = 13")
     conn.commit()
     conn.close()
-    assert M.migrate(db, tmp_path / "bk")["applied"] == ["013_todo_claims"]
+    assert M.migrate(db, tmp_path / "bk")["applied"] == ["013_todo_claims"]   # only 13 was lost
 
 
 def test_upgraded_v220_db_works_with_the_server(v220_db, monkeypatch):

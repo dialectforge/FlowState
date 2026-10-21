@@ -130,7 +130,7 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
     and decisions, key learnings. Sections are filled within budgets; the result never
     exceeds the size's cap, except that the hard rules are never cut: if they alone would not
     fit, the cap grows just enough to show them (they are bounded at 2,000 characters)."""
-    from . import claims, handoffs, links, priority, provenance, review_mode, rules
+    from . import claims, conflicts, handoffs, links, priority, provenance, review_mode, rules
     size = size if size in SIZES else "standard"
     prof = SIZES[size]
     cap = cap or prof["cap"]
@@ -171,6 +171,7 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
         decisions = [d for d in decisions if d["id"] not in replaced][:n_dec]
         linked = links.brief_lines(conn, pid) if prof["linked"] else []
         alerts = links.alert_lines(conn, pid)
+        conflict_line = conflicts.brief_line(conn, pid)
         mode_line = review_mode.brief_line(db_path, pid) if review_mode.available(conn) else None
         learnings = q("""SELECT id, category, insight, verified FROM learnings WHERE project_id=?
                          ORDER BY verified DESC, created_at DESC, id DESC LIMIT ?""", pid, n_learn)
@@ -233,6 +234,8 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
         b.add(mode_line)
     for line in alerts:
         b.add(line)
+    if conflict_line:
+        b.add(conflict_line)
     if last:
         b.add(f"Last session ({(last[0]['ended_at'] or '')[:10]}): {_one_line(last[0]['summary'], 280)}")
     if stale_line:

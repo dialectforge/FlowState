@@ -42,23 +42,23 @@ def _tool(name: str, description: str, props: dict, required=()) -> Tool:
 
 START_HERE = _tool("start_here", guide.START_HERE_DESCRIPTION, {
     "project": _p("Project name or id. Omit to get the project list.", ["string", "integer"]),
-    "folder": _p("Working folder; picks the project if project is omitted."),
-    "size": _p("quick (~1,500 chars), standard (4,000, default) or deep (12,000, full context).",
+    "folder": _p("Working folder; picks the project if none is given."),
+    "size": _p("quick (~1,500 chars), standard (4,000, default) or deep (12,000).",
                enum=list(SIZE_NAMES), default="standard"),
 })
 
 LOG_WORK = _tool("log_work", guide.LOG_WORK_DESCRIPTION, {
     "project": PROJECT,
-    "kind": _p("Which kind of record (see the tool description).",
+    "kind": _p("The record kind (see the description).",
                enum=["decision", "change", "problem", "learning", "todo"]),
     "summary": _p("The record in one short line."),
-    "details": _p("Optional: why, what was rejected, old / new values."),
-    "component": _p("Component name, created if missing (change / problem default: General). "
-                    "Shared components work too."),
+    "details": _p("Why, what was rejected, old / new values."),
+    "component": _p("Component name (created if missing; change / problem default General); "
+                    "shared ones too."),
     "priority": {**_PRIORITY, "description": "todo / problem only. Default normal; high and medium "
                                              "are older names."},
     "category": _p("learning only: the kind of lesson.", enum=_LEARNING_CATEGORIES),
-    "suggested": _p("true = queue it for the user's review instead of saving.", "boolean"),
+    "suggested": _p("true = queue it for the user's review.", "boolean"),
     "replaces": _p("decision only: id of the decision this replaces.", "integer"),
     "source": _p("Where it came from: the user, your inference, or the code.",
                  enum=list(provenance.SOURCES)),
@@ -130,8 +130,7 @@ MANAGE_PROBLEMS = _tool("manage_problems", guide.PROBLEMS_DESCRIPTION, {
 _REVIEW_ACTIONS = ("list", "get_mode", "approve", "reject", "set_mode")
 MANAGE_REVIEW = _tool("manage_review", guide.REVIEW_DESCRIPTION, {
     "action": _action(_REVIEW_ACTIONS),
-    "project": _p("approve / reject: required. Others: omit for all projects / the whole "
-                  "install.",
+    "project": _p("approve / reject: required. Else omit: all projects / whole install.",
                   ["string", "integer"]),
     "status": _p("list: which items. Default pending.",
                  enum=["pending", "approved", "rejected", "all"]),

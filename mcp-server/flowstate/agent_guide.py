@@ -16,20 +16,20 @@ INSTRUCTIONS = """FlowState is the user's project memory (todos, changes, decisi
 
 START_HERE_DESCRIPTION = (
     "CALL THIS FIRST in every conversation about a project. Returns the brief as text: hard "
-    "rules, a handoff note if any, review mode, open todos (and claims) and "
-    "problems, recent changes, decisions and learnings, facts to re-check, linked projects. "
-    "Without project it lists the projects instead. size=deep gives the full working context. "
+    "rules, a handoff note if any, review mode, possible conflicts, open todos (and claims) "
+    "and problems, recent changes, decisions and learnings, facts to re-check, linked "
+    "projects. No project: lists projects. size=deep: full working context. "
     "Side effects: opens or reuses the automatic session, notes when you looked, runs the "
     "user's opt-in git capture."
 )
 
 LOG_WORK_DESCRIPTION = (
     "Record one new decision (a choice and why), change (code or setup), problem (bug or "
-    "blocker), learning (reusable lesson) or todo in a project. Use it for every new record; "
-    "to update existing todos or problems use manage_todos / manage_problems. Only adds. The "
-    "review mode or suggested=true may queue it for the user instead. A change on a shared "
-    "component alerts linked projects. Secrets are refused. Returns {logged, record} or "
-    "{queued_for_review}."
+    "blocker), learning (reusable lesson) or todo in a project. To update todos or problems: "
+    "manage_todos / manage_problems. Only adds. Review mode or suggested=true may queue it for "
+    "the user. A change on a shared component alerts linked projects. A decision close to a "
+    "current one gets a possible-conflict note; act on it. Secrets are refused. Returns "
+    "{logged, record, note} or {queued_for_review}."
 )
 
 SEARCH_DESCRIPTION = (
@@ -64,10 +64,11 @@ _USER_ONLY = (
 
 REVIEW_DESCRIPTION = (
     "The user's review queue and review mode. Session summaries, suggested records, imports, "
-    "clean-up ideas and delete requests wait here. list, get_mode: read-only. approve: make "
-    "the item a record (edit fields or move_to first) or carry out a delete (a project also "
-    "needs confirm_name; undo: manage_history). reject: mark it rejected; nothing "
-    "changes. set_mode: which new records wait. Decisions are logged." + _USER_ONLY +
+    "clean-up ideas, delete requests and possible conflicts wait here. list, "
+    "get_mode: read-only. approve: make the item a record (edit fields or move_to first), "
+    "do a delete (a project also needs confirm_name; undo: manage_history) or confirm a "
+    "conflict. reject: mark it rejected (conflict: compatible). "
+    "set_mode: which new records wait. Decisions are logged." + _USER_ONLY +
     " Returns {items, total}, the mode, or the result."
 )
 

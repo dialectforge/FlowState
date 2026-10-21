@@ -217,7 +217,11 @@ class Page:
                                       for p in projects)
                     move = ('<label>Move to (empty = the suggested project)<select name="move_to">'
                             f'<option value=""></option>{targets}</select></label>')
-                if it["kind"] == "delete":   # nothing to edit; a project needs its name typed
+                if it["kind"] == "conflict":   # possible conflicting decisions: nothing to edit
+                    out.append(f"""<p><strong>{_e(it['summary'])}</strong></p><p class="meta">{_e(it['details'])}</p>
+<form method="post" action="/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
+<button>Approve: they really conflict</button></form>""")
+                elif it["kind"] == "delete":   # nothing to edit; a project needs its name typed
                     confirm = ""
                     if '"record_type": "project"' in (it.get("payload") or ""):
                         confirm = ('<label>Type the project name to confirm '

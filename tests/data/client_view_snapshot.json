@@ -21,11 +21,11 @@
     "readOnlyHint": true,
     "title": "Project brief (start here)"
    },
-   "description": "CALL THIS FIRST in every conversation about a project. Returns the brief as text: hard rules, a handoff note if any, review mode, open todos (and claims) and problems, recent changes, decisions and learnings, facts to re-check, linked projects. Without project it lists the projects instead. size=deep gives the full working context. Side effects: opens or reuses the automatic session, notes when you looked, runs the user's opt-in git capture.",
+   "description": "CALL THIS FIRST in every conversation about a project. Returns the brief as text: hard rules, a handoff note if any, review mode, possible conflicts, open todos (and claims) and problems, recent changes, decisions and learnings, facts to re-check, linked projects. No project: lists projects. size=deep: full working context. Side effects: opens or reuses the automatic session, notes when you looked, runs the user's opt-in git capture.",
    "inputSchema": {
     "properties": {
      "folder": {
-      "description": "Working folder; picks the project if project is omitted.",
+      "description": "Working folder; picks the project if none is given.",
       "type": "string"
      },
      "project": {
@@ -37,7 +37,7 @@
      },
      "size": {
       "default": "standard",
-      "description": "quick (~1,500 chars), standard (4,000, default) or deep (12,000, full context).",
+      "description": "quick (~1,500 chars), standard (4,000, default) or deep (12,000).",
       "enum": [
        "quick",
        "standard",
@@ -58,7 +58,7 @@
     "readOnlyHint": false,
     "title": "Log work"
    },
-   "description": "Record one new decision (a choice and why), change (code or setup), problem (bug or blocker), learning (reusable lesson) or todo in a project. Use it for every new record; to update existing todos or problems use manage_todos / manage_problems. Only adds. The review mode or suggested=true may queue it for the user instead. A change on a shared component alerts linked projects. Secrets are refused. Returns {logged, record} or {queued_for_review}.",
+   "description": "Record one new decision (a choice and why), change (code or setup), problem (bug or blocker), learning (reusable lesson) or todo in a project. To update todos or problems: manage_todos / manage_problems. Only adds. Review mode or suggested=true may queue it for the user. A change on a shared component alerts linked projects. A decision close to a current one gets a possible-conflict note; act on it. Secrets are refused. Returns {logged, record, note} or {queued_for_review}.",
    "inputSchema": {
     "properties": {
      "category": {
@@ -76,15 +76,15 @@
       "type": "string"
      },
      "component": {
-      "description": "Component name, created if missing (change / problem default: General). Shared components work too.",
+      "description": "Component name (created if missing; change / problem default General); shared ones too.",
       "type": "string"
      },
      "details": {
-      "description": "Optional: why, what was rejected, old / new values.",
+      "description": "Why, what was rejected, old / new values.",
       "type": "string"
      },
      "kind": {
-      "description": "Which kind of record (see the tool description).",
+      "description": "The record kind (see the description).",
       "enum": [
        "decision",
        "change",
@@ -131,7 +131,7 @@
       "type": "string"
      },
      "suggested": {
-      "description": "true = queue it for the user's review instead of saving.",
+      "description": "true = queue it for the user's review.",
       "type": "boolean"
      },
      "summary": {
@@ -506,7 +506,7 @@
     "readOnlyHint": false,
     "title": "Review queue (user decides)"
    },
-   "description": "The user's review queue and review mode. Session summaries, suggested records, imports, clean-up ideas and delete requests wait here. list, get_mode: read-only. approve: make the item a record (edit fields or move_to first) or carry out a delete (a project also needs confirm_name; undo: manage_history). reject: mark it rejected; nothing changes. set_mode: which new records wait. Decisions are logged. approve, reject, set_mode: ONLY call this when the user has explicitly told you, in this chat; quote them in user_request; never approve your own suggestions or change the mode to get your own writes saved. Returns {items, total}, the mode, or the result.",
+   "description": "The user's review queue and review mode. Session summaries, suggested records, imports, clean-up ideas, delete requests and possible conflicts wait here. list, get_mode: read-only. approve: make the item a record (edit fields or move_to first), do a delete (a project also needs confirm_name; undo: manage_history) or confirm a conflict. reject: mark it rejected (conflict: compatible). set_mode: which new records wait. Decisions are logged. approve, reject, set_mode: ONLY call this when the user has explicitly told you, in this chat; quote them in user_request; never approve your own suggestions or change the mode to get your own writes saved. Returns {items, total}, the mode, or the result.",
    "inputSchema": {
     "properties": {
      "action": {
@@ -606,7 +606,7 @@
       "type": "string"
      },
      "project": {
-      "description": "approve / reject: required. Others: omit for all projects / the whole install.",
+      "description": "approve / reject: required. Else omit: all projects / whole install.",
       "type": [
        "string",
        "integer"

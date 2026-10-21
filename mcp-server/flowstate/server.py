@@ -27,6 +27,7 @@ from . import agent_guide as guide
 from . import activity
 from . import claims
 from . import cleanup
+from . import conflicts
 from . import deletes
 from . import history
 from . import identity
@@ -357,7 +358,8 @@ def handle_call(name: str, args: dict, client: str = "unknown", meta: Optional[d
                 and result["record"].get("id") is not None:
             meta["record"] = (result["logged"], result["record"]["id"])
         if args.get("suggested") and isinstance(result, dict) and "error" not in result:
-            result["note"] = "Review mode is off, so this was saved directly."
+            off = "Review mode is off, so this was saved directly."
+            result["note"] = f"{off} {result['note']}" if result.get("note") else off
     elif name in ("review_approve", "review_reject"):
         result = _review_decide(name, pid, args, client)
     elif name == "delete_request" or (name, args.get("action")) in _DELETE_ACTIONS:
@@ -531,7 +533,7 @@ def _log_work(pid: int, args: dict, sid: Optional[int]) -> Any:
                 return {"error": "record_not_found", "message": f"No decision with id {replaces}."}
         finally:
             conn.close()
-    comp_id = None
+    comp_id = resolved = None
     if kind == "decision":
         r = tools.log_conversation(pid, f"Decision: {summary}", details, [summary],
                                    str(sid) if sid else None)
@@ -542,6 +544,7 @@ def _log_work(pid: int, args: dict, sid: Optional[int]) -> Any:
         if replaces is not None:
             _safe_link(pid, "supersedes", item_type="decision", item_id=r["id"],
                        target_type="decision", target_id=int(replaces))
+            resolved = _safe_call(conflicts.resolve_replaced, backend.db_path, r["id"], int(replaces))
     elif kind == "change":
         comp_id = _component_id(pid, args.get("component"))
         r = tools.log_change(comp_id, summary, None, None, "other", details)
@@ -566,6 +569,11 @@ def _log_work(pid: int, args: dict, sid: Optional[int]) -> Any:
             out["alerted_projects"] = alerted
     if replaces is not None:
         out["replaces"] = int(replaces)
+        if resolved:
+            out["resolved_conflicts"] = resolved
+    elif kind == "decision" and isinstance(r, dict) and r.get("id") is not None:
+        # possible conflicting decisions: a note only; never blocks or undoes the write
+        out.update(_safe_call(conflicts.on_save, backend.db_path, pid, r["id"], summary, comp_id) or {})
     return out
 
 
@@ -615,8 +623,15 @@ def _link(pid: Optional[int], args: dict, client: str) -> Any:
     spec = {k: args.get(k) for k in _LINK_SPEC if args.get(k) not in (None, "")}
     try:
         if action == "add":
-            return links.add(backend.db_path, pid, args.get("link_type"), note=args.get("note"),
-                             client=client, **spec)
+            res = links.add(backend.db_path, pid, args.get("link_type"), note=args.get("note"),
+                            client=client, **spec)
+            if args.get("link_type") == "supersedes" and spec.get("item_type") == "decision" \
+                    and not res.get("existing") and spec.get("target_id") is not None:
+                resolved = _safe_call(conflicts.resolve_replaced, backend.db_path,
+                                      int(spec["item_id"]), int(spec["target_id"]), client)
+                if resolved:
+                    res = {**res, "resolved_conflicts": resolved}
+            return res
         if action == "remove":
             link_id = args.get("link_id")
             if link_id is None:
@@ -993,8 +1008,11 @@ def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
                     return {"error": DELETE_REFUSAL[0], "message": DELETE_REFUSAL[1]}
                 deletes.check_approval(item, args.get("confirm_name"))
         if name == "review_reject":
-            return review.reject(backend.db_path, int(args["item_id"]), args.get("reason") or "",
-                                 user_request, client)
+            out = review.reject(backend.db_path, int(args["item_id"]), args.get("reason") or "",
+                                user_request, client)
+            if out.get("kind") == "conflict":   # the user says the two decisions fit together
+                out.update(conflicts.dismiss(backend.db_path, int(args["item_id"]), client))
+            return out
 
         def apply(item: dict, payload: dict):
             r = _log_work(item["project_id"], payload, None)
@@ -1019,6 +1037,12 @@ def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
             from .markdown_io import apply_edit as do
             return do(backend.db_path, item, client)
 
+        def apply_conflict(item: dict, _edits: dict):
+            done["note"] = ("Kept as a possible conflict; it stays in the brief until a decision "
+                            "replaces one of them (log_work replaces= or manage_links supersedes). "
+                            "Ask the user which one stands.")
+            return conflicts.confirm(backend.db_path, item)
+
         def apply_delete(item: dict, _edits: dict):
             done.update(deletes.execute(backend.db_path, item, client, args.get("confirm_name")))
             return deletes.TYPES[done["deleted"]["record_type"]][0], done["deleted"]["id"]
@@ -1026,7 +1050,7 @@ def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
         edits = {k: args.get(k) for k in ("summary", "details", "priority", "category", "component")}
         out = review.approve(backend.db_path, int(args["item_id"]), user_request, client, apply, edits,
                              others={"cleanup": apply_cleanup, "edit": apply_edit,
-                                     "delete": apply_delete})
+                                     "delete": apply_delete, "conflict": apply_conflict})
         return {**out, **done}
     except (review.ReviewError, deletes.DeleteError) as e:
         return e.payload
