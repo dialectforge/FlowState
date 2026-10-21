@@ -3,7 +3,10 @@
 backup_now: SQLite online backup API from a read-only connection (safe while the
 servers are running), `PRAGMA integrity_check` on the copy, then retention: the newest
 backup of each of the last 14 days that have one, plus the newest of each of the last 8
-ISO weeks. Only files named like FlowState backups are ever deleted.
+ISO weeks. Safety copies (labelled pre-restore, pre-migration or pre-bulk) are also kept for
+at least SAFETY_KEEP_DAYS whatever those limits say, so a later backup the same day can't
+remove the copy taken just before a restore. Only files named like FlowState backups are
+ever deleted.
 
 restore: verify the backup, copy it into a NEW file, verify the result. Writing over an
 existing database needs force=True and first takes a verified pre-restore backup.
@@ -11,7 +14,7 @@ existing database needs force=True and first takes a verified pre-restore backup
 
 import re
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -19,8 +22,10 @@ from . import paths
 
 KEEP_DAILY = 14
 KEEP_WEEKLY = 8
+SAFETY_KEEP_DAYS = 7
+SAFETY_LABELS = ("pre-restore", "pre-migration", "pre-bulk")
 PREFIX = "flowstate-"
-_BACKUP_NAME = re.compile(r"^flowstate-(\d{8})-(\d{6})(?:-[a-z0-9-]+)?\.db$")
+_BACKUP_NAME = re.compile(r"^flowstate-(\d{8})-(\d{6})(?:-([a-z0-9-]+))?\.db$")
 
 
 class BackupError(Exception):
@@ -94,7 +99,7 @@ def backup_now(db_path: Path, dest_dir: Optional[Path] = None, prune: bool = Tru
         partial.unlink(missing_ok=True)
         raise BackupError(f"backup copy failed its integrity check ({check}); nothing kept")
     partial.replace(final)
-    removed = prune_backups(dest_dir) if prune else []
+    removed = prune_backups(dest_dir, now, also_keep=final) if prune else []
     return {"path": final, "integrity": check, "size": final.stat().st_size, "removed": removed}
 
 
@@ -107,11 +112,22 @@ def list_backups(dest_dir: Path) -> list[tuple[datetime, Path]]:
     return sorted(out, reverse=True)
 
 
+def is_safety_copy(path: Path) -> bool:
+    """A copy taken right before a restore, a migration or a bulk / approved change."""
+    m = _BACKUP_NAME.match(Path(path).name)
+    label = (m.group(3) or "") if m else ""
+    return any(label == s or label.startswith(s + "-") for s in SAFETY_LABELS)
+
+
 def retention_keep(items: list[tuple[datetime, Path]], daily: int = KEEP_DAILY,
-                   weekly: int = KEEP_WEEKLY) -> set[Path]:
+                   weekly: int = KEEP_WEEKLY, now: Optional[datetime] = None) -> set[Path]:
     """Which backups to keep: newest per day (last `daily` days that have backups)
-    plus newest per ISO week (last `weekly` weeks that have backups)."""
-    keep, days, weeks = set(), [], []
+    plus newest per ISO week (last `weekly` weeks that have backups), plus every safety copy
+    younger than SAFETY_KEEP_DAYS."""
+    now = now or datetime.now()
+    keep = {p for ts, p in items
+            if is_safety_copy(p) and now - ts < timedelta(days=SAFETY_KEEP_DAYS)}
+    days, weeks = [], []
     for ts, p in sorted(items, reverse=True):
         d = ts.date()
         if d not in days:
@@ -126,9 +142,12 @@ def retention_keep(items: list[tuple[datetime, Path]], daily: int = KEEP_DAILY,
     return keep
 
 
-def prune_backups(dest_dir: Path) -> list[Path]:
+def prune_backups(dest_dir: Path, now: Optional[datetime] = None,
+                  also_keep: Optional[Path] = None) -> list[Path]:
+    """Delete backups the retention rule doesn't keep (never `also_keep`, the copy just made:
+    two backups in the same second used to let the newer one remove itself)."""
     items = list_backups(dest_dir)
-    keep = retention_keep(items)
+    keep = retention_keep(items, now=now) | ({also_keep} if also_keep else set())
     removed = []
     for _ts, p in items:
         if p not in keep:
