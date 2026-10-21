@@ -126,12 +126,13 @@ _MORE = " ...(handoff list shows it all)"
 
 def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
                 cap: Optional[int] = None, size: str = "standard",
-                shown: Optional[list] = None) -> str:
+                shown: Optional[list] = None, since: Optional[str] = None) -> str:
     """Plain-text brief: hard rules, handoff notes, open todos, open problems, recent changes
     and decisions, key learnings. Sections are filled within budgets; the result never
     exceeds the size's cap, except that the hard rules are never cut: if they alone would not
     fit, the cap grows just enough to show them (they are bounded at 2,000 characters).
-    `shown` (a list) receives "type:id" of every record the brief shows (the run ledger)."""
+    `shown` (a list) receives "type:id" of every record the brief shows (the run ledger);
+    `since` is the one "since your last visit" line (ledger.since_line), if any."""
     shown = shown if shown is not None else []
     from . import claims, conflicts, handoffs, links, priority, provenance, review_mode, rules
     size = size if size in SIZES else "standard"
@@ -231,6 +232,8 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
         b.add(f"Session #{session['session_id']} is open for you (opened automatically; "
               f"closes itself when idle). Log as you work: "
               f"log_work(project=\"{name}\", kind=decision|change|problem|learning|todo, summary=...).")
+    if since:
+        b.add(since)
     if pending is not None:
         b.add(f"Review queue: {pending} item{'s' if pending != 1 else ''} waiting for the user's OK"
               + (" (manage_review action=list shows them; approve or reject only when the user asks)."

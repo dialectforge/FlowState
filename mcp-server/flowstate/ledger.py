@@ -93,3 +93,85 @@ def run(db_path: Path, session_id: int) -> Optional[dict]:
         return {**dict(head), "reads": reads, "writes": writes}
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------- since your last visit
+TAG = "Since your last visit"
+SINCE_MAX = 240          # one line, never more
+LONG_GAP_DAYS = 14
+_KINDS = (("decision", "decisions"), ("change", "changes"), ("problem", "problems"),
+          ("learning", "learnings"), ("todo", "todos"))
+
+
+def _local(utc: str) -> datetime:
+    return datetime.strptime(utc[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).astimezone()
+
+
+def _when(utc: str, now: datetime) -> str:
+    dt = _local(utc)
+    return f"{dt:%b} {dt.day}" + (f" {dt:%H:%M}" if (now - dt) < timedelta(days=2) else "")
+
+
+def _names(apps: list, room: int = 3) -> str:
+    shown = [a if len(a) <= 30 else a[:27] + "..." for a in apps[:room]]
+    rest = len(apps) - len(shown)
+    if rest:
+        return ", ".join(shown) + f" and {rest} more"
+    return shown[0] if len(shown) == 1 else ", ".join(shown[:-1]) + " and " + shown[-1]
+
+
+def since_line(db_path: Path, project: dict, ident, session_id: Optional[int],
+               now: Optional[datetime] = None) -> Optional[str]:
+    """One line for the brief: what other sessions saved in this project since this app's
+    previous brief here. None on a first visit or when nothing changed."""
+    if ident is None:
+        return None
+    now = now or datetime.now(timezone.utc)
+    conn = _conn(db_path)
+    try:
+        if not available(conn):
+            return None
+        last = conn.execute(
+            """SELECT at, session_id FROM run_views WHERE project_id = ? AND app = ?
+               AND machine IS ? AND tool = 'start_here' ORDER BY id DESC LIMIT 1""",
+            (project["id"], ident.app, ident.machine)).fetchone()
+        if last is None:
+            return None
+        rows = conn.execute(
+            """SELECT app, session_id, records FROM run_writes WHERE project_id = ?
+               AND status = 'saved' AND finished_at >= ?
+               AND (session_id IS NULL OR session_id NOT IN (?, ?)) ORDER BY id""",
+            (project["id"], last["at"], last["session_id"] or -1, session_id or -1)).fetchall()
+    finally:
+        conn.close()
+    if not rows:
+        return None
+    apps: list = []
+    for r in rows:
+        who = r["app"] or "an app"
+        who = f"another {who} session" if who == ident.app else who
+        if who not in apps:
+            apps.append(who)
+    when = _when(last["at"], now)
+    gap = now - datetime.strptime(last["at"][:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    if gap > timedelta(days=LONG_GAP_DAYS):
+        day = f"{_local(last['at']):%Y-%m-%d}"   # manage_history who takes local dates
+        line = (f"{TAG} ({when}): {len(rows)} save{'s' if len(rows) != 1 else ''} by "
+                f"{len(apps)} app{'s' if len(apps) != 1 else ''}; "
+                f"manage_history(action=\"who\", project=\"{project['name']}\", since=\"{day}\") "
+                f"lists them.")
+        return line if len(line) <= SINCE_MAX else line[:SINCE_MAX - 3] + "..."
+    counts: dict = {}
+    for r in rows:
+        for ref in json.loads(r["records"] or "[]") or ["other:0"]:
+            kind = ref.split(":", 1)[0]
+            counts[kind] = counts.get(kind, 0) + 1
+    parts = [f"{counts[k]} {k if counts[k] == 1 else many}" for k, many in _KINDS if counts.get(k)]
+    other = sum(n for k, n in counts.items() if k not in dict(_KINDS))
+    if other:
+        parts.append(f"{other} other")
+    for room in (3, 2, 1):
+        line = f"{TAG} ({when}): {_names(apps, room)} saved {', '.join(parts)}."
+        if len(line) <= SINCE_MAX:
+            return line
+    return line[:SINCE_MAX - 3] + "..."

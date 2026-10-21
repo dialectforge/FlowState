@@ -490,8 +490,9 @@ def _start_here(args: dict, client: str, meta: Optional[dict] = None) -> str:
     session = _safe_track(tracker.current, client, project["id"], identity.conn()[0]) \
         if (sid and tracker) else None
     try:
+        since = _safe_call(ledger.since_line, db_path, project, identity.current(), sid)
         text = build_brief(db_path, project, session, size=args.get("size") or "standard",
-                           shown=(meta or {}).get("shown"))
+                           shown=(meta or {}).get("shown"), since=since)
     except Exception as e:  # noqa: BLE001 - brief problems must not break the agent
         return (f"FlowState: project '{project['name']}' (#{project['id']}) found, but the brief "
                 f"could not be built ({type(e).__name__}). Carry on; use search if needed.")
