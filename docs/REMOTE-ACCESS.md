@@ -6,7 +6,7 @@ cloud AIs such as claude.ai (web and phone), ChatGPT or the Grok app to reach yo
 over HTTPS, without opening a port on your router.
 
 No domain? The optional relay agent (`flowstate relay enroll`, see the README section
-"Optional relay") gives you `https://<handle>.fsmcp.com` with end-to-end TLS and
+"Optional: reach FlowState from anywhere") gives you `https://<handle>.fsmcp.com` with end-to-end TLS and
 the same sign-in. This page covers running it on your own domain instead.
 
 What you need: a domain on Cloudflare (free plan is fine), `cloudflared` on the computer that

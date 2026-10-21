@@ -1,6 +1,18 @@
 # Changelog
 
-## Unreleased
+## 2.2.0 - 2026-10-21
+
+### In short
+- New, optional: the FlowState Relay. Reach the FlowState on your own computer from any AI app
+  (claude.ai, ChatGPT, Cursor, your phone) at `https://<handle>.fsmcp.com/mcp`, without your own
+  domain or tunnel. TLS passthrough: the encryption ends on your computer, so the relay can't
+  read your traffic, and your data stays on your machine.
+- To start: get a code at flowstatemcp.com/account, then run
+  `flowstate relay enroll --code <code>` and `flowstate relay run`. Guide:
+  https://flowstatemcp.com/setup.
+- The relay is in a 10-spot beta. When it is full, `relay enroll` tells you your place in line.
+- Local FlowState stays free and MIT forever. If you never enroll, nothing changes: same
+  defaults, no account, no outbound connections, no new ports, nothing starts on its own.
 
 ### Optional relay agent (off by default)
 - `flowstate relay enroll --code <code>` / `run` / `status` / `renew` / `enable` / `disable` /

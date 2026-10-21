@@ -229,7 +229,7 @@ prompt `flowstate-start`.
 
 ## Why FlowState
 
-Many AI memory tools now put their best features behind subscriptions: [Mem0](https://mem0.ai/pricing) ($19 to $249/mo), [Zep](https://www.getzep.com/pricing) ($125/mo and up), [Supermemory](https://supermemory.ai/pricing) ($19/mo and up). Some have dropped their free or self-hosted options entirely, like Zep's self-hosted edition and Pieces' free tier. FlowState is MIT-licensed, runs on your own machine, and is free with no paid tier.
+Many AI memory tools now put their best features behind subscriptions: [Mem0](https://mem0.ai/pricing) ($19 to $249/mo), [Zep](https://www.getzep.com/pricing) ($125/mo and up), [Supermemory](https://supermemory.ai/pricing) ($19/mo and up). Some have dropped their free or self-hosted options entirely, like Zep's self-hosted edition and Pieces' free tier. FlowState is MIT-licensed and runs on your own machine. Local FlowState is free and MIT forever. An optional paid relay and hosting service is at [flowstatemcp.com](https://flowstatemcp.com); paid plans charge for hosting, never for features.
 
 *Prices as listed on each vendor's pricing page, October 2026.*
 
@@ -304,10 +304,19 @@ apps are refused.
 
 ---
 
-## Optional relay: cloud AIs without your own domain
+## Optional: reach FlowState from anywhere
+
+Want claude.ai, ChatGPT, Cursor or your phone to reach the FlowState on your own computer?
+The optional relay gives it an address like `https://<handle>.fsmcp.com/mcp`. Traffic is
+encrypted end to end (TLS passthrough), so the relay can't read it, and your data stays on
+your machine. Get a code at [flowstatemcp.com/account](https://flowstatemcp.com/account), then
+run `flowstate relay enroll --code <code>`. The relay is in a 10-spot beta. Step-by-step guide:
+[flowstatemcp.com/setup](https://flowstatemcp.com/setup).
 
 **Local FlowState stays free and MIT-licensed. It needs no account, and it makes no network
 calls.** The relay is off by default. Nothing in it runs until you enroll.
+
+### How the relay works
 
 If you want claude.ai, ChatGPT or Cursor to reach the FlowState on your computer, and you don't
 want to set up your own domain and Cloudflare Tunnel ([docs/REMOTE-ACCESS.md](docs/REMOTE-ACCESS.md)),
@@ -330,7 +339,7 @@ gets a certificate for your address.
 <venv python> -m flowstate relay forget                   # delete the device token, keys and certificate
 ```
 
-During the beta the relay has room for a limited number of computers (and at most 40 new
+During the beta the relay has room for 10 computers (and at most 40 new
 ones a week, to stay within Let's Encrypt's limits). If it is full, `relay enroll` says so
 in plain words with your place in line ("The FlowState Relay beta is full right now. You're
 on the waitlist (number N). ..." or, for the weekly limit, "... try again after <time>") and
