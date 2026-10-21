@@ -1,5 +1,6 @@
 """Git operations tools."""
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -15,7 +16,9 @@ def _run_git_command(args: list[str], cwd: Optional[Path] = None) -> tuple[bool,
             cwd=cwd or utils.data_dir(),
             capture_output=True,
             text=True,
-            timeout=60
+            timeout=60,
+            # never wait on a password prompt nobody can see: fail instead
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}
         )
         return result.returncode == 0, result.stdout, result.stderr
     except subprocess.TimeoutExpired:
@@ -201,32 +204,51 @@ def git_sync(commit_message: Optional[str] = None) -> dict:
         if not success:
             return {"success": False, "step": "commit", "error": stderr}
     
-    # Pull and push if remote exists
-    if status.get("has_remote"):
-        # Pull with rebase
-        success, stdout, stderr = _run_git_command(["pull", "--rebase", "origin", status.get("branch", "main")])
-        if not success and "Could not resolve host" not in stderr:
-            # Might be a conflict - save local backup
-            backup_time = datetime.now().strftime("%Y%m%d%H%M%S")
-            return {
-                "success": False, 
-                "step": "pull", 
-                "error": stderr,
-                "conflict": True,
-                "backup_hint": f"Local changes may need manual resolution"
-            }
-        
-        # Push
-        success, stdout, stderr = _run_git_command(["push", "origin", status.get("branch", "main")])
-        if not success and "Could not resolve host" not in stderr:
-            return {"success": False, "step": "push", "error": stderr}
-    
+    if not status.get("has_remote"):
+        return {"success": True, "committed": has_changes, "pushed": False,
+                "message": (commit_message or "FlowState sync") + " (no remote set: committed locally only)"}
+
+    # The remote's side, without changing anything: reachable? does the branch exist yet?
+    branch = status.get("branch") or "main"
+    local_only = {"committed": has_changes, "pushed": False}
+    ok, heads, err = _run_git_command(["ls-remote", "--heads", "origin", branch])
+    if not ok:
+        return {"success": False, "step": "connect", **local_only, "offline": True,
+                "error": "Couldn't reach the remote, so nothing was pushed"
+                         + (" (your changes are committed locally)" if has_changes else "")
+                         + f". Sync again when it is reachable. Git said: {_last_line(err)}"}
+    if heads.strip():   # the remote has this branch: bring its commits in first
+        ok, out, err = _run_git_command(["pull", "--rebase", "origin", branch])
+        if not ok:
+            conflict = _rebasing() or "CONFLICT" in (out + err)
+            if conflict:
+                _run_git_command(["rebase", "--abort"])
+            return {"success": False, "step": "pull", **local_only, "conflict": conflict,
+                    "error": ("The remote has changes that clash with yours; nothing was pushed "
+                              "and your data folder is as it was. Resolve it by hand with git."
+                              if conflict else f"git pull failed: {_last_line(err)}")}
+    # (an empty remote, or a new branch there: the first push creates it)
+    ok, out, err = _run_git_command(["push", "-u", "origin", branch])
+    if not ok:
+        return {"success": False, "step": "push", **local_only,
+                "error": f"git push failed, so nothing is on the remote: {_last_line(err)}"}
     return {
         "success": True,
         "committed": has_changes,
-        "pushed": status.get("has_remote", False),
+        "pushed": True,
+        "first_push": not heads.strip(),
         "message": commit_message or "FlowState sync"
     }
+
+
+def _last_line(text: str) -> str:
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    return (lines[-1] if lines else "no details")[:200]
+
+
+def _rebasing() -> bool:
+    g = utils.data_dir() / ".git"
+    return (g / "rebase-merge").exists() or (g / "rebase-apply").exists()
 
 
 def git_set_remote(remote_url: str) -> dict:
