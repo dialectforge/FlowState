@@ -47,6 +47,10 @@ WRITES = {
     ("link", "add"): None,
     ("todo", "block"): "todo_id",
     ("todo", "unblock"): "todo_id",
+    ("todo", "claim"): "todo_id",       # claims.py: who is working on it, until when
+    ("todo", "renew"): "todo_id",
+    ("todo", "release"): "todo_id",
+    ("todo", "handoff"): "todo_id",
     ("history", "undo"): None,
     ("cleanup_suggest", None): None,
     ("import_memory", None): None,     # history.undo checks the edit belongs to the project

@@ -14,6 +14,9 @@ here so nothing records identity in two different ways:
                    (OAuth / remote tokens): the client's name.
   identity_source  app_key | oauth_client | remote_token | shared_token | self_reported
 
+Plus `session` (not a stored column of the logs above; todo claims use it to tell two
+sessions of one app apart): stdio = this server process, HTTP = the MCP session id.
+
 server.call_tool works out the identity once per call and sets it for the worker thread;
 code outside a tool call (command line, review page) records itself as a local,
 self-reported caller.
@@ -22,6 +25,7 @@ self-reported caller.
 import contextvars
 import os
 import socket
+import uuid
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from typing import Optional
@@ -31,6 +35,7 @@ LABELS = {"app_key": "per-app key", "oauth_client": "OAuth app", "remote_token":
           "shared_token": "shared token (legacy)", "self_reported": "self-reported"}
 FIELDS = ("app", "model", "machine", "identity_source")
 MAX_LEN = 80
+PROCESS_SESSION = uuid.uuid4().hex[:12]   # stdio: one server process = one session
 
 
 @dataclass(frozen=True)
@@ -39,9 +44,11 @@ class Identity:
     model: Optional[str]
     machine: Optional[str]
     identity_source: str
+    session: Optional[str] = None
 
     def as_dict(self) -> dict:
-        return asdict(self)
+        """The four recorded fields (not the session)."""
+        return {k: v for k, v in asdict(self).items() if k in FIELDS}
 
 
 _current: contextvars.ContextVar[Optional[Identity]] = contextvars.ContextVar(
@@ -72,24 +79,26 @@ def resolve(client: str, http: bool = False, token=None, headers: Optional[dict]
     if not http:   # stdio: the app that started this process
         return Identity(clean(client) or "unknown",
                         model or clean(os.environ.get("FLOWSTATE_MODEL")),
-                        stdio_machine(), "self_reported")
+                        stdio_machine(), "self_reported", PROCESS_SESSION)
     model = model or clean(headers.get("x-flowstate-model"))
     workspace = clean(headers.get("x-flowstate-workspace"))
+    session = clean(headers.get("mcp-session-id"))
     source = getattr(token, "identity_source", "") if token is not None else ""
     name = clean(getattr(token, "client_name", "")) or "unknown"
     if source == "app_key":
         return Identity(name, model, clean(getattr(token, "workspace", None)) or workspace,
-                        "app_key")
+                        "app_key", session)
     if source in ("oauth_client", "remote_token"):
-        return Identity(name, model, name, source)
+        return Identity(name, model, name, source, session)
     # the one shared LAN token: the app name is only the app's own say-so
     return Identity(clean(client) or "unknown", model, workspace,
-                    "shared_token" if token is not None else "self_reported")
+                    "shared_token" if token is not None else "self_reported", session)
 
 
 def local(app: str) -> Identity:
     """A caller on this computer outside a tool call (command line, review page)."""
-    return Identity(clean(app) or "unknown", None, stdio_machine(), "self_reported")
+    return Identity(clean(app) or "unknown", None, stdio_machine(), "self_reported",
+                    PROCESS_SESSION)
 
 
 def current() -> Optional[Identity]:

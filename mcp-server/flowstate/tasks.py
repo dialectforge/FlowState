@@ -10,7 +10,7 @@ Priorities are shown with the new names (critical / urgent / normal / low; see p
 from pathlib import Path
 from typing import Optional
 
-from . import links, priority
+from . import claims, links, priority
 
 OPEN = ("pending", "in_progress", "blocked")
 _OPEN_PROBLEM = "(status IS NULL OR status NOT IN ('solved', 'wont_fix', 'closed'))"
@@ -191,9 +191,14 @@ def what_next(db_path: Path, pid: int, limit: int = 5) -> dict:
                                   i.get("due") or "9999", i["id"]))
         for i in ready + blocked:
             i.pop("_rank", None)
-        return {"project": links.project_name(conn, pid), "next": ready[:max(1, int(limit or 5))],
-                "ready_total": len(ready), "blocked": blocked[:10], "blocked_total": len(blocked),
-                "note": "Ready = open, nothing open blocking it, no open subtasks."}
+        ready, others = claims.split_next(conn, ready, blocked)
+        out = {"project": links.project_name(conn, pid), "next": ready[:max(1, int(limit or 5))],
+               "ready_total": len(ready), "blocked": blocked[:10], "blocked_total": len(blocked),
+               "note": "Ready = open, nothing open blocking it, no open subtasks."}
+        if others:   # never hidden: listed last
+            out["note"] += " Claim one before you start (manage_todos action=claim)."
+            out["claimed_by_others"] = others
+        return out
     finally:
         conn.close()
 

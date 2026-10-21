@@ -3,7 +3,8 @@ migration 012), newest first, with the app, model, machine and identity source o
 
 Sources: edit history (edits and undos), the review queue (queued items, approvals,
 rejections), links (added / removed), handoff notes (left / picked up), hard rules (added /
-removed), review-mode changes, and records created by a write (activity log). Rows written
+removed), review-mode changes, records created by a write (activity log), and todo claims
+(claim, renew, release, handoff, override, cleared; migration 013). Rows written
 before migration 012 show the app name the older columns kept and "not recorded" for the
 rest.
 
@@ -118,6 +119,11 @@ def _sources(t: dict) -> list[str]:
                       "'created ' || record_type || ' #' || record_id || ' (' || tool "
                       "|| COALESCE('/' || action, '') || ')'", "created", "NULL",
                       "FROM activity_log WHERE record_type IS NOT NULL AND ok = 1"))
+    if "todo_claim_events" in t:
+        c = t["todo_claim_events"]
+        q.append(f"SELECT at, {_id_cols(c)}, project_id, 'todo' AS record_type, todo_id AS "
+                 f"record_id, summary AS what, 'todo_' || event AS kind, id AS ref, NULL AS "
+                 f"extra FROM todo_claim_events")
     return q
 
 

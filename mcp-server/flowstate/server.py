@@ -25,6 +25,7 @@ from mcp.types import Tool, TextContent
 from . import tools
 from . import agent_guide as guide
 from . import activity
+from . import claims
 from . import cleanup
 from . import deletes
 from . import history
@@ -45,7 +46,7 @@ from .guard import GuardError, WRITES, check_write, explicit_project, is_write, 
 log = logging.getLogger("flowstate")
 
 # Create server instance; instructions reach every client at initialize.
-server = Server("flowstate", version="2.2.0", instructions=guide.INSTRUCTIONS)
+server = Server("flowstate", version="2.3.0", instructions=guide.INSTRUCTIONS)
 
 
 from .tooldefs import ALL_TOOLS  # noqa: E402 - the public tools (surface.py maps their calls)
@@ -372,12 +373,15 @@ def handle_call(name: str, args: dict, client: str = "unknown", meta: Optional[d
     elif name == "import_memory":
         result = _import_memory(pid, args, client)
     elif name == "todo" and args.get("action") in ("next", "block", "unblock"):
-        result = _todo_extra(pid, args, client)
+        result = _claim_after(pid, args, _todo_extra(pid, args, client), client)
+    elif name == "todo" and args.get("action") in ("claim", "renew", "release", "handoff"):
+        result = _todo_claim(pid, args, client)
     elif name == "todo" and args.get("action") == "list" and pid is not None:
         try:
             result = tasks.list_todos(pid, args.get("status"), args.get("priority"),
                                       args.get("min_priority"), args.get("sort"),
                                       bool(args.get("compact")))
+            _safe_call(claims.annotate, db_path, result, client)
         except tasks.TaskError as e:
             result = e.payload
     elif name in extras.TOOLS:
@@ -402,6 +406,8 @@ def handle_call(name: str, args: dict, client: str = "unknown", meta: Optional[d
         ok = not (isinstance(result, dict) and "error" in result) and result is not None
         if edit is not None and ok:
             _safe_call(edit.finish, client)
+        if name == "todo" and args.get("action") == "update" and ok:
+            result = _claim_after(pid, args, result, client)
         created = _CREATES.get((name, args.get("action"))) or _CREATES.get((name, None))
         if created and ok and isinstance(result, dict) and isinstance(result.get("id"), int):
             meta["record"] = (created, result["id"])
@@ -772,6 +778,33 @@ def _todo_extra(pid: Optional[int], args: dict, client: str) -> Any:
                 "note": "Nothing was blocking it." if not ids else "Blockers removed."}
     except links.LinkError as e:
         return e.payload
+
+
+def _todo_claim(pid: int, args: dict, client: str) -> Any:
+    """claim / renew / release / handoff (claims.py); a refusal names the holder."""
+    act, tid, db = args["action"], args.get("todo_id"), backend.db_path
+    try:
+        if act == "handoff":
+            return claims.handoff(db, pid, tid, args.get("where_i_was"), args.get("next_step"),
+                                  client)
+        if act == "release":
+            return claims.release(db, pid, tid, client)
+        return (claims.claim if act == "claim" else claims.renew)(db, pid, tid,
+                                                                  args.get("minutes"), client)
+    except links.LinkError as e:
+        raise GuardError(e.payload)
+
+
+def _claim_after(pid: Optional[int], args: dict, result: Any, client: str) -> Any:
+    """No hard lock: a change to a todo another agent claimed is saved with a warning (and an
+    override event); done / cancelled clears the claim."""
+    if pid is None or args.get("todo_id") is None or not isinstance(result, dict) \
+            or "error" in result:
+        return result
+    act = args.get("action")
+    warn = _safe_call(claims.after_update, backend.db_path, pid, int(args["todo_id"]), act,
+                      args.get("status") if act == "update" else None, client)
+    return {**result, "claim_warning": warn} if warn else result
 
 
 _SCAN_PER_ITEM = {"import_memory": ("text",)}

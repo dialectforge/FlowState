@@ -16,10 +16,11 @@ INSTRUCTIONS = """FlowState is the user's project memory (todos, changes, decisi
 
 START_HERE_DESCRIPTION = (
     "CALL THIS FIRST in every conversation about a project. Returns the brief as text: hard "
-    "rules, a handoff note if any, review mode, open todos and problems, recent changes, "
-    "decisions and learnings, facts to re-check, linked projects. Without project it lists "
-    "the projects instead. size=deep gives the full working context. Side effects: opens or "
-    "reuses the automatic session, notes when you looked, runs the user's opt-in git capture."
+    "rules, a handoff note if any, review mode, open todos (and claims) and "
+    "problems, recent changes, decisions and learnings, facts to re-check, linked projects. "
+    "Without project it lists the projects instead. size=deep gives the full working context. "
+    "Side effects: opens or reuses the automatic session, notes when you looked, runs the "
+    "user's opt-in git capture."
 )
 
 LOG_WORK_DESCRIPTION = (
@@ -41,11 +42,10 @@ SEARCH_DESCRIPTION = (
 )
 
 TODOS_DESCRIPTION = (
-    "A project's existing todos. list: filter and sort. next: top unblocked todos. "
-    "update: status (done; cancelled to drop one), priority, title, description. "
-    "block / unblock: waits on todos or a problem. add: only for a subtask, blockers or a due "
-    "date; a plain new todo is log_work kind=todo. Reads: list, next. update and unblock "
-    "change data (manage_history undo restores updates). Returns todo rows."
+    "Todos. list; next: top unblocked (others' claims last). update: status (done/cancelled), "
+    "priority, title, description. block / unblock: waits on todos or a problem. add: "
+    "subtask, blocker or due date only (else log_work). claim before you start (fails if "
+    "someone has it); renew; release or handoff (with a note). Returns rows."
 )
 
 PROBLEMS_DESCRIPTION = (

@@ -77,27 +77,30 @@ SEARCH = _tool("search", guide.SEARCH_DESCRIPTION, {
     "limit": _p("Max results: default 10, max 50 (answer=true: 5, max 10).", "integer"),
 })
 
-_TODO_ACTIONS = ("list", "next", "update", "block", "unblock", "add")
+_TODO_ACTIONS = ("list", "next", "update", "block", "unblock", "add", "claim", "renew", "release",
+                 "handoff")
 MANAGE_TODOS = _tool("manage_todos", guide.TODOS_DESCRIPTION, {
     "action": _action(_TODO_ACTIONS),
     "project": PROJECT,
-    "todo_id": _p("update / block / unblock: the todo id (#id in the brief).", "integer"),
-    "status": _p("update: the new status. list: only this one.",
+    "todo_id": _p("#id in the brief.", "integer"),
+    "status": _p("update: new. list: filter.",
                  enum=["pending", "in_progress", "blocked", "done", "cancelled"]),
-    "priority": {**_PRIORITY, "description": "add / update: the priority. list: only this one."},
-    "title": _p("add: the title (required). update: a new title."),
-    "description": _p("add / update: longer detail."),
-    "min_priority": {**_PRIORITY, "description": "list: this priority or more urgent."},
-    "sort": _p("list: sort order. Default priority.", enum=["priority", "due", "newest"]),
-    "limit": _p("next: how many todos. Default 5.", "integer"),
+    "priority": {**_PRIORITY, "description": "add / update. list: filter."},
+    "title": _p("add (required) / update."),
+    "description": _p("add / update."),
+    "min_priority": {**_PRIORITY, "description": "list: this or more urgent."},
+    "sort": _p("list: default priority.", enum=["priority", "due", "newest"]),
+    "limit": _p("next: how many (default 5).", "integer"),
     "compact": _p("list: shorter rows.", "boolean"),
-    "parent_todo_id": _p("add: parent todo id (makes it a subtask).", "integer"),
+    "parent_todo_id": _p("add: parent todo id.", "integer"),
     "blocked_by": {"type": "array", "items": {"type": "integer"},
-                   "description": "add / block / unblock: todo ids it waits on. unblock without "
-                                  "blockers clears all."},
-    "blocked_by_problem": _p("add / block / unblock: a problem id it waits on.", "integer"),
+                   "description": "Todo ids it waits on (unblock: omit = all)."},
+    "blocked_by_problem": _p("Problem id it waits on.", "integer"),
     "due_date": _p("add: ISO due date."),
-    "component_id": _p("add: its component id.", "integer"),
+    "component_id": _p("add: component id.", "integer"),
+    "minutes": _p("claim / renew: 1-120, default 15.", "integer"),
+    "where_i_was": _p("handoff: your progress."),
+    "next_step": _p("handoff: the next step."),
     "model": MODEL,
 }, ["action", "project"])
 

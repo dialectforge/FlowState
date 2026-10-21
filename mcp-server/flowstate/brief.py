@@ -130,7 +130,7 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
     and decisions, key learnings. Sections are filled within budgets; the result never
     exceeds the size's cap, except that the hard rules are never cut: if they alone would not
     fit, the cap grows just enough to show them (they are bounded at 2,000 characters)."""
-    from . import handoffs, links, priority, provenance, review_mode, rules
+    from . import claims, handoffs, links, priority, provenance, review_mode, rules
     size = size if size in SIZES else "standard"
     prof = SIZES[size]
     cap = cap or prof["cap"]
@@ -146,6 +146,10 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
         todos = q(f"""SELECT id, title, priority, status FROM todos WHERE project_id=? AND {_OPEN_TODO}
                       ORDER BY {_PRIORITY}, CASE status WHEN 'in_progress' THEN 0 ELSE 1 END, id DESC
                       LIMIT ?""", pid, n_todo)
+        claimed = claims.active(conn, [t["id"] for t in todos])
+        if claimed:
+            mine, now = claims.me()["holder"], claims.utcnow()
+            claimed = {k: claims.describe(r, mine, now) for k, r in claimed.items()}
         prob_total = q(f"""SELECT COUNT(*) n FROM problems p JOIN components c ON c.id=p.component_id
                            WHERE c.project_id=? AND {_OPEN_PROBLEM.replace('status', 'p.status')}""",
                        pid)[0]["n"]
@@ -250,6 +254,7 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
     section("Open todos", todos, todo_total,
             lambda t: f"- [{priority.label(t['priority'])}] #{t['id']} {_one_line(t['title'], 90)}"
                       + (f" ({t['status']})" if t["status"] in ("in_progress", "blocked") else "")
+                      + (f" ({claimed[t['id']]})" if t["id"] in claimed else "")
                       + tag("todo", t["id"]),
             prof["todos"][1])
     section("Open problems", problems, prob_total,

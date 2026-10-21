@@ -21,7 +21,7 @@
     "readOnlyHint": true,
     "title": "Project brief (start here)"
    },
-   "description": "CALL THIS FIRST in every conversation about a project. Returns the brief as text: hard rules, a handoff note if any, review mode, open todos and problems, recent changes, decisions and learnings, facts to re-check, linked projects. Without project it lists the projects instead. size=deep gives the full working context. Side effects: opens or reuses the automatic session, notes when you looked, runs the user's opt-in git capture.",
+   "description": "CALL THIS FIRST in every conversation about a project. Returns the brief as text: hard rules, a handoff note if any, review mode, open todos (and claims) and problems, recent changes, decisions and learnings, facts to re-check, linked projects. Without project it lists the projects instead. size=deep gives the full working context. Side effects: opens or reuses the automatic session, notes when you looked, runs the user's opt-in git capture.",
    "inputSchema": {
     "properties": {
      "folder": {
@@ -219,7 +219,7 @@
     "readOnlyHint": false,
     "title": "Todos"
    },
-   "description": "A project's existing todos. list: filter and sort. next: top unblocked todos. update: status (done; cancelled to drop one), priority, title, description. block / unblock: waits on todos or a problem. add: only for a subtask, blockers or a due date; a plain new todo is log_work kind=todo. Reads: list, next. update and unblock change data (manage_history undo restores updates). Returns todo rows.",
+   "description": "Todos. list; next: top unblocked (others' claims last). update: status (done/cancelled), priority, title, description. block / unblock: waits on todos or a problem. add: subtask, blocker or due date only (else log_work). claim before you start (fails if someone has it); renew; release or handoff (with a note). Returns rows.",
    "inputSchema": {
     "properties": {
      "action": {
@@ -230,19 +230,23 @@
        "update",
        "block",
        "unblock",
-       "add"
+       "add",
+       "claim",
+       "renew",
+       "release",
+       "handoff"
       ],
       "type": "string"
      },
      "blocked_by": {
-      "description": "add / block / unblock: todo ids it waits on. unblock without blockers clears all.",
+      "description": "Todo ids it waits on (unblock: omit = all).",
       "items": {
        "type": "integer"
       },
       "type": "array"
      },
      "blocked_by_problem": {
-      "description": "add / block / unblock: a problem id it waits on.",
+      "description": "Problem id it waits on.",
       "type": "integer"
      },
      "compact": {
@@ -250,11 +254,11 @@
       "type": "boolean"
      },
      "component_id": {
-      "description": "add: its component id.",
+      "description": "add: component id.",
       "type": "integer"
      },
      "description": {
-      "description": "add / update: longer detail.",
+      "description": "add / update.",
       "type": "string"
      },
      "due_date": {
@@ -262,11 +266,11 @@
       "type": "string"
      },
      "limit": {
-      "description": "next: how many todos. Default 5.",
+      "description": "next: how many (default 5).",
       "type": "integer"
      },
      "min_priority": {
-      "description": "list: this priority or more urgent.",
+      "description": "list: this or more urgent.",
       "enum": [
        "critical",
        "urgent",
@@ -277,16 +281,24 @@
       ],
       "type": "string"
      },
+     "minutes": {
+      "description": "claim / renew: 1-120, default 15.",
+      "type": "integer"
+     },
      "model": {
       "description": "Your model name if you know it. Never guess.",
       "type": "string"
      },
+     "next_step": {
+      "description": "handoff: the next step.",
+      "type": "string"
+     },
      "parent_todo_id": {
-      "description": "add: parent todo id (makes it a subtask).",
+      "description": "add: parent todo id.",
       "type": "integer"
      },
      "priority": {
-      "description": "add / update: the priority. list: only this one.",
+      "description": "add / update. list: filter.",
       "enum": [
        "critical",
        "urgent",
@@ -305,7 +317,7 @@
       ]
      },
      "sort": {
-      "description": "list: sort order. Default priority.",
+      "description": "list: default priority.",
       "enum": [
        "priority",
        "due",
@@ -314,7 +326,7 @@
       "type": "string"
      },
      "status": {
-      "description": "update: the new status. list: only this one.",
+      "description": "update: new. list: filter.",
       "enum": [
        "pending",
        "in_progress",
@@ -325,12 +337,16 @@
       "type": "string"
      },
      "title": {
-      "description": "add: the title (required). update: a new title.",
+      "description": "add (required) / update.",
       "type": "string"
      },
      "todo_id": {
-      "description": "update / block / unblock: the todo id (#id in the brief).",
+      "description": "#id in the brief.",
       "type": "integer"
+     },
+     "where_i_was": {
+      "description": "handoff: your progress.",
+      "type": "string"
      }
     },
     "required": [
@@ -343,7 +359,11 @@
     "flowstate/actions": {
      "additive": [
       "add",
-      "block"
+      "block",
+      "claim",
+      "renew",
+      "release",
+      "handoff"
      ],
      "destructive": [
       "update",

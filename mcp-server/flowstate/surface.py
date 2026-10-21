@@ -16,7 +16,8 @@ from typing import Optional
 
 # public tool -> {public action: (internal tool, internal action or None)}
 ROUTES: dict[str, dict[str, tuple[str, Optional[str]]]] = {
-    "manage_todos": {a: ("todo", a) for a in ("list", "next", "add", "update", "block", "unblock")},
+    "manage_todos": {a: ("todo", a) for a in ("list", "next", "add", "update", "block", "unblock",
+                                                       "claim", "renew", "release", "handoff")},
     "manage_problems": {"list": ("problem", "list"), "tree": ("problem", "get_tree"),
                         "solve": ("problem", "solve"), "add_attempt": ("attempt", "log"),
                         "end_attempt": ("attempt", "outcome")},

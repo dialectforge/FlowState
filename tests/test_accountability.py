@@ -107,7 +107,7 @@ def test_migration_012_is_additive_and_keeps_every_row(pre_012_db, tmp_path):
     other = {t: _q(db, f'SELECT * FROM "{t}" ORDER BY rowid')
              for t in ("projects", "components", "todos", "conversations", "learnings")}
     res = M.migrate(db, tmp_path / "bk")
-    assert res["applied"] == ["012_accountability"] and res["backup"]
+    assert res["applied"][:1] == ["012_accountability"] and res["backup"]
     assert _snapshot(db) == before                       # counts and old values unchanged
     for t, new in AFFECTED.items():
         assert set(new) <= set(_cols(db, t))
