@@ -35,6 +35,7 @@ from . import legacy_args
 from . import links
 from . import review
 from . import review_mode
+from . import safety
 from . import tasks
 from . import extras
 from . import priority
@@ -70,6 +71,7 @@ class _Backend:
     error: Optional[str] = None
     tracker: Optional[AutoSessions] = None
     migration_error: Optional[str] = None
+    health: Optional[str] = None   # safety.py: a line for the brief only if something is wrong
 
 
 backend = _Backend()
@@ -88,6 +90,7 @@ def init_backend(db_path: Optional[Path] = None) -> None:
         finally:
             conn.close()
         _migrate(path)
+        backend.health = _safe_call(safety.health_line, path, backend.migration_error)
         ensure_schema(path)  # Phase A table, in case the migrations could not run
         tools.set_db(db)
         backend.tracker = AutoSessions(path)
@@ -488,7 +491,7 @@ def _start_here(args: dict, client: str, meta: Optional[dict] = None) -> str:
         links.mark_looked(db_path, project["id"], client)
     except Exception as e:  # noqa: BLE001
         log.warning("could not record start_here time: %s", e)
-    warning = _relay_warning()
+    warning = "\n".join(w for w in (backend.health, _relay_warning()) if w)
     return f"{warning}\n\n{text}" if warning else text
 
 
@@ -1034,11 +1037,13 @@ def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
             return deletes.TYPES[done["deleted"]["record_type"]][0], done["deleted"]["id"]
 
         edits = {k: args.get(k) for k in ("summary", "details", "priority", "category", "component")}
+        if safety.needs_copy(item):   # a verified copy first, or no change at all
+            done["safety_copy"] = safety.copy_before(backend.db_path).name
         out = review.approve(backend.db_path, int(args["item_id"]), user_request, client, apply, edits,
                              others={"cleanup": apply_cleanup, "edit": apply_edit,
                                      "delete": apply_delete, "conflict": apply_conflict})
         return {**out, **done}
-    except (review.ReviewError, deletes.DeleteError) as e:
+    except (review.ReviewError, deletes.DeleteError, safety.SafetyError) as e:
         return e.payload
 
 
