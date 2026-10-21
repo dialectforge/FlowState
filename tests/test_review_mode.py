@@ -78,8 +78,8 @@ def test_everything_holds_new_records_including_older_tools(backend, seeded_db):
     assert not upd.isError and "queued_for_review" not in _j(upd)
     # The user approves one: it becomes a real todo with its priority.
     item = old["queued_for_review"]
-    call(backend, "review_approve", {"project": "Alpha", "item_id": item,
-                                     "user_request": "User: approve the old-style todo"})
+    call(backend, "review_approve", {"project": "Alpha", "item_id": item,   # relayed by another app
+                                     "user_request": "User: approve the old-style todo"}, "Claude Code")
     assert _q(seeded_db, "SELECT priority FROM todos WHERE title = 'Old-style todo'") == [("high",)]
 
 

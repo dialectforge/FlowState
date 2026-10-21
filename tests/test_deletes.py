@@ -28,6 +28,11 @@ def run(coro):
 
 
 def call(S, name, args, client="Claude Desktop"):
+    # The user's go-ahead comes in through another app: with review on, an app can't
+    # decide what it queued itself (test_user_approval.py covers that).
+    if name == "manage_review" and args.get("action") in ("approve", "reject") \
+            and client == "Claude Desktop":
+        client = "Claude Code"
     async def go():
         async with create_connected_server_and_client_session(
                 S.server, client_info=types.Implementation(name=client, version="1")) as c:

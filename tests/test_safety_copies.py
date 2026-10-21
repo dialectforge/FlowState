@@ -84,6 +84,11 @@ def _bk():
 
 
 def _call(S, name, args, app="Claude Desktop"):
+    # The user's go-ahead comes in through another app: with review on, an app can't
+    # decide what it queued itself (test_user_approval.py covers that).
+    if app == "Claude Desktop" and (name in ("review_approve", "review_reject") or (
+            name == "manage_review" and args.get("action") in ("approve", "reject"))):
+        app = "Claude Code"
     async def go():
         async with create_connected_server_and_client_session(
                 S.server, client_info=types.Implementation(name=app, version="1")) as c:

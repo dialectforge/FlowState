@@ -28,9 +28,10 @@ from pathlib import Path
 from . import paths
 
 from . import cli_more
+from . import cli_review
 
 COMMANDS = ("migrate", "backup", "restore", "offsite", "schedule-backups", "token",
-            "scan-secrets", "remote", "keys", "relay") + cli_more.COMMANDS
+            "scan-secrets", "remote", "keys", "relay") + cli_more.COMMANDS + cli_review.COMMANDS
 
 
 def say(msg: str) -> None:
@@ -393,6 +394,7 @@ def build_parser() -> argparse.ArgumentParser:
     from .relay import cli as relay_cli
     relay_cli.register(sub)
     cli_more.register(sub)
+    cli_review.register(sub)
     return ap
 
 

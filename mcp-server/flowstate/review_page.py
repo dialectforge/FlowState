@@ -357,8 +357,14 @@ def serve(db_path: Path, port: int = DEFAULT_PORT, open_browser: bool = True,
     url = page.launch_url()
     print(f"FlowState review page on http://{HOST}:{port}/ (this computer only). Ctrl+C stops it.",
           flush=True)
-    if print_url:
-        print(f"One-time link: {url}", flush=True)
+    if print_url:   # on the user's terminal only, so an agent reading our output can't use it
+        from .cli_review import open_terminal
+        tty = open_terminal()
+        if tty is None:
+            raise SystemExit("--print-url shows the one-time link on your terminal, and there is "
+                             "none here. Run it in a terminal window, or leave it out to open the browser.")
+        tty.tell(f"One-time link: {url}")
+        tty.close()
     if open_browser:
         import threading
         import webbrowser

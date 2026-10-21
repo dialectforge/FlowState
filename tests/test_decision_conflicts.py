@@ -72,6 +72,11 @@ def _no_real_model():
 
 
 def call(S, name, args, app="Cursor"):
+    # The user's go-ahead comes in through another app: with review on, an app can't
+    # decide what it queued itself (test_user_approval.py covers that).
+    if name == "manage_review" and args.get("action") in ("approve", "reject") \
+            and app == "Cursor":
+        app = "Claude Code"
     async def go():
         async with create_connected_server_and_client_session(
                 S.server, client_info=types.Implementation(name=app, version="1")) as c:

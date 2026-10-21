@@ -30,6 +30,11 @@ def _q(db, sql, *a):
 
 
 def call(S, name, args, client="Claude Desktop"):
+    # The user's go-ahead comes in through another app: with review on, an app can't
+    # decide what it queued itself (test_user_approval.py covers that).
+    if client == "Claude Desktop" and (name in ("review_approve", "review_reject") or (
+            name == "manage_review" and args.get("action") in ("approve", "reject"))):
+        client = "Claude Code"
     async def go():
         async with create_connected_server_and_client_session(
                 S.server, client_info=types.Implementation(name=client, version="1")) as c:

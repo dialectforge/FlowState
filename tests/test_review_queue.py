@@ -74,6 +74,11 @@ def test_suggested_record_waits_then_edit_and_approve(backend, seeded_db):
         item = _j(s)["queued_for_review"]
         before = _q(seeded_db, "SELECT COUNT(*) FROM learnings WHERE insight = 'maybe a lesson'")
         listed = await c.call_tool("review_list", {"project": "Alpha"})
+        return item, before, listed
+
+    item, before, listed = run(_with(backend, go))
+
+    async def decide(c):   # the user's go-ahead, relayed by another app (not the one that queued it)
         no_words = await c.call_tool("review_approve", {"project": "Alpha", "item_id": item,
                                                         "user_request": "  "})
         ok = await c.call_tool("review_approve", {"project": "Alpha", "item_id": item,
@@ -82,7 +87,7 @@ def test_suggested_record_waits_then_edit_and_approve(backend, seeded_db):
         again = await c.call_tool("review_approve", {"project": "Alpha", "item_id": item,
                                                      "user_request": ASK})
         return item, before, listed, no_words, ok, again
-    item, before, listed, no_words, ok, again = run(_with(backend, go))
+    item, before, listed, no_words, ok, again = run(_with(backend, decide, "Claude Code"))
     assert before[0][0] == 0                                   # not saved as a record yet
     assert [i["id"] for i in _j(listed)["items"]] == [item]
     assert no_words.isError and _j(no_words)["error"] == "user_request_required"
@@ -93,7 +98,7 @@ def test_suggested_record_waits_then_edit_and_approve(backend, seeded_db):
         == "Edited lesson text"
     assert _j(again)["error"] == "already_decided"
     st = _q(seeded_db, "SELECT status, user_request, decided_by FROM review_items WHERE id=?", item)
-    assert st[0] == ("approved", ASK, "Claude Desktop")
+    assert st[0] == ("approved", ASK, "Claude Code")
 
 
 def test_reject_keeps_item_with_reason(backend, seeded_db):
