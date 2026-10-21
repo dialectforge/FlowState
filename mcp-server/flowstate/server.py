@@ -31,6 +31,7 @@ from . import conflicts
 from . import deletes
 from . import history
 from . import identity
+from . import legacy_args
 from . import links
 from . import review
 from . import review_mode
@@ -38,6 +39,7 @@ from . import tasks
 from . import extras
 from . import priority
 from . import provenance
+from . import receipts
 from . import secrets_scan
 from .autosession import AutoSessions, ensure_schema
 from .brief import build_brief, candidates_text, resolve_project
@@ -186,6 +188,9 @@ def _ok(result: Any) -> types.CallToolResult:
     return types.CallToolResult(content=[TextContent(type="text", text=text)], isError=False)
 
 
+TIMED_OUT_WRITE = ("This write is probably still saving: the next FlowState answer will say "
+                   "whether it landed. Don't repeat it; carry on with the task.")
+
 UNAVAILABLE = ("FlowState's database is unavailable right now ({}). Tell the user once and "
                "carry on with the task without FlowState.")
 
@@ -205,18 +210,18 @@ async def call_tool(name: str, arguments: dict) -> types.CallToolResult:
     """Every call: public or older name -> internal operation (surface.py), then guard, run
     in a worker thread with a timeout, track the session. An older name gets one extra text
     block naming the new tool; the first block is unchanged."""
-    note = surface.hint(name, arguments or {})
+    note, shown = surface.hint(name, arguments or {}), name
     try:
         name, arguments = surface.translate(name, arguments or {})
     except surface.SurfaceError as e:
         return _error(e.code, e.message)
-    out = await _call_internal(name, arguments)
+    out = await _call_internal(name, arguments, shown)
     if note:
         out.content.append(TextContent(type="text", text=note))
     return out
 
 
-async def _call_internal(name: str, arguments: dict) -> types.CallToolResult:
+async def _call_internal(name: str, arguments: dict, shown: str = "") -> types.CallToolResult:
     if backend.error:
         return _error("flowstate_unavailable", UNAVAILABLE.format(backend.error))
     from .remote_auth import refusal
@@ -234,6 +239,13 @@ async def _call_internal(name: str, arguments: dict) -> types.CallToolResult:
     out = None
     id_token = identity.set_current(ident)   # read by every recording path (identity.py)
     try:
+        session_obj = server.request_context.session
+    except LookupError:
+        session_obj = None
+    conn_key = receipts.connection_key(ident, session_obj)
+    change = receipts.new_change_id() if write else None
+    call_token = identity.set_call(conn_key, change)   # receipts.py: one change id per write
+    try:
         if write and await asyncio.to_thread(_safe_bool, activity.is_paused, backend.db_path, app):
             out = _error("paused_by_user", PAUSED.format(app=app))
             return out
@@ -242,9 +254,9 @@ async def _call_internal(name: str, arguments: dict) -> types.CallToolResult:
                 asyncio.to_thread(handle_call, name, dict(arguments or {}), client, meta),
                 timeout=call_timeout())
         except asyncio.TimeoutError:
-            out = _error("flowstate_timeout",
-                         f"FlowState took longer than {call_timeout():g}s and was skipped. Carry on "
-                         f"with the task; if this was a write it may or may not have been saved.")
+            receipts.timed_out(conn_key, change, shown or name)
+            out = _error("flowstate_timeout", f"FlowState took longer than {call_timeout():g}s. "
+                         + (TIMED_OUT_WRITE if write else "Carry on with the task."))
             return out
         except GuardError as g:
             out = _error(g.payload["error"], g.payload["message"],
@@ -256,6 +268,9 @@ async def _call_internal(name: str, arguments: dict) -> types.CallToolResult:
         out = _ok(result)
         return out
     finally:
+        news = await asyncio.to_thread(_safe_call, receipts.late_news, backend.db_path, conn_key)
+        if out is not None and news:   # how earlier timed-out writes of this connection ended
+            out.content.extend(TextContent(type="text", text=line) for line in news)
         err = None
         if out is not None and out.isError:
             try:
@@ -269,6 +284,7 @@ async def _call_internal(name: str, arguments: dict) -> types.CallToolResult:
                 out is not None and not out.isError, err, int((time.monotonic() - t0) * 1000),
                 who, meta.get("record"))
         finally:
+            identity.reset_call(call_token)
             identity.reset(id_token)
 
 
@@ -299,11 +315,30 @@ def _label(name: str, args: dict) -> str:
 
 def handle_call(name: str, args: dict, client: str = "unknown", meta: Optional[dict] = None) -> Any:
     """Synchronous core used by both transports (runs in a worker thread). `meta` receives
-    the resolved project id (for the activity log)."""
+    the resolved project id (for the activity log). A write (it has a change id) gets its
+    receipt, or the receipt of the same write saved moments ago (receipts.py)."""
+    meta = meta if meta is not None else {}
+    change = identity.change_id()
+    if not change:
+        return _handle(name, args, client, meta)
+    pending, reply = _safe_call(receipts.begin, backend.db_path, change, identity.call_key(),
+                                name, dict(args), call_timeout() - 1) or (None, None)
+    if reply is not None:
+        return reply
+    result = receipt = None
+    try:
+        result = _handle(name, args, client, meta)
+    finally:
+        if pending is not None:
+            receipt = _safe_call(receipts.finish, backend.db_path, pending, result,
+                                 meta.get("project_id"), meta.get("session_id"),
+                                 identity.current(), meta.get("record"))
+    return receipts.attach(result, receipt)
+
+
+def _handle(name: str, args: dict, client: str, meta: dict) -> Any:
     db_path = backend.db_path
     tracker = backend.tracker
-    meta = meta if meta is not None else {}
-
     if name == "start_here":
         return _start_here(args, client, meta)
 
@@ -317,7 +352,7 @@ def handle_call(name: str, args: dict, client: str = "unknown", meta: Optional[d
     if name == "review_list":
         return _review_list(args)
     try:  # priority names: critical/urgent/normal/low (old high/medium too) -> stored values
-        _priority_args(name, args)
+        legacy_args.priority_args(name, args)
     except priority.PriorityError as e:
         return priority.error_payload(e)
 
@@ -341,7 +376,7 @@ def handle_call(name: str, args: dict, client: str = "unknown", meta: Optional[d
 
     meta["project_id"] = pid
     # (no session for a deleted project being restored: its row isn't back yet)
-    sid = _safe_track(tracker.touch, client, pid, None, *identity.conn()) \
+    sid = meta["session_id"] = _safe_track(tracker.touch, client, pid, None, *identity.conn()) \
         if (pid and tracker and gone is None) else None
 
     # Session tool: adopt / end the automatic session instead of duplicating it.
@@ -387,7 +422,7 @@ def handle_call(name: str, args: dict, client: str = "unknown", meta: Optional[d
             result = e.payload
     elif name in extras.TOOLS:
         result = extras.handle(name, pid, args, client, db_path)
-    elif (legacy := _legacy_record(name, args, pid)) is not None and \
+    elif (legacy := legacy_args.legacy_record(db_path, name, args, pid)) is not None and \
             review_mode.should_queue(db_path, pid, legacy["kind"]):
         result = _suggest(pid, legacy, client)
         if isinstance(result, dict) and "note" in result:
@@ -859,63 +894,6 @@ def _cleanup_suggest(pid: int, args: dict, client: str) -> Any:
     return {**q, "found": len(found), "project_id": pid,
             "examples": [s["summary"] for s in found[:8]],
             "note": "Suggestions only; they wait in the review queue for the user."}
-
-
-def _component_name(cid) -> Optional[str]:
-    if cid is None:
-        return None
-    conn = links.connect(backend.db_path)
-    try:
-        row = conn.execute("SELECT name FROM components WHERE id = ?", (cid,)).fetchone()
-        return row[0] if row else None
-    finally:
-        conn.close()
-
-
-def _priority_args(name: str, args: dict) -> None:
-    """Accept both priority vocabularies; the tools below see the stored (old) names."""
-    act = args.get("action")
-    keys = ()
-    if name == "todo" and act in ("add", "update", "list"):
-        keys = ("priority",)
-    elif name in ("log_work", "review_approve"):
-        keys = ("priority",)
-    elif name == "problem" and act == "log":
-        keys = ("severity",)
-    for k in keys:
-        if args.get(k) not in (None, ""):
-            args[k] = priority.store(args[k])
-    if name == "todo" and args.get("min_priority") not in (None, ""):
-        priority.store(args["min_priority"])   # validate; tasks.list_todos filters
-
-
-def _legacy_record(name: str, args: dict, pid: Optional[int]) -> Optional[dict]:
-    """The older create tools as log_work arguments, so the review mode can hold them."""
-    if pid is None:
-        return None
-    act = args.get("action")
-    if name not in ("todo", "log_learning", "log_change", "problem", "session"):
-        return None
-    if name == "todo" and act == "add" and args.get("title"):
-        d = {"kind": "todo", "summary": args["title"], "details": args.get("description"),
-             "priority": args.get("priority")}
-    elif name == "log_learning" and args.get("insight"):
-        d = {"kind": "learning", "summary": args["insight"], "details": args.get("context"),
-             "category": args.get("category")}
-    elif name == "log_change" and args.get("field_name"):
-        extra = "; ".join(f"{k}: {args[k]}" for k in ("reason", "old_value", "new_value")
-                          if args.get(k))
-        d = {"kind": "change", "summary": args["field_name"], "details": extra or None}
-    elif name == "problem" and act == "log" and args.get("title"):
-        d = {"kind": "problem", "summary": args["title"], "details": args.get("description"),
-             "priority": args.get("severity")}
-    elif name == "session" and act == "log_conversation" and args.get("key_decisions"):
-        d = {"kind": "decision", "summary": str(args["key_decisions"][0]),
-             "details": args.get("assistant_response_summary") or args.get("user_prompt_summary")}
-    else:
-        return None
-    d.update(project=pid, component=_component_name(args.get("component_id")))
-    return {k: v for k, v in d.items() if v not in (None, "")}
 
 
 # ============================================================

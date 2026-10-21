@@ -105,9 +105,33 @@ def current() -> Optional[Identity]:
     return _current.get()
 
 
+_call: contextvars.ContextVar[tuple] = contextvars.ContextVar("flowstate_call", default=(None, None))
+
+
+def set_call(conn_key: Optional[str], change_id: Optional[str]) -> contextvars.Token:
+    """The current tool call's connection key and, for a write, its change id (receipts.py;
+    the edit history uses the change id as its edit id)."""
+    return _call.set((conn_key, change_id))
+
+
+def reset_call(token: contextvars.Token) -> None:
+    _call.reset(token)
+
+
+def change_id() -> Optional[str]:
+    return _call.get()[1]
+
+
+def call_key() -> Optional[str]:
+    """The client connection of the current call (receipts: what counts as "the same
+    session" for a repeated write)."""
+    ident = current()
+    return _call.get()[0] or (ident.session if ident is not None else None)
+
+
 def conn() -> tuple[Optional[str], Optional[Identity]]:
-    """(connection key, identity) of the current call. Each connection (a stdio server
-    process, an HTTP MCP session) gets its own automatic session; None outside a tool call."""
+    """(session key, identity) of the current call. Each stdio server process and each HTTP
+    MCP session gets its own automatic session; None outside a tool call."""
     ident = current()
     return (ident.session if ident is not None else None), ident
 

@@ -27,7 +27,6 @@ without a foreign key (record_meta, memory_fts, link_alerts.record_id); ids are 
 
 import json
 import sqlite3
-import uuid
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Optional
@@ -325,7 +324,7 @@ def execute(db_path: Path, item: dict, client: str = "unknown",
         for (t, k) in gone:   # rows without a foreign key to it (links); the rest are gone
             conn.execute(f'DELETE FROM "{t}" WHERE "{history.row_key(conn, t)}" = ?', (k,))
         _verify(conn, gone, changed, before)
-        edit_id = uuid.uuid4().hex[:16]
+        edit_id = history.new_edit_id()
         at = history._now()
         for (t, k), old in list(gone.items()) + list(changed.items()):
             new = history._row(conn, t, k)

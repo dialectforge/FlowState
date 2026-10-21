@@ -75,6 +75,12 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def new_edit_id() -> str:
+    """The current write's change id (receipts.py), so an answer's receipt and the edit
+    history name the same change; a fresh id outside a tool call."""
+    return identity.change_id() or uuid.uuid4().hex[:16]
+
+
 def connect(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path), timeout=5.0)
     conn.row_factory = sqlite3.Row
@@ -176,7 +182,7 @@ class Edit:
                     if self.before.get(k) != after.get(k)]
             if not keys:
                 return None
-            edit_id = uuid.uuid4().hex[:16]
+            edit_id = new_edit_id()
             now = _now()
             for table, rid in keys:
                 old, new = self.before.get((table, rid)), after.get((table, rid))
@@ -240,7 +246,7 @@ def record_created(db_path: Path, rtype: str, rid: int, tool: str = "create",
             rows += [("decision_conflicts", r["id"], {k: _val(r[k]) for k in r.keys()}) for r in
                      conn.execute("SELECT * FROM decision_conflicts WHERE new_id = ?", (int(rid),))]
         pid = _project_of(conn, table, row)
-        edit_id = edit_id or uuid.uuid4().hex[:16]
+        edit_id = edit_id or new_edit_id()
         now = _now()
         for t, k, new in rows:
             identity.insert(conn, "record_history", {
@@ -451,7 +457,7 @@ def undo(db_path: Path, project_id: int, record_type: str, record_id: int,
                 if g["id"] not in skipped and g["old_row"] is None \
                         and (g["table_name"], g["record_id"]) not in roots:
                     skipped[g["id"]] = ("kept_with_record", "kept with the record it belongs to")
-        undo_id, now = uuid.uuid4().hex[:16], _now()
+        undo_id, now = new_edit_id(), _now()
         while True:
             todo = [g for g in group if g["id"] not in skipped]
             if not todo:

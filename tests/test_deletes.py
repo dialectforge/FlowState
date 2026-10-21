@@ -19,7 +19,8 @@ ASK = "User: yes, delete it"
 # Tables that change on every call (session tracking, the review queue, the audit trail)
 # or are a rebuilt cache; everything else must come back exactly.
 _MOVING = {"sessions", "auto_sessions", "review_items", "record_history", "activity_log",
-           "meaning_index", "project_views", "schema_migrations"}
+           "meaning_index", "project_views", "schema_migrations",
+           "session_runs", "run_writes", "run_views"}   # 2.4.0 run ledger: grows with every call
 
 
 def run(coro):
