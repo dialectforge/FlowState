@@ -31,6 +31,7 @@ from . import conflicts
 from . import deletes
 from . import history
 from . import identity
+from . import ledger
 from . import legacy_args
 from . import links
 from . import review
@@ -274,6 +275,10 @@ async def _call_internal(name: str, arguments: dict, shown: str = "") -> types.C
         news = await asyncio.to_thread(_safe_call, receipts.late_news, backend.db_path, conn_key)
         if out is not None and news:   # how earlier timed-out writes of this connection ended
             out.content.extend(TextContent(type="text", text=line) for line in news)
+        if out is not None and not out.isError and not write:   # the run ledger (ledger.py)
+            await asyncio.to_thread(_safe_call, ledger.record_read, backend.db_path, name,
+                                    (arguments or {}).get("action"), meta, out.content[0].text,
+                                    conn_key, ident)
         err = None
         if out is not None and out.isError:
             try:
@@ -480,10 +485,13 @@ def _start_here(args: dict, client: str, meta: Optional[dict] = None) -> str:
     _capture_git(project["id"])
     sid = _safe_track(tracker.touch, client, project["id"], "read:start_here", *identity.conn()) \
         if tracker else None
+    if meta is not None:
+        meta.update(session_id=sid, shown=[])
     session = _safe_track(tracker.current, client, project["id"], identity.conn()[0]) \
         if (sid and tracker) else None
     try:
-        text = build_brief(db_path, project, session, size=args.get("size") or "standard")
+        text = build_brief(db_path, project, session, size=args.get("size") or "standard",
+                           shown=(meta or {}).get("shown"))
     except Exception as e:  # noqa: BLE001 - brief problems must not break the agent
         return (f"FlowState: project '{project['name']}' (#{project['id']}) found, but the brief "
                 f"could not be built ({type(e).__name__}). Carry on; use search if needed.")

@@ -125,11 +125,14 @@ _MORE = " ...(handoff list shows it all)"
 
 
 def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
-                cap: Optional[int] = None, size: str = "standard") -> str:
+                cap: Optional[int] = None, size: str = "standard",
+                shown: Optional[list] = None) -> str:
     """Plain-text brief: hard rules, handoff notes, open todos, open problems, recent changes
     and decisions, key learnings. Sections are filled within budgets; the result never
     exceeds the size's cap, except that the hard rules are never cut: if they alone would not
-    fit, the cap grows just enough to show them (they are bounded at 2,000 characters)."""
+    fit, the cap grows just enough to show them (they are bounded at 2,000 characters).
+    `shown` (a list) receives "type:id" of every record the brief shows (the run ledger)."""
+    shown = shown if shown is not None else []
     from . import claims, conflicts, handoffs, links, priority, provenance, review_mode, rules
     size = size if size in SIZES else "standard"
     prof = SIZES[size]
@@ -208,6 +211,7 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
     for line in rule_lines:            # always, in full (bounded when they are added)
         b.lines.append(line)
         b.used += len(line) + 1
+        _note(shown, "rule", _RULE_ID.match(line))
     if handoff_lines:
         # right after the rules; trimmed only so that some room is left for the rest, but
         # never squeezed out entirely
@@ -218,7 +222,8 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
                 if cut > 60:
                     b.add(line[:cut].rstrip() + _MORE)
                 break
-            b.add(line)
+            if b.add(line):
+                _note(shown, "handoff", _HANDOFF_ID.match(line))
             room -= len(line) + 1
     if project.get("description"):
         b.add(_one_line(project["description"], 200))
@@ -241,7 +246,7 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
     if stale_line:
         b.add(_one_line(stale_line, 300))
 
-    def section(title: str, items: list, total: int, fmt, share: int):
+    def section(title: str, items: list, total: int, fmt, share: int, kind: str):
         if not items:
             return
         stop = b.used + share
@@ -252,6 +257,7 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
             line = fmt(it)
             if b.used + len(line) + 1 > stop or not b.add(line):
                 break
+            shown.append(f"{kind}:{it['id']}")
 
     tag = lambda kind, rid: provenance.tag(meta[kind].get(rid))
     section("Open todos", todos, todo_total,
@@ -259,24 +265,24 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
                       + (f" ({t['status']})" if t["status"] in ("in_progress", "blocked") else "")
                       + (f" ({claimed[t['id']]})" if t["id"] in claimed else "")
                       + tag("todo", t["id"]),
-            prof["todos"][1])
+            prof["todos"][1], "todo")
     section("Open problems", problems, prob_total,
             lambda p: f"- [{p['severity'] or 'medium'}] #{p['id']} {_one_line(p['title'], 90)}",
-            prof["problems"][1])
+            prof["problems"][1], "problem")
     section("Recent changes", changes, len(changes),
             lambda c: f"- {(c['created_at'] or '')[:10]} {_one_line(c['comp'], 30)}: "
                       f"{_one_line(c['field_name'], 70)}"
                       + (f" - {_one_line(c['reason'] or c['new_value'], 90)}" if (c['reason'] or c['new_value']) else "")
                       + tag("change", c["id"]),
-            prof["changes"][1])
+            prof["changes"][1], "change")
     section("Recent decisions", decisions, len(decisions),
             lambda d: f"- {(d['created_at'] or '')[:10]} #{d['id']} {_one_line(_first_decision(d), 140)}"
                       + (f" (replaces #{replaces[d['id']]})" if d["id"] in replaces else "")
-                      + tag("decision", d["id"]), prof["decisions"][1])
+                      + tag("decision", d["id"]), prof["decisions"][1], "decision")
     section("Key learnings", learnings, len(learnings),
             lambda l: f"- [{l['category'] or 'other'}{', verified' if l['verified'] else ''}] "
                       f"{_one_line(l['insight'], 160)}" + tag("learning", l["id"]),
-            prof["learnings"][1])
+            prof["learnings"][1], "learning")
     footer = ("\nMore detail: manage_todos(action=list), manage_problems(action=list), "
               "search (answer=true to ask).")
     if size != "deep":
@@ -294,6 +300,15 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
     if len(text) > cap:  # cannot happen by construction; belt and braces
         text = text[: cap - 16] + "\n...(truncated)"
     return text
+
+
+_RULE_ID = re.compile(r"^- R(\d+): ")
+_HANDOFF_ID = re.compile(r"^- H(\d+) \(")
+
+
+def _note(shown: list, kind: str, m) -> None:
+    if m:
+        shown.append(f"{kind}:{m.group(1)}")
 
 
 def _first_decision(d: dict) -> str:
