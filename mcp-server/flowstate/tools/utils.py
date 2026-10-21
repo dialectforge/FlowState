@@ -1,12 +1,8 @@
 """Utility functions for FlowState tools."""
 
 from typing import Optional
-from ..database import Database, DEFAULT_DB_PATH
+from ..database import Database
 from pathlib import Path
-
-# Data directory is the parent of the database file
-# e.g. ~/Library/Application Support/flowstate/
-FLOWSTATE_DATA_DIR = DEFAULT_DB_PATH.parent
 
 
 # Global database instance (initialized by server)
@@ -61,6 +57,12 @@ def get_db() -> Database:
     if _db is None:
         _db = Database()
     return _db
+
+
+def data_dir() -> Path:
+    """The data folder (project files, data-git): the folder of the database in use, so
+    `flowstate --db <file>` keeps attachments next to that file."""
+    return Path(get_db().db_path).parent
 
 
 def set_db(db: Database) -> None:

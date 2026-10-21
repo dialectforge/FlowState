@@ -17,8 +17,24 @@ REPO = Path(__file__).resolve().parents[2]
 PY = str(REPO / ".venv" / "bin" / "python") if (REPO / ".venv" / "bin" / "python").exists() else sys.executable
 
 
+GUARD_SITE = REPO / "tests" / "guard_site"     # sitecustomize: refuses to touch the real folders
+
+
+def real_dirs(home: Path = None) -> list:
+    """The real per-user FlowState folders (data, settings, token file, skills)."""
+    h = Path(home or os.environ.get("FS_E2E_REAL_HOME") or Path.home())
+    out = [h / ".flowstate", h / "Library" / "Application Support" / "flowstate",
+           h / ".local" / "share" / "flowstate", h / ".config" / "flowstate",
+           h / ".agents" / "skills" / "flowstate", h / ".claude" / "skills" / "flowstate"]
+    for v in ("LOCALAPPDATA", "APPDATA"):
+        if os.environ.get(v):
+            out.append(Path(os.environ[v]) / "flowstate")
+    return [str(p) for p in out]
+
+
 def sandbox_env(root: Path, extra: dict = None) -> dict:
-    """Environment that points every FlowState path into `root` (never the real ones)."""
+    """Environment that points every FlowState path into `root` (never the real ones), and
+    loads the real-data guard in every server process (refusals go to <root>/guard.log)."""
     root = Path(root)
     for d in ("home", "data", "backups", "config", "relay"):
         (root / d).mkdir(parents=True, exist_ok=True)
@@ -26,20 +42,31 @@ def sandbox_env(root: Path, extra: dict = None) -> dict:
     env.update({
         "HOME": str(root / "home"),                 # belt and braces: per-OS defaults land here
         "FLOWSTATE_HOME": str(root / "data"),
-        "FLOWSTATE_DATA_DIR": str(root / "data"),
         "FLOWSTATE_DB": str(root / "data" / "flowstate.db"),
         "FLOWSTATE_BACKUP_DIR": str(root / "backups"),
         "FLOWSTATE_CONFIG_DIR": str(root / "config"),
         "FLOWSTATE_TOKEN_FILE": str(root / "config" / "http-token.txt"),
         "FLOWSTATE_AUTH_DB": str(root / "config" / "remote-auth.db"),
         "FLOWSTATE_RELAY_DIR": str(root / "relay"),
+        "FLOWSTATE_TOKEN_STORE_FILE": str(root / "config" / "http-token"),
         "FLOWSTATE_WORKSPACE": "e2e-box",
-        "PYTHONPATH": str(REPO / "mcp-server"),
+        "FLOWSTATE_GUARD_DIRS": os.pathsep.join(real_dirs()),
+        "FLOWSTATE_GUARD_LOG": str(guard_log(root)),
+        "PYTHONPATH": os.pathsep.join([str(GUARD_SITE), str(REPO / "mcp-server")]),
         "PYTHONDONTWRITEBYTECODE": "1",
     })
     if extra:
         env.update(extra)
     return env
+
+
+def guard_log(root: Path) -> Path:
+    """One refusals log per run, at the top of the run folder (nested sandboxes share it)."""
+    if os.environ.get("FS_E2E_GUARD_LOG"):
+        return Path(os.environ["FS_E2E_GUARD_LOG"])
+    root = Path(root).resolve()
+    top = next((p for p in [root, *root.parents] if p.name.startswith("fs-e2e-")), root)
+    return top / "guard.log"
 
 
 class ToolError(Exception):

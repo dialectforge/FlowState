@@ -111,9 +111,6 @@ def test_repro_rule_receipt_names_the_rule(backend):
 
 
 def test_repro_attached_file_text_is_searchable(backend, tmp_path, monkeypatch):
-    from flowstate.tools import files
-    # the bundle folder is fixed at import from the per-OS default; keep it in tmp
-    monkeypatch.setattr(files, "FLOWSTATE_DATA_DIR", tmp_path / "data")
     f = tmp_path / "menu.md"
     f.write_text("# Menu\nCroissant, sourdough, lemon tart.\n", encoding="utf-8")
 
@@ -127,5 +124,5 @@ def test_repro_attached_file_text_is_searchable(backend, tmp_path, monkeypatch):
             return att, hits
     att, hits = asyncio.run(go())
     assert "id" in att, att
-    assert (tmp_path / "data" / "projects" / "alpha.flowstate" / "attachments" / "menu.md").exists()
+    assert (backend.backend.db_path.parent / "projects" / "alpha.flowstate" / "attachments" / "menu.md").exists()
     assert hits, "manage_files search found nothing in the attached file"

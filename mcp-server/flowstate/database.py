@@ -22,22 +22,29 @@ from .models import (
 # (No machine-specific paths here; a Windows box that keeps data on D:\ sets
 # FLOWSTATE_DB or FLOWSTATE_HOME in its launcher.)
 import platform
-if platform.system() == "Darwin":
-    DEFAULT_DB_PATH = Path.home() / "Library" / "Application Support" / "flowstate" / "flowstate.db"
-elif platform.system() == "Windows":
-    DEFAULT_DB_PATH = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "flowstate" / "flowstate.db"
-else:
-    DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "flowstate" / "flowstate.db"
-if os.environ.get("FLOWSTATE_HOME"):
-    DEFAULT_DB_PATH = Path(os.environ["FLOWSTATE_HOME"]).expanduser() / "flowstate.db"
-if os.environ.get("FLOWSTATE_DB"):
-    DEFAULT_DB_PATH = Path(os.environ["FLOWSTATE_DB"]).expanduser()
+
+
+def default_db_path() -> Path:
+    """The database used when none is named, read from the environment at call time (so a
+    test or launcher that sets FLOWSTATE_DB after import is honoured)."""
+    if os.environ.get("FLOWSTATE_DB"):
+        return Path(os.environ["FLOWSTATE_DB"]).expanduser()
+    if os.environ.get("FLOWSTATE_HOME"):
+        return Path(os.environ["FLOWSTATE_HOME"]).expanduser() / "flowstate.db"
+    if platform.system() == "Darwin":
+        return Path.home() / "Library" / "Application Support" / "flowstate" / "flowstate.db"
+    if platform.system() == "Windows":
+        return Path(os.environ.get("LOCALAPPDATA", Path.home())) / "flowstate" / "flowstate.db"
+    return Path.home() / ".local" / "share" / "flowstate" / "flowstate.db"
+
+
+DEFAULT_DB_PATH = default_db_path()   # as at import; code paths call default_db_path()
 SCHEMA_PATH = Path(__file__).parent.parent.parent / "database" / "schema.sql"
 
 
 def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
     """Get a database connection with row factory."""
-    path = db_path or DEFAULT_DB_PATH
+    path = db_path or default_db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     
     conn = sqlite3.connect(str(path), timeout=5.0)
@@ -58,14 +65,14 @@ def init_db(db_path: Optional[Path] = None) -> None:
     finally:
         conn.close()
     from .migrations import migrate  # v2 tables (numbered migrations)
-    migrate(db_path or DEFAULT_DB_PATH, backup_first=False)
+    migrate(db_path or default_db_path(), backup_first=False)
 
 
 class Database:
     """Database operations for FlowState."""
     
     def __init__(self, db_path: Optional[Path] = None):
-        self.db_path = db_path or DEFAULT_DB_PATH
+        self.db_path = db_path or default_db_path()
         # Ensure DB exists
         if not self.db_path.exists():
             init_db(self.db_path)

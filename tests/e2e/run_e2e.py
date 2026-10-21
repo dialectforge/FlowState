@@ -33,7 +33,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from fsclient import PY, REPO, HttpClient, StdioClient, ToolError, sandbox_env, wait_port  # noqa: E402
+from fsclient import (PY, REPO, HttpClient, StdioClient, ToolError, guard_log, real_dirs,  # noqa: E402
+                      sandbox_env, wait_port)
 
 P = "Lakeside Bakery"
 SHARED = "Bakery Shared Auth"
@@ -1281,7 +1282,7 @@ def s11_edges(W):
             n == 2, f"{n} rows")
     # --db: where do attachments go? (HOME is the sandbox, so the per-OS default is in /tmp too)
     env = sandbox_env(W.root / "dbflag", {"FLOWSTATE_TOOLS": "full"})
-    for k in ("FLOWSTATE_DB", "FLOWSTATE_HOME", "FLOWSTATE_DATA_DIR"):
+    for k in ("FLOWSTATE_DB", "FLOWSTATE_HOME"):
         env.pop(k)
     other = W.root / "dbflag" / "elsewhere"
     other.mkdir(parents=True)
@@ -1303,6 +1304,22 @@ def s11_edges(W):
                   "Backing up the chosen database's folder misses its attachments. The same import-time path is why "
                   "the test suite's _never_live guard doesn't cover attachments: an in-process test that attaches "
                   "a file writes into the real ~/Library/Application Support/flowstate/projects.")
+    # real-data guard: a server process started like every other one here refuses the real folders
+    probe = Path(real_dirs()[1]) / "fs-e2e-guard-probe-never-created.txt"
+    plog = W.root / "guard-probe.log"
+    penv = dict(W.env, FLOWSTATE_GUARD_LOG=str(plog))
+    r = subprocess.run([PY, "-c", f"open({str(probe)!r}, 'w')"], env=penv, cwd=str(REPO),
+                       capture_output=True, text=True, timeout=60)
+    R.check(11, "real-data guard: a FlowState process refuses to write into the real data folder",
+            r.returncode != 0 and "test guard" in r.stderr and not probe.exists()
+            and str(probe) in (plog.read_text() if plog.exists() else ""), short(r.stderr[-200:], 200))
+    r = subprocess.run([PY, "-c", "from flowstate import database, paths; from flowstate.secret_store import "
+                        "default_store; print(database.default_db_path()); print(paths.backup_dir()); "
+                        "print(paths.config_dir()); print(default_store().path)"],
+                       env=W.env, cwd=str(REPO), capture_output=True, text=True, timeout=60)
+    resolved = r.stdout.split()
+    R.check(11, "real-data guard: DB, backups, config and token store all resolve inside the sandbox",
+            len(resolved) == 4 and all(x.startswith(str(W.root)) for x in resolved), resolved)
     # HTTP server restart: grok reconnects
     W.stop_http()
     W.start_http_again = True
@@ -1434,6 +1451,7 @@ def main():
     if root.exists():
         sys.exit(f"{root} exists; pick another --root")
     real_before = real_paths_snapshot()
+    os.environ["FS_E2E_GUARD_LOG"] = str(root / "guard.log")
     started = datetime.now()
     W = World(root)
     try:
@@ -1449,6 +1467,11 @@ def main():
     finally:
         W.close_all()
     real_after = real_paths_snapshot()
+    refused = guard_log(root).read_text().strip() if guard_log(root).exists() else ""
+    R.check(11, "real-data guard: no server process tried to touch the real FlowState folders during the run",
+            not refused, short(refused, 300))
+    changed = sorted(k for k in set(real_before) | set(real_after) if real_before.get(k) != real_after.get(k))
+    R.check(11, "the real FlowState folders are unchanged after the run", not changed, changed[:5])
     text = report(W, started, real_before, real_after)
     (root / "report.md").write_text(text)
     print("\n" + text)

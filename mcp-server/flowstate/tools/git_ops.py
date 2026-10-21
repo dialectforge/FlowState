@@ -5,14 +5,14 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
-from .utils import get_db, FLOWSTATE_DATA_DIR
+from . import utils
 
 def _run_git_command(args: list[str], cwd: Optional[Path] = None) -> tuple[bool, str, str]:
     """Run a git command and return (success, stdout, stderr)."""
     try:
         result = subprocess.run(
             ["git"] + args,
-            cwd=cwd or FLOWSTATE_DATA_DIR,
+            cwd=cwd or utils.data_dir(),
             capture_output=True,
             text=True,
             timeout=60
@@ -33,12 +33,12 @@ def git_init() -> dict:
         Git status info
     """
     # Ensure data directory exists
-    FLOWSTATE_DATA_DIR.mkdir(parents=True, exist_ok=True)
-    projects_dir = FLOWSTATE_DATA_DIR / "projects"
+    utils.data_dir().mkdir(parents=True, exist_ok=True)
+    projects_dir = utils.data_dir() / "projects"
     projects_dir.mkdir(exist_ok=True)
     
     # Check if already initialized
-    git_dir = FLOWSTATE_DATA_DIR / ".git"
+    git_dir = utils.data_dir() / ".git"
     if git_dir.exists():
         return git_status()
     
@@ -69,7 +69,7 @@ Thumbs.db
 # *.mp4
 # *.mov
 """
-    gitignore_path = FLOWSTATE_DATA_DIR / ".gitignore"
+    gitignore_path = utils.data_dir() / ".gitignore"
     gitignore_path.write_text(gitignore_content)
     
     # Create README
@@ -81,7 +81,7 @@ This repository contains your FlowState development memory.
 
 Manage through the FlowState app or MCP server.
 """
-    readme_path = FLOWSTATE_DATA_DIR / "README.md"
+    readme_path = utils.data_dir() / "README.md"
     readme_path.write_text(readme_content)
     
     # Initial commit
@@ -98,7 +98,7 @@ def git_status() -> dict:
     Returns:
         Git status with pending changes, remote, branch info
     """
-    git_dir = FLOWSTATE_DATA_DIR / ".git"
+    git_dir = utils.data_dir() / ".git"
     if not git_dir.exists():
         return {
             "initialized": False,
@@ -169,7 +169,7 @@ def git_sync(commit_message: Optional[str] = None) -> dict:
     Returns:
         Sync result with status info
     """
-    git_dir = FLOWSTATE_DATA_DIR / ".git"
+    git_dir = utils.data_dir() / ".git"
     if not git_dir.exists():
         return {"success": False, "error": "Not a git repository. Run git_init first."}
     
@@ -239,7 +239,7 @@ def git_set_remote(remote_url: str) -> dict:
     Returns:
         Status info
     """
-    git_dir = FLOWSTATE_DATA_DIR / ".git"
+    git_dir = utils.data_dir() / ".git"
     if not git_dir.exists():
         return {"success": False, "error": "Not a git repository. Run git_init first."}
     
@@ -271,7 +271,7 @@ def git_clone(remote_url: str, local_path: Optional[str] = None) -> dict:
     Returns:
         Clone result
     """
-    target_path = Path(local_path) if local_path else FLOWSTATE_DATA_DIR
+    target_path = Path(local_path) if local_path else utils.data_dir()
     
     # Don't clone if directory already has content
     if target_path.exists() and any(target_path.iterdir()):
@@ -300,7 +300,7 @@ def git_history(limit: int = 20) -> list[dict]:
     Returns:
         List of commit records
     """
-    git_dir = FLOWSTATE_DATA_DIR / ".git"
+    git_dir = utils.data_dir() / ".git"
     if not git_dir.exists():
         return []
     

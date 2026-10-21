@@ -6,11 +6,11 @@ import hashlib
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
-from .utils import get_db, FLOWSTATE_DATA_DIR
+from .utils import get_db, data_dir
 
 def _get_project_bundle_path(project_name: str) -> Path:
     """Get the path to a project's bundle directory."""
-    return FLOWSTATE_DATA_DIR / "projects" / f"{project_name.lower().replace(' ', '-')}.flowstate"
+    return data_dir() / "projects" / f"{project_name.lower().replace(' ', '-')}.flowstate"
 
 
 def _compute_file_hash(file_path: Path) -> str:

@@ -152,6 +152,8 @@ class FileStore:
 
 
 def default_store():
+    if os.environ.get("FLOWSTATE_TOKEN_STORE_FILE"):   # tests and sandboxes: a private file
+        return FileStore(Path(os.environ["FLOWSTATE_TOKEN_STORE_FILE"]).expanduser())
     system = platform.system()
     if system == "Windows":
         return WindowsStore()

@@ -38,8 +38,8 @@ def say(msg: str) -> None:
 
 
 def _default_db() -> Path:
-    from .database import DEFAULT_DB_PATH
-    return DEFAULT_DB_PATH
+    from .database import default_db_path
+    return default_db_path()
 
 
 def _db(a) -> Path:

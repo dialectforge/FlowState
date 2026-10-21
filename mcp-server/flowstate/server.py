@@ -45,7 +45,7 @@ from . import receipts
 from . import secrets_scan
 from .autosession import AutoSessions, ensure_schema
 from .brief import build_brief, candidates_text, resolve_project
-from .database import Database, DEFAULT_DB_PATH
+from .database import Database, default_db_path
 from .guard import GuardError, WRITES, check_write, explicit_project, is_write, writes_text
 
 log = logging.getLogger("flowstate")
@@ -80,7 +80,7 @@ backend = _Backend()
 
 def init_backend(db_path: Optional[Path] = None) -> None:
     """Open the DB and the session tracker. Failures are remembered, not raised."""
-    path = Path(db_path) if db_path else DEFAULT_DB_PATH
+    path = Path(db_path) if db_path else default_db_path()
     backend.db_path, backend.error, backend.tracker = path, None, None
     backend.migration_error = None
     try:

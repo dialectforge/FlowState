@@ -248,7 +248,7 @@ def test_git_sync_refuses_token_and_log_files(tmp_path, monkeypatch):
     (data / "notes.txt").write_text("ok", encoding="utf-8")
     (data / "http-token.txt").write_text("fake-" + "q" * 20, encoding="utf-8")
     (data / "server.log").write_text("log", encoding="utf-8")
-    monkeypatch.setattr(git_ops, "FLOWSTATE_DATA_DIR", data)
+    monkeypatch.setattr(git_ops.utils, "data_dir", lambda: data)
     r = git_ops.git_sync("test")
     assert r["success"] is False and set(r["refused"]) == {"http-token.txt", "server.log"}
     staged = subprocess.run(["git", "diff", "--cached", "--name-only"], cwd=data,
