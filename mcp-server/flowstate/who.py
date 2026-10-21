@@ -66,7 +66,9 @@ def _sources(t: dict) -> list[str]:
         c = t["record_history"]
         q.append(_sel("created_at", _id_cols(c, fallback_app="client"), "project_id",
                       "table_name", "record_id", "tool", "edit", "undone_at",
-                      "FROM record_history"))
+                      # a creation is listed once, from the activity log (and the review queue)
+                      "FROM record_history WHERE NOT (old_row IS NULL AND (tool LIKE 'create/%' "
+                      "OR tool LIKE 'approve/%'))"))
     if "review_items" in t:
         c = t["review_items"]
         q.append(_sel("created_at", _id_cols(c, fallback_app="source"), "project_id",

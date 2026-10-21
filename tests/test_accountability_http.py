@@ -77,7 +77,8 @@ def test_lan_app_key_identity_comes_from_the_key(lan, seeded_db):
     assert not out[0][0] and not out[1][0], out
     assert out[2][0] and json.loads(out[2][1])["error"] == "not_allowed_remotely"
     assert _q(seeded_db, "SELECT app, model, machine, identity_source FROM record_history") == \
-        [("Cursor laptop", "header-model", "laptop-ws", "app_key")]
+        [("Cursor laptop", "header-model", "laptop-ws", "app_key"),     # the edit
+         ("Cursor laptop", "arg-model", "laptop-ws", "app_key")]        # the change it created
     assert _last_activity(seeded_db, "log_work") == \
         ("Cursor laptop", "arg-model", "laptop-ws", "app_key", kid)
 

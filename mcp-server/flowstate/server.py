@@ -59,8 +59,6 @@ def _route_tool(name: str, args: dict) -> Any:
     return route_tool(name, args, backend.db_path)
 
 
-
-
 # ============================================================
 # BACKEND STATE (fail-safe: a broken DB never stops the server)
 # ============================================================
@@ -423,7 +421,8 @@ def handle_call(name: str, args: dict, client: str = "unknown", meta: Optional[d
                                       args.get("field_name") or "")
             if alerted:
                 result = {**result, "alerted_projects": alerted}
-
+    if meta.get("record"):   # a created record goes into the edit history (undo takes it back)
+        _safe_call(history.record_created, db_path, *meta["record"], "create", client)
     if sid and tracker:
         failed = isinstance(result, dict) and "error" in result
         if pid and not failed:
@@ -1023,6 +1022,9 @@ def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
                 raise review.ReviewError(r["error"], r.get("message", "could not create the record"))
             rec = r.get("record") if isinstance(r, dict) else None
             rid = rec.get("id") if isinstance(rec, dict) else None
+            if rid is not None:
+                _safe_call(history.record_created, backend.db_path, payload["kind"], rid,
+                           "approve", client)
             return _RECORD_TABLE[payload["kind"]], rid
 
         move_to = None

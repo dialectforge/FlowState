@@ -164,7 +164,9 @@ def test_stdio_identity_self_reported_with_workspace(backend, seeded_db, monkeyp
                                   "model": "model-one"})])
     assert not any(r.isError for r in out), [r.content[0].text for r in out]
     h = _q(seeded_db, "SELECT app, model, machine, identity_source FROM record_history")
-    assert h == [("Test App", None, "ws-desk", "self_reported")]
+    # the edit, then (2.4.0) the created todo, each with its own model
+    assert h == [("Test App", None, "ws-desk", "self_reported"),
+                 ("Test App", "model-one", "ws-desk", "self_reported")]
     act = _q(seeded_db, "SELECT tool, app, model, machine, identity_source, record_type "
                         "FROM activity_log ORDER BY id")
     assert act == [("todo", "Test App", None, "ws-desk", "self_reported", None),

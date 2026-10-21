@@ -98,11 +98,11 @@ LINKS_DESCRIPTION = (
 )
 
 HISTORY_DESCRIPTION = (
-    "The edit trail of existing records. list: row edits with old and new values. undo: "
-    "restore a record to before its last edit, or bring back an approved delete with "
-    "everything removed with it (a deleted project: its old name and id; refused if the rows "
-    "changed again since). who: who did what (app, model, machine), with filters and pages. "
-    "Logged changes (kind=change) are records: find them with search. Reads: list, who. "
+    "The edit trail of records. list: edits with old and new values. undo: take back a "
+    "record's last edit, a record you created (if nothing refers to it), or an approved "
+    "delete with everything removed with it (a deleted project: its old name and id); rows "
+    "changed since are skipped and listed. who: who did what (app, model, machine), filtered and paged. "
+    "Logged changes (kind=change): find them with search. Reads: list, who. "
     "list and undo require project. Returns {history}, the undo result, or {rows, page}."
 )
 

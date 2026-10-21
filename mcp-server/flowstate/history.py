@@ -6,8 +6,12 @@ new rows are copied too, and both go into `record_history`. `undo` puts the rows
 last edit of a record back as they were (re-inserting deleted rows, removing rows that edit
 created) and is itself recorded, so an undo can be undone.
 
-Creating a record is not undone here (that would mean deleting it); use the record's own
-status (done / cancelled) or the review queue instead.
+Creating a record (2.4.0) is recorded too (tool `create/<type>`, or `approve/<type>` when the
+user approved it from the review queue), with the links and conflict flags saved with it.
+Undoing it removes them, but only when nothing else refers to the record yet and only for
+the app that made it: anyone else's record, or one the user approved, needs the user
+(manage_memory delete asks them). If only some rows of an edit changed since, undo puts the
+rest back and lists what it skipped and why; it refuses only when nothing could be undone.
 
 A user-approved delete (deletes.py) is one edit holding every row it removed; undoing it puts
 them all back. Undoing that undo would delete them again without the user, so it is refused:
@@ -206,6 +210,54 @@ def begin(db_path: Path, name: str, args: dict) -> Optional[Edit]:
     return Edit(db_path, vals, f"{name}/{args['action']}" if args.get("action") else name).start()
 
 
+# record types whose creation is recorded (and so can be undone); projects and components
+# are not (deleting one takes everything in it: that is a delete request for the user)
+CREATED = ("decision", "change", "problem", "learning", "todo", "attempt", "variable", "method")
+_ENDPOINT = {"conversations": "decision", "changes": "change", "learnings": "learning",
+             "problems": "problem", "todos": "todo"}
+
+
+def record_created(db_path: Path, rtype: str, rid: int, tool: str = "create",
+                   client: str = "unknown", edit_id: Optional[str] = None) -> Optional[str]:
+    """Record that a call created `rtype` #rid (tool create|approve): the new row plus the
+    links it made and the conflict flags its save raised, as one edit."""
+    if rtype not in CREATED:
+        return None
+    table = TABLES[rtype]
+    conn = connect(db_path)
+    try:
+        if not available(conn):
+            return None
+        row = _row(conn, table, int(rid))
+        if row is None:
+            return None
+        rows = [(table, int(rid), row)]
+        if table in _ENDPOINT and _has(conn, "record_links"):
+            rows += [("record_links", r["id"], {k: _val(r[k]) for k in r.keys()}) for r in
+                     conn.execute("SELECT * FROM record_links WHERE from_type = ? AND from_id = ? "
+                                  "AND removed_at IS NULL", (_ENDPOINT[table], int(rid)))]
+        if table == "conversations" and _has(conn, "decision_conflicts"):
+            rows += [("decision_conflicts", r["id"], {k: _val(r[k]) for k in r.keys()}) for r in
+                     conn.execute("SELECT * FROM decision_conflicts WHERE new_id = ?", (int(rid),))]
+        pid = _project_of(conn, table, row)
+        edit_id = edit_id or uuid.uuid4().hex[:16]
+        now = _now()
+        for t, k, new in rows:
+            identity.insert(conn, "record_history", {
+                "edit_id": edit_id, "table_name": t, "record_id": k, "project_id": pid,
+                "tool": f"{tool}/{rtype}", "old_row": None, "new_row": json.dumps(new),
+                "client": (client or "")[:80], "created_at": now}, client)
+        conn.commit()
+        return edit_id
+    finally:
+        conn.close()
+
+
+def _has(conn, table: str) -> bool:
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                        (table,)).fetchone() is not None
+
+
 @contextmanager
 def tracked(db_path: Path, rows: list, tool: str, client: str = "unknown"):
     """Record an edit made inside the block: rows = [(table, key column, key value)]."""
@@ -297,9 +349,51 @@ def _orphans(conn, inserted: dict) -> list:
     return out
 
 
+def _label(table: str, rid) -> str:
+    return f"{TYPE_OF.get(table, table)} #{rid}"
+
+
+def _changed_by(conn, g) -> str:
+    """Why a row can't be put back: who changed it after this edit, if FlowState saw it."""
+    later = conn.execute(
+        """SELECT * FROM record_history WHERE table_name = ? AND record_id = ? AND id > ?
+           ORDER BY id DESC LIMIT 1""", (g["table_name"], g["record_id"], g["id"])).fetchone()
+    if later is None:
+        return "changed outside FlowState since"
+    who = (later["app"] if "app" in later.keys() else None) or later["client"] or "another app"
+    return f"changed again since by {who} (undo that first)"
+
+
+def _creation_check(conn, g, caller_app: str, group_keys: set) -> Optional[tuple[str, str]]:
+    """(error code, reason) if removing this created row isn't allowed, else None."""
+    from . import deletes
+    tool = g["tool"] or ""
+    rtype = TYPE_OF.get(g["table_name"], g["table_name"])
+    if tool.startswith("approve/"):
+        return ("user_approved", f"{rtype} #{g['record_id']} was approved by the user in the "
+                                 f"review queue; to remove it, manage_memory(action=\"delete\") "
+                                 f"asks them.")
+    made_by = (g["app"] if "app" in g.keys() else None) or g["client"] or "another app"
+    if made_by != caller_app:
+        return ("not_your_record", f"{rtype} #{g['record_id']} was created by {made_by}; only "
+                                   f"that app can take it back with undo. To remove it, "
+                                   f"manage_memory(action=\"delete\") asks the user.")
+    try:
+        gone, changed = deletes.plan(conn, g["table_name"], g["record_id"])
+    except deletes.DeleteError as e:
+        return ("still_referenced", f"{rtype} #{g['record_id']}: {e}")
+    others = [k for k in list(gone) + list(changed)
+              if k not in group_keys and k[0] not in deletes.DERIVED]
+    if others:
+        t, k = others[0]
+        return ("still_referenced", f"{_label(t, k)} refers to {rtype} #{g['record_id']} now")
+    return None
+
+
 def undo(db_path: Path, project_id: int, record_type: str, record_id: int,
          client: str = "unknown") -> dict:
-    """Revert the last (not yet undone) edit of a record, if nothing changed it since."""
+    """Revert the last (not yet undone) edit of a record: every row of it that nothing
+    changed since; the rest are listed as skipped. Refused only if nothing can be undone."""
     if record_type not in TABLES:
         raise HistoryError("bad_type", f"record_type must be one of: {', '.join(TABLES)}.")
     table = TABLES[record_type]
@@ -324,8 +418,8 @@ def undo(db_path: Path, project_id: int, record_type: str, record_id: int,
                                    f"{record_type} #{record_id} was restored after a delete; undoing "
                                    f"that would delete it again without the user. To delete it, make "
                                    f"a new delete request for the user to approve.")
-        group = conn.execute("SELECT * FROM record_history WHERE edit_id = ? ORDER BY id",
-                             (last["edit_id"],)).fetchall()
+        group = conn.execute("SELECT * FROM record_history WHERE edit_id = ? AND undone_at IS NULL "
+                             "ORDER BY id", (last["edit_id"],)).fetchall()
         def allowed(g) -> bool:  # the project it was in when edited, or the one it is in now
             if g["project_id"] in (None, project_id):
                 return True
@@ -335,30 +429,71 @@ def undo(db_path: Path, project_id: int, record_type: str, record_id: int,
             conn.rollback()
             raise HistoryError("project_mismatch",
                                f"That change belongs to another project; repeat with that project.")
-        for g in group:   # refuse if something changed the rows since (outside history)
+        skipped: dict = {}   # history row id -> (code, reason)
+        for g in group:   # rows something changed since (outside history, or a newer edit)
             current = _row(conn, g["table_name"], g["record_id"])
             expected = json.loads(g["new_row"]) if g["new_row"] else None
             if current != expected:
-                conn.rollback()
-                raise HistoryError("changed_since",
-                                   f"{TYPE_OF.get(g['table_name'], g['table_name'])} "
-                                   f"#{g['record_id']} changed again after that edit; undo the "
-                                   f"newer change first (see history).")
+                skipped[g["id"]] = ("changed_since", _changed_by(conn, g))
+        caller = identity.stamp(client).get("app") or client
+        keys = {(g["table_name"], g["record_id"]) for g in group}
+        for g in group:   # removing a created record: only if nothing else needs it
+            if g["id"] in skipped or g["old_row"] is not None or g["new_row"] is None \
+                    or TYPE_OF.get(g["table_name"]) not in CREATED:
+                continue
+            bad = _creation_check(conn, g, caller, keys)
+            if bad:
+                skipped[g["id"]] = bad
+        roots = {(g["table_name"], g["record_id"]) for g in group if g["id"] in skipped
+                 and g["old_row"] is None and TYPE_OF.get(g["table_name"]) in CREATED}
+        if roots:   # a created record that stays keeps the links and flags saved with it
+            for g in group:
+                if g["id"] not in skipped and g["old_row"] is None \
+                        and (g["table_name"], g["record_id"]) not in roots:
+                    skipped[g["id"]] = ("kept_with_record", "kept with the record it belongs to")
         undo_id, now = uuid.uuid4().hex[:16], _now()
-        restored, inserted = [], {}
-        for g in group:
-            old = json.loads(g["old_row"]) if g["old_row"] else None
-            before = _row(conn, g["table_name"], g["record_id"])
-            try:
-                if _restore(conn, g["table_name"], g["record_id"], old):
-                    inserted.setdefault(g["table_name"], set()).add(g["record_id"])
-            except sqlite3.IntegrityError as e:
+        while True:
+            todo = [g for g in group if g["id"] not in skipped]
+            if not todo:
                 conn.rollback()
-                raise HistoryError("restore_conflict",
-                                   f"Can't put {TYPE_OF.get(g['table_name'], g['table_name'])} "
-                                   f"#{g['record_id']} back: {e} (for example a new project now has "
-                                   f"the same name; rename it first). Nothing was changed.")
-            after = _row(conn, g["table_name"], g["record_id"])
+                first = next(g for g in group if g["id"] in skipped)
+                code, why = skipped[first["id"]]
+                if code == "changed_since":
+                    why = f"{_label(first['table_name'], first['record_id'])} {why}."
+                elif not why.endswith("."):
+                    why += "."
+                raise HistoryError(code, why + " Nothing was changed.")
+            conn.execute("SAVEPOINT undo_rows")
+            restored, inserted = [], {}
+            for g in todo:
+                old = json.loads(g["old_row"]) if g["old_row"] else None
+                before = _row(conn, g["table_name"], g["record_id"])
+                try:
+                    if _restore(conn, g["table_name"], g["record_id"], old):
+                        inserted.setdefault(g["table_name"], set()).add(g["record_id"])
+                except sqlite3.IntegrityError as e:
+                    conn.rollback()
+                    raise HistoryError("restore_conflict",
+                                       f"Can't put {_label(g['table_name'], g['record_id'])} back: "
+                                       f"{e} (for example a new project now has the same name; "
+                                       f"rename it first). Nothing was changed.")
+                after = _row(conn, g["table_name"], g["record_id"])
+                restored.append((g, before, after, old))
+            missing = _orphans(conn, inserted)
+            if not missing:
+                break
+            conn.execute("ROLLBACK TO undo_rows")
+            conn.execute("RELEASE undo_rows")
+            for t, i, parent in missing:   # it can't come back while its parent is gone
+                for g in todo:
+                    if (g["table_name"], g["record_id"]) == (t, i):
+                        skipped[g["id"]] = ("parent_missing",
+                                            f"{_label(t, i)} can't come back on its own: the "
+                                            f"{TYPE_OF.get(parent, parent)} it belongs to was "
+                                            f"deleted after it. Undo that delete first.")
+        conn.execute("RELEASE undo_rows")
+        rows = []
+        for g, before, after, old in restored:
             identity.insert(conn, "record_history", {
                 "edit_id": undo_id, "table_name": g["table_name"], "record_id": g["record_id"],
                 "project_id": g["project_id"], "tool": "history/undo",
@@ -366,27 +501,26 @@ def undo(db_path: Path, project_id: int, record_type: str, record_id: int,
                 "new_row": json.dumps(after) if after is not None else None,
                 "client": (client or "")[:80], "created_at": now, "undo_of": g["edit_id"]},
                 client)
-            restored.append({"record_type": TYPE_OF.get(g["table_name"], g["table_name"]),
-                             "record_id": g["record_id"],
-                             "now": "deleted" if old is None else "restored"})
-        missing = _orphans(conn, inserted)
-        if missing:
-            conn.rollback()
-            t, i, parent = missing[0]
-            raise HistoryError("parent_missing",
-                               f"{TYPE_OF.get(t, t)} #{i} can't come back on its own: the "
-                               f"{TYPE_OF.get(parent, parent)} it belongs to was deleted after "
-                               f"it. Undo that delete first. Nothing was changed.")
-        conn.execute("UPDATE record_history SET undone_at = ?, undone_by_edit = ? WHERE edit_id = ?",
-                     (now, undo_id, last["edit_id"]))
+            rows.append({"record_type": TYPE_OF.get(g["table_name"], g["table_name"]),
+                         "record_id": g["record_id"],
+                         "now": "deleted" if old is None else "restored"})
+            conn.execute("UPDATE record_history SET undone_at = ?, undone_by_edit = ? WHERE id = ?",
+                         (now, undo_id, g["id"]))
         conn.commit()
-        return {"undone": last["edit_id"], "tool": last["tool"], "rows": restored,
-                "undo_edit_id": undo_id,
-                "note": "Recorded in history; undo again to redo."}
+        out = {"undone": last["edit_id"], "tool": last["tool"], "rows": rows,
+               "undo_edit_id": undo_id, "note": "Recorded in history; undo again to redo."}
+        if skipped:
+            out["skipped"] = [{"record_type": TYPE_OF.get(g["table_name"], g["table_name"]),
+                               "record_id": g["record_id"], "why": skipped[g["id"]][1]}
+                              for g in group if g["id"] in skipped]
+            out["note"] = (f"Undid {len(rows)} of {len(group)} rows; skipped {len(skipped)} "
+                           f"(listed with why). Recorded in history; undo again to redo.")
+        return out
     except HistoryError:
         raise
     except Exception:
-        conn.rollback()
+        if conn.in_transaction:
+            conn.rollback()
         raise
     finally:
         conn.close()
