@@ -90,6 +90,7 @@ class AutoSessions:
         self.idle = timedelta(minutes=idle_minutes if idle_minutes is not None
                               else idle_minutes_from_env())
         self.instance = instance or uuid.uuid4().hex[:12]
+        self._last: dict = {}   # conn_key -> the session it touched last (this process)
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path), timeout=5.0)
@@ -150,6 +151,8 @@ class AutoSessions:
                    server_instance = ? WHERE session_id = ?""",
                 (_ts(now), count + 1, json.dumps(events), self.instance, sid))
             conn.commit()
+            if conn_key:
+                self._last[conn_key] = sid
             return sid
         except Exception:
             conn.rollback()
@@ -186,16 +189,23 @@ class AutoSessions:
             conn.close()
 
     def own(self, client: str, project_id: Optional[int], conn_key: Optional[str]) -> Optional[dict]:
-        """This connection's open automatic session (in `project_id`, else its latest in any
-        project). Never another connection's: two windows of one app each get their own."""
+        """This connection's open automatic session (in `project_id`, else the one it used
+        last). Never another connection's: two windows of one app each get their own."""
         if not conn_key:
             return self.current(client, project_id) if project_id else None
         conn = self._conn()
         try:
             if not _has_runs(conn):
                 return None
+            last = self._last.get(conn_key[:80]) if not project_id else None
+            if last is not None:   # exact: the session this connection's last call touched
+                row = conn.execute("SELECT * FROM auto_sessions WHERE session_id = ? AND "
+                                   "closed_at IS NULL", (last,)).fetchone()
+                if row is not None:
+                    return dict(row)
             sql = ("SELECT a.* FROM auto_sessions a WHERE a.closed_at IS NULL AND a.client = ?"
-                   + (" AND a.project_id = ?" if project_id else "") + _BY_CONN + _LATEST)
+                   + (" AND a.project_id = ?" if project_id else "") + _BY_CONN
+                   + " ORDER BY a.last_activity DESC, a.session_id DESC LIMIT 1")
             args = (client[:80] if client else "unknown",) + ((project_id,) if project_id else ()) \
                 + (conn_key[:80],)
             row = conn.execute(sql, args).fetchone()
