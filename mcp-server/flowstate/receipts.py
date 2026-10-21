@@ -155,7 +155,7 @@ def finish(db_path: Path, p: Pending, result, project_id: Optional[int],
             if not available(conn, db_path):
                 conn.commit()
                 return None
-            recs = [] if failed else _records(conn, p.change_id, result, created)
+            recs = [] if failed else _records(conn, p.change_id, result, created, p.name, p.action)
             who = ident.as_dict() if ident is not None else {}
             conn.execute(
                 """INSERT INTO run_writes (change_id, conn_key, session_id, project_id, app,
@@ -190,9 +190,22 @@ def finish(db_path: Path, p: Pending, result, project_id: Optional[int],
 _TYPE_OF_TABLE = None
 
 
-def _records(conn, change_id: str, result, created: Optional[tuple]) -> list[str]:
+# Writes whose answer is the saved row itself: its "id" is a record of this type.
+_ROW_IS = {("file", "attach"): "attachment", ("self_improve", "learn_skill"): "skill",
+           ("self_improve", "confirm_skill"): "skill", ("self_improve", "save_state"): "state",
+           ("self_improve", "log_metric"): "metric", ("session", "start"): "session",
+           ("session", "end"): "session", ("session", "log_conversation"): "conversation"}
+# Answers that nest the saved row under a key: {"rule": {"id": 4}}
+_NESTED = (("rule", "rule"), ("link", "link"), ("handoff", "handoff"), ("record", None))
+# Answers that list what they queued: {"item_ids": [3, 4]}
+_LISTS = (("item_ids", "review_item"), ("queued_ids", "review_item"))
+
+
+def _records(conn, change_id: str, result, created: Optional[tuple], tool: str = "",
+             action: Optional[str] = None) -> list[str]:
     """'type:id' of what the write saved: the record it created, the rows the edit history
-    recorded under this change id, else an id the answer names."""
+    recorded under this change id, else the ids its answer names (top level, nested, or a
+    list of queued review items)."""
     global _TYPE_OF_TABLE
     if _TYPE_OF_TABLE is None:
         from .history import TYPE_OF
@@ -210,15 +223,41 @@ def _records(conn, change_id: str, result, created: Optional[tuple]) -> list[str
         if ref not in out and t in _TYPE_OF_TABLE:
             out.append(ref)
     if not out and isinstance(result, dict):
-        for key, rtype in (("item_id", "review_item"), ("queued_for_review", "review_item"),
-                           ("delete_requested", "review_item"), ("link_id", "link"),
-                           ("handoff_id", "handoff"), ("rule_id", "rule"),
-                           ("todo_id", "todo"), ("session_id", "session")):
-            v = result.get(key)
-            if isinstance(v, int) and not isinstance(v, bool):
-                out.append(f"{rtype}:{v}")
-                break
+        out = _named(result, tool, action)
     return out[:20]
+
+
+def _is_id(v) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _named(result: dict, tool: str, action: Optional[str]) -> list[str]:
+    for key, rtype in (("item_id", "review_item"), ("queued_for_review", "review_item"),
+                       ("delete_requested", "review_item"), ("link_id", "link"),
+                       ("handoff_id", "handoff"), ("rule_id", "rule"),
+                       ("todo_id", "todo"), ("session_id", "session")):
+        if _is_id(result.get(key)):
+            return [f"{rtype}:{result[key]}"]
+    for key, rtype in _NESTED:
+        v = result.get(key)
+        if isinstance(v, dict) and _is_id(v.get("id")):
+            rtype = rtype or result.get("logged") or v.get("type")
+            if isinstance(rtype, str):
+                return [f"{rtype}:{v['id']}"]
+    for key, rtype in _LISTS:
+        v = result.get(key)
+        if isinstance(v, list) and v and all(_is_id(i) for i in v):
+            return [f"{rtype}:{i}" for i in v]
+    if isinstance(result.get("record_type"), str) and _is_id(result.get("record_id")):
+        return [f"{result['record_type']}:{result['record_id']}"]   # manage_memory mark / source
+    if (tool, action) == ("rules", "remove") and _is_id(result.get("removed")):
+        return [f"rule:{result['removed']}"]
+    rtype = _ROW_IS.get((tool, action))
+    if rtype and _is_id(result.get("id")):
+        return [f"{rtype}:{result['id']}"]
+    if (tool, action) == ("review_mode", "set") and _is_id(result.get("log_id")):
+        return [f"review_mode_change:{result['log_id']}"]
+    return []
 
 
 def attach(result, receipt: Optional[dict]):

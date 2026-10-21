@@ -161,11 +161,11 @@ def set_mode(db_path: Path, mode: Optional[str], kinds=None, project_id: Optiona
                    updated_by = excluded.updated_by""",
                 (scope, mode, json.dumps(kinds), now, client[:80]))
             new_mode, new_kinds = mode, json.dumps(kinds)
-        identity.insert(conn, "review_mode_log", {
+        log_id = identity.insert(conn, "review_mode_log", {
             "scope": scope, "old_mode": old["mode"] if old else None,
             "old_kinds": json.dumps(old["kinds"]) if old else None, "new_mode": new_mode,
             "new_kinds": new_kinds, "client": client[:80], "caller": (caller or "")[:80],
-            "user_request": user_request[:500], "changed_at": now}, client)
+            "user_request": user_request[:500], "changed_at": now}, client).lastrowid
         conn.commit()
     except Exception:
         conn.rollback()
@@ -174,7 +174,7 @@ def set_mode(db_path: Path, mode: Optional[str], kinds=None, project_id: Optiona
         conn.close()
     eff = get(db_path, project_id)
     return {"scope": scope, "old": ({"mode": old["mode"], "kinds": old["kinds"]} if old else None),
-            "now": eff, "text": describe(eff), "logged": True}
+            "now": eff, "text": describe(eff), "logged": True, "log_id": log_id}
 
 
 def history(db_path: Path, limit: int = 20) -> list[dict]:
