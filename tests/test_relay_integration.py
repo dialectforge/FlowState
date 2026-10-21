@@ -1,6 +1,6 @@
 """End to end over a fake relay that only does SNI routing and byte splicing.
 
-  client (TLS to k7q3m2.relay.flowstatemcp.com, trusts only the test CA)
+  client (TLS to k7q3m2.fsmcp.com, trusts only the test CA)
     -> FakeTunnelRelay public port: peeks SNI, splices bytes, holds no user key
     -> agent data connection (TLS to the relay's own tunnel cert)
     -> agent terminates the client's TLS with the locally generated key
@@ -34,7 +34,7 @@ from cryptography.hazmat.primitives import serialization  # noqa: E402
 from flowstate.relay import store as S  # noqa: E402
 from relay_fakes import FakeACME, FakeRelayAPI, FakeTunnelRelay, TestCA, spki_sha256  # noqa: E402
 
-HOST = "k7q3m2.relay.flowstatemcp.com"
+HOST = "k7q3m2.fsmcp.com"
 PASS = "correct horse battery staple"
 REDIRECT = "http://127.0.0.1:9/callback"
 

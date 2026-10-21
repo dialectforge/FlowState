@@ -7,7 +7,7 @@ the per-user AppData ACL is what protects it). Refused inside a git work tree.
 
     relay.json            settings, no secrets: handle, hostname, api, tunnel, staging, enabled
     device-token          the relay device token (secret)
-    tls-key.pem           ECDSA P-256 key for <handle>.relay.flowstatemcp.com (secret, never sent)
+    tls-key.pem           ECDSA P-256 key for <handle>.fsmcp.com (secret, never sent)
     acme-account-key.pem  ECDSA P-256 Let's Encrypt account key (secret, never sent)
     acme-account.json     the ACME account URL per directory
     cert.pem              the certificate chain (public)

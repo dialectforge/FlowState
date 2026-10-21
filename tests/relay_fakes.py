@@ -1,5 +1,5 @@
-"""Local fakes for the relay tests. Nothing here talks to Let's Encrypt, crt.sh or
-relay.flowstatemcp.com; everything listens on 127.0.0.1 and uses a throwaway test CA.
+"""Local fakes for the relay tests. Nothing here talks to Let's Encrypt, crt.sh, fsmcp.com
+or flowstatemcp.com; everything listens on 127.0.0.1 and uses a throwaway test CA.
 
     TestCA            a CA made per test (P-256), issues leaf certificates
     FakeRelayAPI      /api/enroll and /api/dns-challenge (plain http on loopback)
@@ -19,6 +19,7 @@ import json
 import secrets
 import ssl
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -29,8 +30,9 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
-HOST_SUFFIX = "relay.flowstatemcp.com"
-TUNNEL_HOST = "tunnel.flowstatemcp.com"
+RELAY_DOMAIN = "fsmcp.com"     # the agent's default (flowstate.relay.RELAY_DOMAIN)
+HOST_SUFFIX = RELAY_DOMAIN
+TUNNEL_HOST = f"tunnel.{RELAY_DOMAIN}"
 
 
 def b64u(b: bytes) -> str:
@@ -159,6 +161,8 @@ class FakeRelayAPI(_Server):
         self.txt = {}              # DNS name -> value
         self.calls = []            # (action, name)
         self.response_override = None
+        self.waitlist_until = None  # unix time: /api/enroll answers 429 waitlisted (code kept)
+        self.waitlist_body = None   # replaces the 429 body (e.g. only a Retry-After header)
 
     def handle(self, h, method, body):
         if method != "POST":
@@ -168,6 +172,11 @@ class FakeRelayAPI(_Server):
         except ValueError:
             return _json(h, 400, {"error": "bad_json"})
         if h.path == "/api/enroll":
+            if self.waitlist_until and data.get("code") in self.codes:
+                secs = max(1, int(self.waitlist_until - time.time()))
+                body = self.waitlist_body if self.waitlist_body is not None else {
+                    "error": "waitlisted", "reason": "weekly", "retry_after": int(self.waitlist_until)}
+                return _json(h, 429, body, {"Retry-After": str(secs)})
             handle = self.codes.pop(data.get("code"), None)
             if not handle:
                 return _json(h, 400, {"error": "invalid_code"})

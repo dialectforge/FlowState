@@ -2,7 +2,7 @@
 
   - FlowState's normal public-mode HTTP app (OAuth 2.1 + PKCE, passphrase consent, per-app
     revoke, read-only, Host allow-list, rate limits) on 127.0.0.1:<port>, with public URL
-    https://<handle>.relay.flowstatemcp.com. Nothing about sign-in changes.
+    https://<handle>.fsmcp.com. Nothing about sign-in changes.
   - the tunnel agent (tunnel.py), which terminates TLS with the local key and pipes the
     decrypted HTTP to that listener;
   - certificate upkeep: obtain at start if missing, check twice a day, renew 30 days before

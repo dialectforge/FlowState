@@ -1,8 +1,8 @@
 """The tunnel: outbound connections from this computer to the relay.
 
-Control connection: TLS to tunnel.flowstatemcp.com:443 (the relay's own certificate,
+Control connection: TLS to tunnel.fsmcp.com:443 (the relay's own certificate,
 verified normally), one JSON object per line: hello -> welcome, ping/pong heartbeats, and
-`open` when a client connects to <handle>.relay.flowstatemcp.com. Reconnects with
+`open` when a client connects to <handle>.fsmcp.com. Reconnects with
 exponential backoff and jitter.
 
 Data connection (one per client connection): a new TLS connection to the same tunnel

@@ -1,6 +1,6 @@
 """Relay agent unit tests: enrollment storage, ACME DNS-01 (fake relay API + fake ACME),
 reconnect / heartbeat logic, Certificate Transparency watch, CLI. Temp folders and loopback
-fakes only; nothing reaches Let's Encrypt, crt.sh or relay.flowstatemcp.com."""
+fakes only; nothing reaches Let's Encrypt, crt.sh, fsmcp.com or flowstatemcp.com."""
 
 import asyncio
 import json
@@ -77,7 +77,7 @@ def test_off_by_default(capsys):
 def test_enroll_stores_handle_and_token_owner_only(enrolled, relay_api, capsys):
     st = enrolled
     cfg = st.config()
-    assert cfg["handle"] == "k7q3m2" and cfg["hostname"] == "k7q3m2.relay.flowstatemcp.com"
+    assert cfg["handle"] == "k7q3m2" and cfg["hostname"] == "k7q3m2.fsmcp.com"
     assert cfg["enabled"] is True and cfg["staging"] is False
     token = st.token()
     assert token in relay_api.tokens
@@ -106,10 +106,56 @@ def test_enroll_wrong_code_leaves_nothing_secret(relay_api, monkeypatch, capsys)
     assert not S.RelayStore().enrolled()
 
 
+def test_enroll_waitlisted_says_so_in_plain_words(relay_api, monkeypatch, capsys):
+    monkeypatch.setenv("FLOWSTATE_RELAY_API", relay_api.url)
+    until = time.time() + 3 * 86400
+    relay_api.waitlist_until = until
+    assert _cli("relay", "enroll", "--code", "TEST-CODE-1234", "--skip-cert") == 1
+    out = capsys.readouterr().out
+    when = datetime.fromtimestamp(int(until)).astimezone().strftime("%Y-%m-%d %H:%M")
+    assert "FlowState Relay is full this week, you're on the waitlist, try again after" in out
+    assert when in out and "not used" in out
+    assert "429" not in out and "Relay: relay answered" not in out
+    assert not S.RelayStore().enrolled()
+    # the code was not used: once the relay has room, the same code works
+    relay_api.waitlist_until = None
+    assert _cli("relay", "enroll", "--code", "TEST-CODE-1234", "--skip-cert") == 0
+    assert S.RelayStore().config()["hostname"] == "k7q3m2.fsmcp.com"
+
+
+def test_waitlisted_falls_back_to_retry_after_header(relay_api):
+    from flowstate.relay import RelayWaitlisted
+    relay_api.waitlist_until = time.time() + 7200
+    relay_api.waitlist_body = {"error": "waitlisted"}           # no retry_after in the body
+    with pytest.raises(RelayWaitlisted) as e:
+        api.enroll(relay_api.url, "TEST-CODE-1234")
+    assert abs(e.value.retry_after - (time.time() + 7200)) < 10
+    assert "try again after" in str(e.value)
+    relay_api.waitlist_body = {"error": "waitlisted", "retry_after": "soon"}  # junk: header used
+    with pytest.raises(RelayWaitlisted) as e:
+        api.enroll(relay_api.url, "TEST-CODE-1234")
+    assert e.value.retry_after is not None
+    relay_api.waitlist_body = {"error": "rate_limited"}         # plain 429: not "waitlisted"
+    with pytest.raises(RelayError) as e:
+        api.enroll(relay_api.url, "TEST-CODE-1234")
+    assert not isinstance(e.value, RelayWaitlisted) and "try again" in str(e.value)
+
+
+def test_names_derive_from_one_domain():
+    import flowstate.relay as R
+    assert R.RELAY_DOMAIN == "fsmcp.com" == R.HOST_SUFFIX
+    assert R.API_BASE == "https://api.fsmcp.com" and R.TUNNEL_HOST == "tunnel.fsmcp.com"
+    assert {"api", "tunnel", "www", "mail", "relay", "status", "admin", "app", "docs",
+            "help"} <= R.RESERVED_HANDLES
+
+
 @pytest.mark.parametrize("override", [
     {"handle": "../etc", "device_token": "x" * 40},
     {"handle": "k7q3m2", "device_token": "short"},
     {"handle": "k7q3m2", "device_token": "x" * 40, "hostname": "evil.example.com"},
+    {"handle": "k7q3m2", "device_token": "x" * 40, "hostname": "k7q3m2.relay.flowstatemcp.com"},
+    {"handle": "status", "device_token": "x" * 40, "hostname": "status.fsmcp.com"},
+    {"handle": "admin", "device_token": "x" * 40},
 ])
 def test_enroll_validates_relay_answer(relay_api, override):
     relay_api.response_override = override
@@ -119,8 +165,8 @@ def test_enroll_validates_relay_answer(relay_api, override):
 
 def test_api_refuses_plain_http_off_loopback():
     with pytest.raises(RelayError):
-        api.check_url("http://relay.flowstatemcp.com/api/enroll")
-    assert api.check_url("https://relay.flowstatemcp.com/api/enroll")
+        api.check_url("http://api.fsmcp.com/api/enroll")
+    assert api.check_url("https://api.fsmcp.com/api/enroll")
     assert api.check_url("http://127.0.0.1:8/api/enroll")
 
 
@@ -145,7 +191,7 @@ def test_status_shows_handle_url_and_hides_token(enrolled, capsys):
     capsys.readouterr()
     assert _cli("relay", "status") == 0
     out = capsys.readouterr().out
-    assert "Handle: k7q3m2" in out and "https://k7q3m2.relay.flowstatemcp.com/mcp" in out
+    assert "Handle: k7q3m2" in out and "https://k7q3m2.fsmcp.com/mcp" in out
     assert "Tunnel: not running" in out and "CT check: not run yet" in out
     assert enrolled.token() not in out
 
@@ -156,11 +202,11 @@ def test_acme_dns01_issues_cert_for_local_key(enrolled, acme_srv, relay_api):
     r = acme.ensure_cert(st, sleep=lambda s: None)
     assert r["renewed"] and r["reason"] == "no certificate yet"
     info = C.cert_info(st.read_bytes(S.CERT))
-    assert info["names"] == ["k7q3m2.relay.flowstatemcp.com"]
+    assert info["names"] == ["k7q3m2.fsmcp.com"]
     assert info["spki_sha256"] == C.key_spki_sha256(st.read_bytes(S.TLS_KEY))
     # the relay was asked to publish exactly one TXT value for its own name, then remove it
-    assert relay_api.calls == [("set", "_acme-challenge.k7q3m2.relay.flowstatemcp.com"),
-                               ("clear", "_acme-challenge.k7q3m2.relay.flowstatemcp.com")]
+    assert relay_api.calls == [("set", "_acme-challenge.k7q3m2.fsmcp.com"),
+                               ("clear", "_acme-challenge.k7q3m2.fsmcp.com")]
     assert relay_api.txt == {}
     # private keys never left: the fake ACME only ever saw the public key in the CSR
     leaf = x509.load_pem_x509_certificate(acme_srv.issued[0])
@@ -347,7 +393,7 @@ def test_sni_parser_reads_python_client_hello():
 
     def client():
         try:
-            ctx.wrap_socket(a, server_hostname="k7q3m2.relay.flowstatemcp.com")
+            ctx.wrap_socket(a, server_hostname="k7q3m2.fsmcp.com")
         except (ssl.SSLError, OSError):
             pass
     t = threading.Thread(target=client)
@@ -363,7 +409,7 @@ def test_sni_parser_reads_python_client_hello():
     b.close()
     t.join(5)
     a.close()
-    assert out == ["k7q3m2.relay.flowstatemcp.com"]
+    assert out == ["k7q3m2.fsmcp.com"]
 
 
 # ---------------------------------------------------------------- Certificate Transparency
@@ -393,13 +439,21 @@ def _foreign_cert(ca, names):
 
 def test_ct_ok_when_all_certs_use_local_key(enrolled, ca):
     st = enrolled
-    fetch = _crtsh({101: (["k7q3m2.relay.flowstatemcp.com"], _local_cert(st, ca)),
-                    102: (["other.relay.flowstatemcp.com"], _foreign_cert(ca, ["other.relay.flowstatemcp.com"]))})
+    own = ["tunnel.fsmcp.com", "api.fsmcp.com"]
+    fetch = _crtsh({101: (["k7q3m2.fsmcp.com"], _local_cert(st, ca)),
+                    102: (["other.fsmcp.com"], _foreign_cert(ca, ["other.fsmcp.com"])),
+                    103: (own, _foreign_cert(ca, own)),          # the relay's own certificate
+                    104: (["k7q3m2.relay.flowstatemcp.com"],     # the old domain: not ours now
+                          _foreign_cert(ca, ["k7q3m2.relay.flowstatemcp.com"]))})
+    assert st.config()["hostname"] == "k7q3m2.fsmcp.com"
+    assert ct.queries(st.config()["hostname"]) == ["k7q3m2.fsmcp.com", "*.fsmcp.com"]
     r = ct.run_check(st, fetch)
     assert r["ok"] and r["alerts"] == [] and r["certificates"] == 1 and r["error"] is None
-    assert any("q=k7q3m2.relay.flowstatemcp.com" in u for u in fetch.calls)
-    assert any("q=%2A.relay.flowstatemcp.com" in u for u in fetch.calls)
-    assert not any("d=102" in u for u in fetch.calls)  # other people's certs not downloaded
+    assert any("q=k7q3m2.fsmcp.com" in u for u in fetch.calls)
+    assert any("q=%2A.fsmcp.com" in u for u in fetch.calls)
+    assert not any("flowstatemcp" in u for u in fetch.calls)
+    for other in ("d=102", "d=103", "d=104"):           # other names' certs not downloaded
+        assert not any(other in u for u in fetch.calls)
     assert S.tool_warning(st) is None
 
 
@@ -408,7 +462,7 @@ def test_ct_alerts_on_foreign_key_loudly(enrolled, ca, caplog, capsys):
     host = st.config()["hostname"]
     fetch = _crtsh({101: ([host], _local_cert(st, ca)),
                     202: ([host], _foreign_cert(ca, [host])),
-                    303: (["*.relay.flowstatemcp.com"], _foreign_cert(ca, ["*.relay.flowstatemcp.com"]))})
+                    303: (["*.fsmcp.com"], _foreign_cert(ca, ["*.fsmcp.com"]))})
     with caplog.at_level("ERROR"):
         r = ct.run_check(st, fetch)
     assert not r["ok"] and sorted(a["crtsh_id"] for a in r["alerts"]) == [202, 303]
@@ -460,10 +514,12 @@ def test_ct_due_daily(enrolled):
 
 
 def test_covers():
-    assert C.covers("*.relay.flowstatemcp.com", "k7q3m2.relay.flowstatemcp.com")
-    assert not C.covers("*.relay.flowstatemcp.com", "a.k7q3m2.relay.flowstatemcp.com")
-    assert not C.covers("*.flowstatemcp.com", "k7q3m2.relay.flowstatemcp.com")
-    assert C.covers("K7Q3M2.relay.flowstatemcp.com.", "k7q3m2.relay.flowstatemcp.com")
+    assert C.covers("*.fsmcp.com", "k7q3m2.fsmcp.com")
+    assert not C.covers("*.fsmcp.com", "a.k7q3m2.fsmcp.com")
+    assert not C.covers("*.flowstatemcp.com", "k7q3m2.fsmcp.com")
+    assert not C.covers("*.relay.flowstatemcp.com", "k7q3m2.fsmcp.com")
+    assert not C.covers("tunnel.fsmcp.com", "k7q3m2.fsmcp.com")   # the relay's own cert
+    assert C.covers("K7Q3M2.fsmcp.com.", "k7q3m2.fsmcp.com")
 
 
 def test_jws_signature_is_raw_64_bytes(enrolled):

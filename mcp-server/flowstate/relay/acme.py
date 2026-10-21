@@ -3,7 +3,7 @@
 The certificate's private key (tls-key.pem) and the ACME account key are generated and kept
 here. The only thing that leaves is (a) signed ACME requests and the CSR (public key only) to
 Let's Encrypt and (b) the DNS-01 TXT value to the relay, which publishes it at
-_acme-challenge.<handle>.relay.flowstatemcp.com and removes it afterwards.
+_acme-challenge.<handle>.fsmcp.com and removes it afterwards.
 
 Production: https://acme-v02.api.letsencrypt.org/directory
 Staging:    https://acme-staging-v02.api.letsencrypt.org/directory  (`--staging`)

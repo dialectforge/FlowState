@@ -7,14 +7,14 @@ implement exactly what is written here. "MUST", "SHOULD" and "MAY" are as in RFC
 ## 0. Goal and trust model
 
 A user's FlowState runs on their own computer. Cloud AI apps (claude.ai, ChatGPT, Cursor, ...)
-reach it at `https://<handle>.relay.flowstatemcp.com/mcp`. The relay forwards connections
+reach it at `https://<handle>.fsmcp.com/mcp`. The relay forwards connections
 but **cannot decrypt them**:
 
-- The TLS key for `<handle>.relay.flowstatemcp.com` is an ECDSA P-256 key generated on the
+- The TLS key for `<handle>.fsmcp.com` is an ECDSA P-256 key generated on the
   user's computer. It is never sent anywhere. The certificate comes from Let's Encrypt through
   ACME DNS-01, run by the agent itself; the relay only publishes a TXT value.
 - The relay routes client connections by the SNI in the TLS ClientHello and splices raw TCP
-  bytes. It MUST NOT terminate TLS for `*.relay.flowstatemcp.com`.
+  bytes. It MUST NOT terminate TLS for any `<handle>.fsmcp.com`.
 - Sign-in (OAuth 2.1 + PKCE, owner passphrase consent, per-app revoke, read-only) is done
   by FlowState on the user's computer, inside the end-to-end TLS session.
 
@@ -23,30 +23,41 @@ byte counts and timing. TLS 1.3 encrypts the server certificate, so the relay do
 see that.
 
 What the relay could do if it turned malicious: because it controls DNS for
-`relay.flowstatemcp.com`, it could obtain its own certificate for a user's hostname and
+`fsmcp.com`, it could obtain its own certificate for a user's hostname and
 intercept. That certificate would be in public Certificate Transparency logs; the agent checks
-CT daily and alerts the user (section 5). The relay operator MUST NOT obtain any certificate
-covering `*.relay.flowstatemcp.com` or any `<handle>.relay.flowstatemcp.com` (its own
-service certificates are for `tunnel.flowstatemcp.com` and `relay.flowstatemcp.com` only), so
-any such certificate in CT is, by definition, an alert.
+CT daily and alerts the user (section 6). The relay operator MUST NOT obtain any certificate
+covering `*.fsmcp.com` or any `<handle>.fsmcp.com` (its own service certificates are for
+`tunnel.fsmcp.com` and `api.fsmcp.com` only), so any such certificate in CT is, by
+definition, an alert.
+
+`fsmcp.com` is the relay's own domain: nothing else (website, mail) lives there, so the
+relay's DNS access can't reach `flowstatemcp.com`, and Let's Encrypt's per-domain limit for
+`fsmcp.com` is separate from `flowstatemcp.com`. (Protocol v1 drafts used
+`<handle>.relay.flowstatemcp.com`, `relay.flowstatemcp.com` and `tunnel.flowstatemcp.com`;
+nothing was ever deployed on those names.) Every name below is derived from that one
+domain: `RELAY_DOMAIN` in `flowstate/relay/__init__.py` (and `RELAY_DOMAIN` on the relay).
 
 ## 1. Endpoints
 
 | Name | Address | TLS terminated by |
 |---|---|---|
-| API | `https://relay.flowstatemcp.com/api/...` | relay (its own cert) |
-| Tunnel | `tunnel.flowstatemcp.com:443` | relay (its own cert) |
-| Public | `<handle>.relay.flowstatemcp.com:443` | **the user's agent**, never the relay |
+| API | `https://api.fsmcp.com/api/...` | relay (its own cert) |
+| Tunnel | `tunnel.fsmcp.com:443` | relay (its own cert) |
+| Public | `<handle>.fsmcp.com:443` | **the user's agent**, never the relay |
 
 The tunnel and public endpoints MAY share an IP address and port 443; the relay then
-dispatches on SNI (`tunnel.flowstatemcp.com` -> terminate locally; anything ending in
-`.relay.flowstatemcp.com` -> splice). The agent sends no ALPN on the tunnel; the relay MUST NOT
-require it there.
+dispatches on SNI (`tunnel.fsmcp.com` and `api.fsmcp.com` -> terminate locally;
+`<handle>.fsmcp.com` for a valid, unreserved handle -> splice; anything else -> close). The
+agent sends no ALPN on the tunnel; the relay MUST NOT require it there.
 
 Identifiers:
 
 - **handle**: `^[a-z0-9]{4,32}$`, random, assigned by the relay (e.g. `k7q3m2`). The public
-  hostname is exactly `<handle>.relay.flowstatemcp.com`.
+  hostname is exactly `<handle>.fsmcp.com`. Because the relay's own names sit next to the
+  handles, these labels are **reserved** and MUST never be a handle (the relay never issues,
+  splices or publishes a challenge for them; the agent refuses them on enroll):
+  `api tunnel www mail relay status admin app docs help`. The relay MAY reserve more.
+  Handles are never reused after revoke/unenroll.
 - **device token**: opaque, 32 to 512 printable non-space ASCII characters, at least 256 bits
   of randomness. The relay SHOULD store only a hash. One token per enrolled device.
 - **stream id**: `^[A-Za-z0-9_-]{16,128}$`, at least 128 bits of randomness, chosen by the
@@ -72,11 +83,35 @@ No authentication; the one-time code is the credential. Request:
 Success `200`:
 
 ```json
-{"handle": "k7q3m2", "device_token": "<token>", "hostname": "k7q3m2.relay.flowstatemcp.com"}
+{"handle": "k7q3m2", "device_token": "<token>", "hostname": "k7q3m2.fsmcp.com"}
 ```
 
-`hostname` is optional; if present it MUST equal `<handle>.relay.flowstatemcp.com`, otherwise
-the agent refuses the enrollment. Errors: `400 invalid_code`, `429 rate_limited`.
+`hostname` is optional; if present it MUST equal `<handle>.fsmcp.com`, otherwise
+the agent refuses the enrollment. Errors: `400 invalid_code`, `429 rate_limited`,
+`429 waitlisted` (below).
+
+**Signup cap (`429 waitlisted`).** The relay MAY limit enrollment (the hosted relay allows at
+most 40 enrolled devices during the beta, and at most 40 new enrollments in any rolling 7 days
+to stay under Let's Encrypt's 50 new certificates per registered domain per week). When over
+a cap it answers:
+
+```
+HTTP/1.1 429 Too Many Requests
+Retry-After: <seconds>
+
+{"error": "waitlisted", "reason": "weekly" | "active", "retry_after": <unix time>,
+ "message": "<plain words for people>"}
+```
+
+and MUST NOT use the code: it stays valid until at least `retry_after` (the hosted relay
+keeps it 7 days past that), and the relay records the code (only its hash, with timestamps,
+nothing personal) on a waitlist. `retry_after` is when the oldest enrollment in the 7-day
+window ages out; for the beta device cap, which only opens when a device is removed, a
+one-day hint. The agent shows, in plain words: "FlowState Relay is full this week, you're
+on the waitlist, try again after <local time of retry_after>", says the code was not used,
+saves nothing, and exits non-zero. If `retry_after` is missing or unusable it uses the
+`Retry-After` header. Certificate renewals (section 2.2 for an existing handle) are never
+capped. Any other `429` is shown as "busy, try again later".
 
 ### 2.2 `POST /api/dns-challenge`
 
@@ -84,18 +119,19 @@ the agent refuses the enrollment. Errors: `400 invalid_code`, `429 rate_limited`
 the token's own handle only.
 
 ```json
-{"action": "set",   "name": "_acme-challenge.k7q3m2.relay.flowstatemcp.com", "value": "<43 chars base64url>"}
-{"action": "clear", "name": "_acme-challenge.k7q3m2.relay.flowstatemcp.com"}
+{"action": "set",   "name": "_acme-challenge.k7q3m2.fsmcp.com", "value": "<43 chars base64url>"}
+{"action": "clear", "name": "_acme-challenge.k7q3m2.fsmcp.com"}
 ```
 
 The relay MUST:
 
 - answer `401 unauthorized` for an unknown or revoked token;
-- answer `403 not_your_name` unless `name` is exactly `_acme-challenge.<handle of this token>.relay.flowstatemcp.com`;
+- answer `403 not_your_name` unless `name` is exactly `_acme-challenge.<handle of this token>.fsmcp.com`
+  (in the `fsmcp.com` zone; never a reserved label and never any `flowstatemcp.com` name);
 - accept only `value` matching `^[A-Za-z0-9_-]{43}$` (a base64url SHA-256), else `400 bad_value`;
 - on `set`, replace any previous value for that name (one TXT value at a time) with a short TTL
   (60 s suggested), and answer `200 {"ok": true}` **only after** the record is served by all
-  authoritative name servers for `relay.flowstatemcp.com`;
+  authoritative name servers for `fsmcp.com`;
 - on `clear`, remove the record (idempotent: clearing a missing record is `200`);
 - remove any TXT record left behind after 1 hour;
 - rate limit (suggested: 20 `set` per handle per hour).
@@ -106,8 +142,8 @@ or failed.
 
 ## 3. Tunnel: control connection
 
-The agent opens TCP to `tunnel.flowstatemcp.com:443` and does a normal TLS 1.2+ handshake as a
-client, SNI `tunnel.flowstatemcp.com`, verifying the relay's certificate against the system
+The agent opens TCP to `tunnel.fsmcp.com:443` and does a normal TLS 1.2+ handshake as a
+client, SNI `tunnel.fsmcp.com`, verifying the relay's certificate against the system
 trust store. Over that TLS session both sides exchange **messages: one UTF-8 JSON object per
 line**, terminated by `\n`, at most 65 536 bytes including the newline. Every message has a
 string `type`. Unknown types MUST be ignored by both sides (forward compatibility); unknown
@@ -156,7 +192,7 @@ sends `{"type": "bye"}` and closes.
 
 ### 3.4 New client: `open` / `reject`
 
-When a client connects to `<handle>.relay.flowstatemcp.com:443`, the relay reads the first TLS
+When a client connects to `<handle>.fsmcp.com:443`, the relay reads the first TLS
 record (the ClientHello), extracts SNI, finds the control connection for that handle and sends:
 
 ```json
@@ -176,14 +212,14 @@ The agent either opens a data connection (3.5) or answers on the control connect
 The relay then closes the client connection. If no data connection arrives within 10 s, the
 relay closes the client connection and forgets the stream id.
 
-If no control connection exists for the handle, or SNI is missing or not under
-`.relay.flowstatemcp.com`, the relay closes the client connection. It MUST NOT answer with its
+If no control connection exists for the handle, or SNI is missing or not exactly
+`<handle>.fsmcp.com` for a valid, unreserved handle, the relay closes the client connection. It MUST NOT answer with its
 own certificate.
 
 ## 4. Tunnel: data connection
 
 For each `open` it accepts, the agent opens a **new** TCP + TLS connection to
-`tunnel.flowstatemcp.com:443` (same verification as the control connection) and sends exactly
+`tunnel.fsmcp.com:443` (same verification as the control connection) and sends exactly
 one line:
 
 ```json
@@ -203,7 +239,7 @@ pipe:
 3. The relay MUST NOT parse, modify, buffer beyond normal socket buffers, or log the spliced
    bytes. It MAY count bytes for quotas.
 
-Inside that pipe the agent acts as the **TLS server** for `<handle>.relay.flowstatemcp.com`,
+Inside that pipe the agent acts as the **TLS server** for `<handle>.fsmcp.com`,
 using the user's certificate and key, TLS 1.2 minimum, ALPN `http/1.1` only (clients that offer
 only `h2` fall back to no ALPN), no renegotiation. The decrypted HTTP/1.1 goes to FlowState's
 public-mode listener on `127.0.0.1` on the user's computer. The agent caps concurrent streams at
@@ -217,7 +253,7 @@ end-to-end TLS session. The relay can remove the outer layer only.
 - Key: ECDSA P-256, generated at enrollment, kept across renewals, file mode 0600.
 - ACME account key: separate ECDSA P-256 key, local, 0600. Account URL kept per directory.
 - Directory: Let's Encrypt production, or staging with `--staging`.
-- Order: one DNS identifier, `<handle>.relay.flowstatemcp.com`. Challenge: `dns-01`, TXT value
+- Order: one DNS identifier, `<handle>.fsmcp.com`. Challenge: `dns-01`, TXT value
   `base64url(SHA-256(token "." JWK-thumbprint(account key)))`, published through 2.2.
 - CSR: CN and SAN = the hostname, signed with the local key.
 - Checked at start and every 12 h; renewed when fewer than 30 days remain. A failed renewal is
@@ -227,7 +263,7 @@ end-to-end TLS session. The relay can remove the outer layer only.
 ## 6. Certificate Transparency watch (agent side, for reference)
 
 Daily, the agent queries `https://crt.sh/?q=<hostname>&output=json` and
-`https://crt.sh/?q=*.relay.flowstatemcp.com&output=json`, keeps entries whose names cover the
+`https://crt.sh/?q=*.fsmcp.com&output=json`, keeps entries whose names cover the
 hostname, downloads each new certificate (`https://crt.sh/?d=<id>`, at most 50 per run) and
 compares the SHA-256 of its SubjectPublicKeyInfo with the local key(s). Any mismatch is an
 alert: an ERROR log line, `flowstate relay status` (exit code 2), and a warning line at the top
@@ -249,8 +285,10 @@ of every `start_here` result until the user runs `flowstate relay ct-ack --id <c
 
 ## 8. Agent environment overrides (development only)
 
-`FLOWSTATE_RELAY_API` (API base URL), `FLOWSTATE_RELAY_TUNNEL` (`host:port` to dial),
-`FLOWSTATE_RELAY_TUNNEL_SNI` (SNI / name to verify, default `tunnel.flowstatemcp.com`),
+`FLOWSTATE_RELAY_DOMAIN` (default `fsmcp.com`; every name below derives from it),
+`FLOWSTATE_RELAY_API` (API base URL, default `https://api.fsmcp.com`), `FLOWSTATE_RELAY_TUNNEL`
+(`host:port` to dial, default `tunnel.fsmcp.com:443`),
+`FLOWSTATE_RELAY_TUNNEL_SNI` (SNI / name to verify, default `tunnel.fsmcp.com`),
 `FLOWSTATE_RELAY_CA_FILE` (extra CA bundle for API, tunnel and ACME),
 `FLOWSTATE_RELAY_ACME_DIRECTORY`, `FLOWSTATE_RELAY_DNS_WAIT`, `FLOWSTATE_RELAY_DIR`.
 Non-https URLs are refused except for `127.0.0.1`, `localhost` and `::1`.

@@ -9,9 +9,10 @@
     flowstate relay ct-check
     flowstate relay ct-ack --id CRTSH_ID
 
-For relay developers only: FLOWSTATE_RELAY_API, FLOWSTATE_RELAY_TUNNEL (host:port),
-FLOWSTATE_RELAY_TUNNEL_SNI, FLOWSTATE_RELAY_CA_FILE, FLOWSTATE_RELAY_ACME_DIRECTORY and
-FLOWSTATE_RELAY_DIR point the agent somewhere else (https only, except loopback).
+For relay developers only: FLOWSTATE_RELAY_DOMAIN (default fsmcp.com), FLOWSTATE_RELAY_API,
+FLOWSTATE_RELAY_TUNNEL (host:port), FLOWSTATE_RELAY_TUNNEL_SNI, FLOWSTATE_RELAY_CA_FILE,
+FLOWSTATE_RELAY_ACME_DIRECTORY and FLOWSTATE_RELAY_DIR point the agent somewhere else (https
+only, except loopback).
 """
 
 import os
@@ -19,7 +20,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import API_BASE, TUNNEL_HOST, TUNNEL_PORT, RelayError
+from . import API_BASE, TUNNEL_HOST, TUNNEL_PORT, RelayError, RelayWaitlisted
 
 
 def say(msg: str) -> None:
@@ -61,7 +62,12 @@ def cmd_enroll(a) -> int:
     host, port, sni = _tunnel_env()
     ca = os.environ.get("FLOWSTATE_RELAY_CA_FILE")
     store.ensure_dir()  # refuses a git folder before anything goes over the network
-    got = api.enroll(base, a.code, api.client_context(ca))
+    try:
+        got = api.enroll(base, a.code, api.client_context(ca))
+    except RelayWaitlisted as e:
+        say(str(e))
+        say("No token or key was saved on this computer. Local FlowState keeps working as before.")
+        return 1
     store.save_enrollment(got["handle"], got["device_token"], api=base, tunnel_host=host,
                           tunnel_port=port, tunnel_sni=sni, staging=a.staging, ca_file=ca)
     acme.new_tls_key(store)

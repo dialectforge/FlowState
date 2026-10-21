@@ -2,7 +2,7 @@
 
 Every publicly trusted certificate is logged in CT. Once a day the agent asks crt.sh for
 every certificate that covers this computer's relay hostname (exact name and the
-`*.relay.flowstatemcp.com` wildcard), downloads each new one and compares its public key with
+`*.fsmcp.com` wildcard), downloads each new one and compares its public key with
 the local key(s). A certificate made with any other key means someone else (for example
 whoever controls the relay's DNS) got a certificate for the hostname and could read relay
 traffic: it is logged as an ERROR, kept in ct.json and shown at the top of `start_here` and

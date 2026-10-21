@@ -1,6 +1,7 @@
 """The relay's HTTPS API (standard library only). Two calls:
 
     POST /api/enroll         {"code"}                     -> {"handle", "device_token", "hostname"}
+                             429 {"error": "waitlisted", "retry_after"}: relay full, code NOT used
     POST /api/dns-challenge  {"action": "set"|"clear", "name", "value"?}   (Bearer device token)
 
 The relay can only ever publish the `_acme-challenge` TXT value the agent hands it, for the
@@ -10,13 +11,15 @@ agent's own handle; it never sees a private key. See docs/relay-protocol.md sect
 import json
 import re
 import ssl
+import time
 import urllib.error
 import urllib.request
+from datetime import datetime
 from typing import Optional
 from urllib.parse import urlparse
 
 from .. import __version__
-from . import HOST_SUFFIX, RelayError
+from . import HOST_SUFFIX, RESERVED_HANDLES, RelayError, RelayWaitlisted
 
 AGENT = f"flowstate/{__version__}"
 HANDLE_RE = re.compile(r"^[a-z0-9]{4,32}$")
@@ -68,17 +71,43 @@ def http_request(method: str, url: str, body: Optional[bytes] = None,
         raise RelayError(f"could not reach {urlparse(url).hostname}: {reason}") from None
 
 
+def _retry_time(data: dict, headers, now: Optional[float] = None) -> Optional[float]:
+    """When to try again: the body's `retry_after` (unix time), else the Retry-After header
+    (seconds). None if neither is usable. Capped at 60 days so a bad value can't confuse."""
+    now = time.time() if now is None else now
+    ts = data.get("retry_after")
+    if not isinstance(ts, (int, float)) or isinstance(ts, bool):
+        try:
+            ts = now + int(str((headers or {}).get("Retry-After", "")).strip())
+        except ValueError:
+            return None
+    return float(ts) if now - 60 <= ts <= now + 60 * 86400 else None
+
+
+def waitlisted_message(retry_after: Optional[float]) -> str:
+    when = (datetime.fromtimestamp(retry_after).astimezone().strftime("%A %Y-%m-%d %H:%M %Z")
+            if retry_after else "a few days")
+    return (f"FlowState Relay is full this week, you're on the waitlist, try again after {when}. "
+            "Your enrollment code was not used, so keep it and run the same command again then.")
+
+
 def _json_call(method, url, payload, token=None, ctx=None) -> dict:
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    status, _, body = http_request(method, url, json.dumps(payload).encode(), headers, ctx)
+    status, rheaders, body = http_request(method, url, json.dumps(payload).encode(), headers, ctx)
     try:
         data = json.loads(body) if body else {}
     except ValueError:
         data = {}
     if status >= 400:
         err = data.get("error") if isinstance(data, dict) else None
+        if status == 429 and err == "waitlisted":
+            when = _retry_time(data, rheaders)
+            raise RelayWaitlisted(waitlisted_message(when), when)
+        if status == 429:
+            raise RelayError("the relay is busy or you tried too often (429); wait a while and "
+                             "try again" + (f" ({str(err)[:80]})" if err else ""))
         raise RelayError(f"relay answered {status}" + (f" ({str(err)[:80]})" if err else ""))
     if not isinstance(data, dict):
         raise RelayError("relay answered with something that is not a JSON object")
@@ -93,7 +122,7 @@ def enroll(api_base: str, code: str, ctx: Optional[ssl.SSLContext] = None) -> di
     data = _json_call("POST", check_url(api_base.rstrip("/") + "/api/enroll"),
                       {"code": code, "agent": AGENT, "protocol": 1}, ctx=ctx)
     handle, token = data.get("handle"), data.get("device_token")
-    if not isinstance(handle, str) or not HANDLE_RE.match(handle):
+    if not isinstance(handle, str) or not HANDLE_RE.match(handle) or handle in RESERVED_HANDLES:
         raise RelayError("relay returned an invalid handle")
     if not isinstance(token, str) or len(token) < 32 or len(token) > 512 or not token.isprintable() \
             or any(c.isspace() for c in token):

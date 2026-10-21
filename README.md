@@ -311,8 +311,8 @@ calls.** The relay is off by default. Nothing in it runs until you enroll.
 
 If you want claude.ai, ChatGPT or Cursor to reach the FlowState on your computer, and you don't
 want to set up your own domain and Cloudflare Tunnel ([docs/REMOTE-ACCESS.md](docs/REMOTE-ACCESS.md)),
-the relay agent connects out to `relay.flowstatemcp.com`, an optional hosted service by
-DialectForge. Your apps then use `https://<handle>.relay.flowstatemcp.com/mcp`.
+the relay agent connects out to `tunnel.fsmcp.com`, an optional hosted service by
+DialectForge on its own domain, `fsmcp.com`. Your apps then use `https://<handle>.fsmcp.com/mcp`.
 
 The relay can't read your traffic. The TLS key for your address is made on your computer and
 never leaves it. Your computer gets its own Let's Encrypt certificate (the relay only publishes
@@ -329,6 +329,11 @@ gets a certificate for your address.
 <venv python> -m flowstate relay disable                  # stop (keeps keys); `enable` to turn back on
 <venv python> -m flowstate relay forget                   # delete the device token, keys and certificate
 ```
+
+During the beta the relay has room for a limited number of computers (and at most 40 new
+ones a week, to stay within Let's Encrypt's limits). If it is full, `relay enroll` says so
+in plain words ("FlowState Relay is full this week, you're on the waitlist, try again after
+<time>"), saves nothing, and your code still works when you try again after that time.
 
 The relay uses the Python package `cryptography`, which comes with `mcp` today. The wire
 protocol is in [docs/relay-protocol.md](docs/relay-protocol.md).
