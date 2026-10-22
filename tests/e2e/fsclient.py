@@ -14,7 +14,8 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-PY = str(REPO / ".venv" / "bin" / "python") if (REPO / ".venv" / "bin" / "python").exists() else sys.executable
+_VENV_PY = [REPO / ".venv" / "bin" / "python", REPO / ".venv" / "Scripts" / "python.exe"]
+PY = next((str(p) for p in _VENV_PY if p.exists()), sys.executable)
 
 
 GUARD_SITE = REPO / "tests" / "guard_site"     # sitecustomize: refuses to touch the real folders
@@ -55,6 +56,15 @@ def sandbox_env(root: Path, extra: dict = None) -> dict:
         "PYTHONPATH": os.pathsep.join([str(GUARD_SITE), str(REPO / "mcp-server")]),
         "PYTHONDONTWRITEBYTECODE": "1",
     })
+    gitconfig = root / "home" / ".gitconfig"     # a user's own git identity (data-git commits);
+    if not gitconfig.exists():                    # macOS git guesses one, Git for Windows doesn't
+        gitconfig.write_text("[user]\n\tname = FlowState e2e\n\temail = e2e@flowstate.invalid\n",
+                             encoding="utf-8")
+    if os.name == "nt":                             # Windows reads these, not HOME
+        for d, v in (("home", "USERPROFILE"), ("home/AppData/Local", "LOCALAPPDATA"),
+                     ("home/AppData/Roaming", "APPDATA")):
+            (root / d).mkdir(parents=True, exist_ok=True)
+            env[v] = str(root / d)
     if extra:
         env.update(extra)
     return env

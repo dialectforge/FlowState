@@ -2,21 +2,23 @@
 """FlowState end-to-end mock project test ("Lakeside Bakery ordering app").
 
 Starts the real FlowState server from this checkout (one stdio process per app window, plus
-the streamable-HTTP transport) on a brand-new throwaway folder under /tmp, and drives it only
+the streamable-HTTP transport) on a brand-new throwaway folder in the system temp folder, and drives it only
 with real MCP tool calls, the way Claude Code, Cursor and Grok do. Four agents work at once:
 claude-code (two windows), cursor (stdio) and grok (HTTP, its own app key). Thirteen scenarios,
 each pass/fail with evidence; every tool and every action it offers is called at least once.
 
     .venv/bin/python tests/e2e/run_e2e.py              # everything (about 4 minutes)
-    .venv/bin/python tests/e2e/run_e2e.py --keep       # keep the /tmp folder to look at
+    .venv/bin/python tests/e2e/run_e2e.py --keep       # keep the temp folder to look at
+    .venv/Scripts/python.exe tests/e2e/run_e2e.py      # Windows (PowerShell or cmd)
     .venv/bin/python tests/e2e/run_e2e.py --skip-upgrade   # no v2.3.0 worktree
 
 Nothing here touches ~/.flowstate, the per-OS FlowState folders, a real database or a real
-token: every FlowState path (and HOME) points into the /tmp folder, which is deleted at the
+token: every FlowState path (and HOME) points into the temp folder, which is deleted at the
 end unless --keep, and every server process loads tests/guard_site (it refuses, and
 records, any touch of the real folders; scenario 11 checks that). `flowstate approve` is
-only ever run in a new session without a terminal, or in a pseudo-terminal of its own, so
-it never prompts on yours. Only servers this script started are stopped, by their own PIDs.
+only ever run without a terminal (POSIX: a new session; Windows: a console with no window),
+or in a terminal of its own (a pseudo-terminal; Windows: a hidden console of its own, typed
+into by tests/conin_typist.py), so it never prompts on yours (tests/terminal_run.py). Only servers this script started are stopped, by their own PIDs.
 Writes the report to <tmp>/report.md and prints it.
 """
 import argparse
@@ -29,6 +31,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -39,6 +42,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # tests/: fsa_test_keys
 from fsclient import (PY, REPO, HttpClient, StdioClient, ToolError, guard_log, real_dirs,  # noqa: E402
                       sandbox_env, wait_port)
+from terminal_run import run_in_terminal, run_no_terminal  # noqa: E402
 
 P = "Lakeside Bakery"
 SHARED = "Bakery Shared Auth"
@@ -212,40 +216,17 @@ class World:
         return Agent(label, HttpClient(self.url, token, app))
 
     def cli_no_terminal(self, *args, stdin=None, env=None):
-        """`flowstate ...` the way an agent's shell runs it: a new session with no controlling
-        terminal (so it can never prompt on the terminal this script runs in), stdin piped."""
-        r = subprocess.run([PY, "-m", "flowstate", *args], env=env or self.env, cwd=str(REPO), input=stdin,
-                           capture_output=True, text=True, timeout=120, start_new_session=True)
+        """`flowstate ...` the way an agent's shell runs it: no terminal it could prompt on
+        (POSIX: a new session; Windows: a console with no window), stdin piped."""
+        r = run_no_terminal([PY, "-m", "flowstate", *args], input=stdin, env=env or self.env,
+                            cwd=str(REPO), timeout=120)
         return r.returncode, r.stdout + r.stderr
 
     def cli_in_terminal(self, args, answers, env=None):
-        """`flowstate ...` with a pseudo-terminal as its controlling terminal (as when the user
-        types it), answering each "Type ..." prompt in turn. (exit code, what it showed)"""
-        import pty
-        import select
-        import warnings
-        with warnings.catch_warnings():   # forkpty in a threaded process: the child execs at once
-            warnings.simplefilter("ignore", DeprecationWarning)
-            pid, master = pty.fork()
-        if pid == 0:
-            os.execve(PY, [PY, "-m", "flowstate", *args], env or self.env)
-        seen, todo, deadline = b"", list(answers), time.monotonic() + 120
-        try:
-            while time.monotonic() < deadline:
-                if select.select([master], [], [], 0.2)[0]:
-                    try:
-                        data = os.read(master, 4096)
-                    except OSError:
-                        break
-                    if not data:
-                        break
-                    seen += data
-                    if todo and seen.count(b"Type ") > len(answers) - len(todo):
-                        os.write(master, todo.pop(0).encode() + b"\n")
-            _, status = os.waitpid(pid, 0)
-        finally:
-            os.close(master)
-        return os.waitstatus_to_exitcode(status), seen.decode(errors="replace")
+        """`flowstate ...` in a terminal of its own (as when the user types it: a pseudo-terminal;
+        Windows: a console), answering each "Type ..." prompt in turn. (exit code, what it showed)"""
+        return run_in_terminal([PY, "-m", "flowstate", *args], answers, env=env or self.env,
+                               cwd=str(REPO), timeout=120)
 
     def cli(self, *args, env=None):
         r = subprocess.run([PY, "-m", "flowstate", *args], env=env or self.env, cwd=str(REPO),
@@ -287,12 +268,10 @@ class World:
 
 
 def real_paths_snapshot():
-    """mtimes of the real FlowState places, to prove the test didn't touch them."""
-    home = Path.home()
-    cands = [home / ".flowstate", home / "Library" / "Application Support" / "flowstate",
-             home / ".local" / "share" / "flowstate", home / ".config" / "flowstate"]
+    """mtimes of the real FlowState places (the guard's list, with Windows' %LOCALAPPDATA% and
+    %APPDATA% folders), to prove the test didn't touch them. Only stat(), never opened."""
     snap = {}
-    for c in cands:
+    for c in map(Path, real_dirs()):
         if c.exists():
             for p in [c, *c.rglob("*")][:2000]:
                 try:
@@ -300,6 +279,43 @@ def real_paths_snapshot():
                 except OSError:
                     pass
     return snap
+
+
+# Files a FlowState already running on this computer (the user's own HTTP server, relay agent)
+# rewrites by itself: the relay heartbeat and its log, the OAuth / app-key database.
+LIVE_WRITES = ("status.json", "relay-agent.log", "remote-auth.db", "remote-auth.db-journal",
+               "remote-auth.db-wal", "remote-auth.db-shm")
+
+
+def live_flowstate_running() -> bool:
+    """Is the user's own FlowState HTTP server up (default port 8766, on localhost or this
+    computer's LAN address)? Only a connect, no request."""
+    try:
+        hosts = {"127.0.0.1", *socket.gethostbyname_ex(socket.gethostname())[2]}
+    except OSError:
+        hosts = {"127.0.0.1"}
+    for h in hosts:
+        try:
+            with socket.create_connection((h, 8766), timeout=0.5):
+                return True
+        except OSError:
+            pass
+    return False
+
+
+def real_changes(before, after, live):
+    """(changed by this run, changed by the live FlowState). With a live FlowState running, its
+    own heartbeat files (LIVE_WRITES) are set apart, and so is a folder whose only change is
+    one of them coming or going. Everything else counts. The real-data guard is the other
+    proof: it records any open of the real folders by every process this test starts."""
+    changed = sorted(k for k in set(before) | set(after) if before.get(k) != after.get(k))
+    if not live:
+        return changed, []
+    own = [k for k in changed if Path(k).name not in LIVE_WRITES]
+    dirs = [k for k in own if k in before and k in after and Path(k).is_dir()
+            and not any(o.startswith(k + os.sep) for o in own if o != k)]
+    test = [k for k in own if k not in dirs]
+    return test, sorted(set(changed) - set(test))
 
 
 # ============================================================================ scenarios
@@ -311,7 +327,7 @@ def s1_fresh(W):
             isinstance(r, str) and "no project given" in r and "Lakeside" not in r, r)
     R.check(1, "an empty database says there are no projects yet (no bare 'Projects:')",
             isinstance(r, str) and "no projects yet" in r and not r.rstrip().endswith("Projects:"), r)
-    R.check(1, "the database was created inside the /tmp sandbox", W.db.exists(), str(W.db))
+    R.check(1, "the database was created inside the temp sandbox", W.db.exists(), str(W.db))
     r = cc1.call("manage_projects", action="create", name=P,
                  description="Online ordering app for Lakeside Bakery: menu, cart, pickup slots, card payments")
     R.check(1, "manage_projects create returns the project with a receipt",
@@ -559,7 +575,7 @@ def s2_day(W):
     R.check(2, "manage_files attach is refused over HTTP (as described)", err(r), r)
     r = grok.call("manage_data_git", action="status")
     R.check(2, "manage_data_git is refused over HTTP (as described)", err(r), r)
-    # data git on the sandbox data folder; the 'remote' is a bare repo in /tmp (no network)
+    # data git on the sandbox data folder; the 'remote' is a bare repo in the sandbox (no network)
     bare = W.root / "remote.git"
     subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
     r = cc1.call("manage_data_git", action="status")
@@ -1158,9 +1174,9 @@ def s10_upgrade(W, skip):
     if skip:
         R.check(10, "skipped (--skip-upgrade)", False, "not run")
         return
-    wt = Path("/tmp/fs-230")
+    wt = W.root / "fs-230"                 # inside the sandbox (an absolute path on every OS)
     if wt.exists():
-        R.check(10, "/tmp/fs-230 must not exist already", False, "exists; not touching it")
+        R.check(10, f"{wt} must not exist already", False, "exists; not touching it")
         return
     root = W.root / "upgrade"
     env = sandbox_env(root, {"FLOWSTATE_TOOLS": "full"})
@@ -1358,7 +1374,7 @@ def s11_edges(W):
             W.q("PRAGMA integrity_check")[0]["integrity_check"] == "ok", "")
     R.check(11, "a repeat right after a restart is saved again (documented: the repeat check is in memory)",
             n == 2, f"{n} rows")
-    # --db: where do attachments go? (HOME is the sandbox, so the per-OS default is in /tmp too)
+    # --db: where do attachments go? (HOME is the sandbox, so the per-OS default is in it too)
     env = sandbox_env(W.root / "dbflag", {"FLOWSTATE_TOOLS": "full"})
     for k in ("FLOWSTATE_DB", "FLOWSTATE_HOME"):
         env.pop(k)
@@ -1598,11 +1614,19 @@ def s13_approvals(W):
     (relay / "relay.json").write_text(json.dumps({"version": 1, "handle": "e2e-bakery",
                                                   "hostname": "e2e-bakery.fsmcp.com", "enabled": True}))
     (relay / "device-token").write_text("fake-device-token-for-e2e\n")
-    tid = todo("Flyer while the keys are placeholders")
-    r = cursor.call("manage_memory", action="delete", project=P, record_type="todo", record_id=tid)
-    R.check(13, "relay enrolled but the release keys are still placeholders: no link, the terminal line",
+    nenv = dict(W.env, FS_TEST_PATCH=json.dumps({"flowstate.approvals": {"FSA_PUBLIC_KEYS": {"fsa-1": None, "fsa-2": None}}}))
+    nk = StdioClient(nenv, "Cursor", log_path=W.logs / "no-keys-agent.log")
+    W.started.append(nk.proc)
+    tid = todo("Flyer while no keys are pinned")
+    r = Agent("no-keys", nk).call("manage_memory", action="delete", project=P, record_type="todo", record_id=tid)
+    nk.close()
+    R.check(13, "relay enrolled but no keys pinned (a build without them): no link, the terminal line",
             "flowstatemcp.com" not in r.get("next", "") and "flowstate approve" in r.get("next", ""), r)
     placeholder_item = r.get("delete_requested")
+    tid = todo("Flyer with the release keys pinned")
+    r = cursor.call("manage_memory", action="delete", project=P, record_type="todo", record_id=tid)
+    R.check(13, "relay enrolled and the release keys pinned (this build): the answer is the phone link",
+            "https://flowstatemcp.com/approve/e2e-bakery/" in r.get("next", ""), r)
     key, jwk = make_key()
     penv = dict(W.env, FS_TEST_PATCH=json.dumps({"flowstate.approvals": {"FSA_PUBLIC_KEYS": {"fsa-1": jwk, "fsa-2": None}}}))
     ph = StdioClient(penv, "Cursor", log_path=W.logs / "phone-agent.log")
@@ -1642,8 +1666,8 @@ def s13_approvals(W):
         opn = lambda g, i=item: hc.post(f"{base}/approve/{i}/open", headers=hdr, content=json.dumps({"grant": g}))  # noqa: E731
         r0 = hc.post(f"http://127.0.0.1:{W.port}/approve/{item}/open", headers={**hdr, "origin": f"http://127.0.0.1:{W.port}"},
                      content=json.dumps({"grant": sign(key, claims(item, nonce, handle="e2e-bakery"))}))
-        R.check(13, "a FlowState with the placeholder keys refuses every grant",
-                r0.status_code == 403 and r0.json().get("error") == "phone_approvals_unavailable", r0.text)
+        R.check(13, "a FlowState with the pinned release keys refuses a grant signed by any other key",
+                r0.status_code == 403 and r0.json().get("error") not in (None, "phone_approvals_unavailable"), r0.text)
         t = int(time.time())
         for label, grant, code_ in (
                 ("expired", sign(key, claims(item, nonce, handle="e2e-bakery", iat=t - 400, exp=t - 100)), "grant_expired"),
@@ -1728,7 +1752,7 @@ def deferred_window(W):
 
 
 # ============================================================================ report
-def report(W, started, real_before, real_after):
+def report(W, started, test_changed, live_changed):
     lines = ["# FlowState 2.4 end-to-end mock project test", "",
              f"Run {started:%Y-%m-%d %H:%M} local, branch {git('rev-parse', '--abbrev-ref', 'HEAD')} "
              f"at {git('rev-parse', '--short', 'HEAD')}; {R.calls} real MCP tool calls.", "",
@@ -1754,8 +1778,11 @@ def report(W, started, real_before, real_after):
     for k in ("cdn_result", "undo_other_window", "partial_undo", "old_item_result", "big_result"):
         if hasattr(W, k):
             lines.append(f"- {k}: {short(getattr(W, k), 400)}")
-    changed = sorted(k for k in set(real_before) | set(real_after) if real_before.get(k) != real_after.get(k))
-    lines += ["", f"Real FlowState folders untouched: {not changed}" + (f" (changed: {changed[:5]})" if changed else "")]
+    lines += ["", f"Real FlowState folders untouched: {not test_changed}"
+              + (f" (changed: {test_changed[:5]})" if test_changed else "")]
+    if live_changed:
+        lines.append(f"(The FlowState already running on this computer rewrote its own heartbeat files meanwhile, "
+                     f"not this test: {live_changed[:6]})")
     return "\n".join(lines)
 
 
@@ -1765,14 +1792,15 @@ def git(*a):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--keep", action="store_true", help="keep the /tmp folder")
+    ap.add_argument("--keep", action="store_true", help="keep the temp folder")
     ap.add_argument("--skip-upgrade", action="store_true")
     ap.add_argument("--root", default=None)
     args = ap.parse_args()
-    root = Path(args.root or f"/tmp/fs-e2e-{os.getpid()}")
+    root = Path(args.root or Path(tempfile.gettempdir()) / f"fs-e2e-{os.getpid()}").resolve()
     if root.exists():
         sys.exit(f"{root} exists; pick another --root")
     real_before = real_paths_snapshot()
+    live = live_flowstate_running()
     os.environ["FS_E2E_GUARD_LOG"] = str(root / "guard.log")
     started = datetime.now()
     W = World(root)
@@ -1792,9 +1820,9 @@ def main():
     refused = guard_log(root).read_text().strip() if guard_log(root).exists() else ""
     R.check(11, "real-data guard: no server process tried to touch the real FlowState folders during the run",
             not refused, short(refused, 300))
-    changed = sorted(k for k in set(real_before) | set(real_after) if real_before.get(k) != real_after.get(k))
+    changed, live_changed = real_changes(real_before, real_after, live or live_flowstate_running())
     R.check(11, "the real FlowState folders are unchanged after the run", not changed, changed[:5])
-    text = report(W, started, real_before, real_after)
+    text = report(W, started, changed, live_changed)
     (root / "report.md").write_text(text)
     print("\n" + text)
     if not args.keep:
