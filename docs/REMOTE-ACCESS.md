@@ -171,3 +171,39 @@ Below, `<venv python> -m flowstate ...` can also be written `flowstate ...` with
 8. **To switch it all off:** stop the tunnel (`cloudflared service uninstall`) or delete the
    DNS record. FlowState on your computer keeps working. To cut off one app:
    `flowstate remote revoke --client <id>`. `flowstate remote status` shows what's set up.
+
+## 4. Your review page through the tunnel
+
+With your own tunnel (and no relay), you can also see and decide what's waiting for you from
+any browser, your phone included:
+
+`https://flowstate.example.com/review/tunnel`
+
+- **Sign in** with the owner passphrase (the one from `flowstate remote passphrase`, the same
+  as on the consent page). No passphrase set: the page says to run that command first. 5 wrong
+  passphrases within 15 minutes lock it (and the consent page) for up to 15 minutes, and one
+  address gets at most 10 tries per 15 minutes.
+- **What you can do there:** everything the review page on your computer does (the
+  `flowstate review-page` page): approve, edit or reject every waiting item, including the
+  ones only you may decide (deletes and turning review off while approvals are on, and "Did you
+  say this yourself?"); set the review mode; pause or resume an app; "Who did what" with Undo.
+  Each decision is recorded as made on the "tunnel page" and listed in `approval_log`.
+- **The session:** a cookie `__Host-fs_review_tunnel` (Secure, HttpOnly, SameSite=Strict,
+  Path=/). It ends after 15 minutes without use, 1 hour at most, when you press Sign out, or
+  when FlowState restarts. Every button sends a CSRF token, and FlowState refuses a form whose
+  `Origin` isn't your tunnel's own address (a missing or `null` Origin too). The page has the
+  phone pages' strict headers (no scripts, no inline styles, no framing, no caching, no
+  referrer) and the review page's look, sized for a phone.
+- **Why your AI apps' tokens don't open it:** the page is for you deciding, so only the
+  passphrase opens it. The LAN token, per-app tokens (`remote add-client`), OAuth tokens
+  (claude.ai, ChatGPT) and LAN app keys are all ignored there: a request carrying one is
+  treated exactly like one with none. An agent that holds a token for `/mcp` can't approve
+  its own work through this page.
+- **Where it exists:** only on the public listener (`--public-url`). The relay has its own
+  signed-in phone list (`https://flowstatemcp.com/review/<handle>`), and on your computer the
+  "FlowState review" desktop shortcut (made by `setup_flowstate.py`) or `flowstate
+  review-page` opens the 127.0.0.1 page. The LAN and relay listeners answer 404 on
+  `/review/tunnel`.
+- **Optional second lock:** you can add `/review/tunnel` to the Cloudflare Access rule from
+  section 2 (step 7), next to `/consent`. AI apps never call it, so a login page there breaks
+  nothing.

@@ -228,7 +228,8 @@ prompt `flowstate-start`.
 **Your controls (command line and browser)**
 - **Local review page**: a small page in your browser, on this computer only: review queue,
   review mode, pause apps, "Who did what". Click the link in your AI's answer (see "Where to see
-  what's waiting for you"), or run `flowstate review-page` (one-time link).
+  what's waiting for you"), double-click the "FlowState review" shortcut setup puts on your
+  desktop, or run `flowstate review-page` (one-time link).
 - **Per-app activity log and pause**: see which app did what (`flowstate apps list` /
   `apps activity`) and pause one app's writes (`apps pause --app NAME`). A paused app can still read.
 - **Markdown export and import**: `export-md` writes a readable copy of a project; `import-md`
@@ -322,7 +323,9 @@ you have turned approvals on.
    and the review page opens; no command needed. FlowState starts the page itself the first
    time a link is needed, one per computer (another FlowState on the same computer reuses it),
    on 127.0.0.1 only; if 8770 is taken it picks a free port. `FLOWSTATE_REVIEW_PORT` sets the
-   port (`0` any free one, `off` no page or link). `flowstate review-page` still works as before.
+   port (`0` any free one, `off` no page or link). `flowstate review-page` still works as before,
+   and so does the "FlowState review" shortcut `setup_flowstate.py` puts on your desktop (it runs
+   that command; if FlowState already has the page open, it opens that one).
 
    `127.0.0.1` always means "this computer", so on any other computer that link would open
    that computer itself, not yours. FlowState therefore gives it only to apps it can see are on
@@ -330,16 +333,19 @@ you have turned approvals on.
    connect from the same computer. Apps on another computer (your Mac through the relay, or
    another computer on your network) never get it. They get your phone link (3) if you have
    the relay, and otherwise a plain note: ask your AI to show what's waiting (it shows the
-   list in the chat), or open the review page on the computer where FlowState runs
-   (`flowstate review-page` there). FlowState decides this from the connection itself, never
-   from anything the app says about itself.
+   list in the chat), or open the review page on the computer where FlowState runs (the
+   FlowState review shortcut, or `flowstate review-page`), or the tunnel review page (4) if you
+   have your own tunnel. FlowState decides this from the connection itself, never from anything
+   the app says about itself.
 3. **On your phone (relay users).** If the relay agent is set up, the brief and the walk's
    answer also have your own phone link, `https://flowstatemcp.com/review/<handle>` (your
    handle is your computer's relay name). It never changes, so you can bookmark it or add it
    to your home screen. When you tap it:
    - flowstatemcp.com asks you to sign in, if you aren't already, and checks the computer is
      yours;
-   - it asks your own FlowState for a fresh one-time code, then shows a **Continue** button;
+   - it asks your own FlowState for a fresh one-time code (with a 5-minute signed ticket only
+     the site can make, so nobody else can use up your hourly limit), then shows a **Continue**
+     button;
    - tap Continue: your phone goes to your own FlowState (`https://<handle>.fsmcp.com/review`)
      with a 5-minute signed pass. Your FlowState checks it with the site's public key (pinned
      in this release), uses up the one-time code, and shows the waiting list with Approve /
@@ -347,11 +353,16 @@ you have turned approvals on.
      what's in it.
 
    `flowstate approvals phone off` turns every phone link off.
+4. **Through your own tunnel (no relay).** If you run the public listener behind your own
+   tunnel (docs/REMOTE-ACCESS.md), open `https://<your tunnel>/review/tunnel` in any browser and
+   sign in with the owner passphrase. It is the same review page as on your computer, sized for
+   a phone, and decides everything that page can, the user-only items too. Your AI apps' tokens
+   don't open it; only the passphrase does.
 
 Who gets which: an app on the computer where FlowState runs gets 1 and 2 (and 3 with the
 relay); an app on another computer gets 1, and 3 with the relay. Every decision made in
-the chat walk or on the phone list is logged with how it was made (`chat` or `phone`); see
-`manage_history(action="list")`.
+the chat walk, on the phone list or on the tunnel page is logged with how it was made (`chat`,
+`phone` or `tunnel page`); see `manage_history(action="list")`.
 
 Honest limits:
 - The review page answers only on 127.0.0.1 and only to same-origin form posts carrying the

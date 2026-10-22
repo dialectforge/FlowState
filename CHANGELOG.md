@@ -11,7 +11,9 @@
 - Writes say what they saved, and a write that timed out is no longer a mystery (or a
   duplicate when the agent tries again).
 - See and decide what's waiting for you without a terminal: in the chat, from a link to the
-  review page on your computer, or (with the relay) on your phone. Nothing pops up unless you ask.
+  review page on your computer or the "FlowState review" shortcut on your desktop, (with the
+  relay) on your phone, or (with your own tunnel) on a passphrase page at
+  `https://<tunnel>/review/tunnel`. Nothing pops up unless you ask.
 - Four bugs fixed: timed-out writes, pre-restore backups pruned the same day, two windows of
   one app sharing a session, and undo that couldn't take back a new record or refused a
   whole change over one row. Then 14 more found by an end-to-end mock-project test (below).
@@ -181,14 +183,49 @@
 - **Your phone (relay users):** a link you can bookmark, `https://flowstatemcp.com/review/<handle>`,
   in the brief and the walk's answer (relay enrolled, phone links on; this release pins the
   site's keys). No code in the chat: the site signs you in and sends your phone to your own
-  FlowState's new `/review/start`, which makes a fresh one-use code (15 minutes; at most 10 open
-  and 30 an hour) and sends it back to the site; you tap Continue and the site sends your phone
+  FlowState's new `/review/start` with a 5-minute signed start ticket, which makes a fresh
+  one-use code (15 minutes; at most 10 open, 30 an hour per site user, one per ticket) and
+  sends it back to the site; you tap Continue and the site sends your phone
   to `/review` with a 5-minute signed grant (`action` `open_review`, `item` 0; same keys and
   checks as the approve page). The code is used up, and you get the list with Approve / Reject
   for 15 minutes (cookie HttpOnly, Secure, SameSite=Strict, path `/review`). Phone review off:
-  `/review/start` shows a short page saying so. Contract: `docs/APPROVALS.md` section 5.
-- Decisions in the chat walk and on the phone list go through the same user-only path as the
-  popup and are all logged with how they were made (`chat` / `phone`).
+  `/review/start` shows a short page saying so, and points to the desktop shortcut and, for
+  your own tunnel, the tunnel review page (the relay is one option). Contract:
+  `docs/APPROVALS.md` section 5.
+- **No lockout through `/review/start`.** It used to make a code for anyone who asked, 30 an
+  hour in total, so anyone could use up the hour and lock you out of phone review.
+  flowstatemcp.com now signs a start ticket for the signed-in owner (`action`
+  `start_review`, `item` 0, your site user id, a fresh nonce, 5 minutes; checked like every
+  grant, against this computer's own handle). Without a good ticket `/review/start` shows a
+  plain page ("Open the "Waiting for you" link from flowstatemcp.com again"; an expired one:
+  "This link expired after 5 minutes"), makes no code and counts nothing. Each ticket makes
+  one code; the hourly limit is per site user, with a 120-an-hour backstop for everyone.
+  The site must be updated first: an older FlowState ignores the ticket and works as before;
+  this FlowState with an older site shows the plain page until the site is updated.
+- **Your own tunnel: a review page.** The public listener (`--public-url`) now serves
+  `/review/tunnel`: sign in with the owner passphrase (the consent page's, with its lockout,
+  plus 10 tries per 15 minutes per address), then the same page as `flowstate review-page`,
+  sized for a phone, deciding everything it can, including deletes and "Did you say this
+  yourself?" items and turning review off while approvals are on. Session cookie
+  `__Host-fs_review_tunnel` (Secure, HttpOnly, SameSite=Strict; 15 minutes idle, 1 hour at
+  most; Sign out), a CSRF token on every form and same-origin checks; no scripts, no inline
+  styles. Your AI apps' tokens and keys don't open it. Only on the public listener: the LAN and
+  relay listeners answer 404. See `docs/REMOTE-ACCESS.md` section 4.
+- **A desktop shortcut.** `setup_flowstate.py` puts "FlowState review" on your desktop
+  (Windows `FlowState review.cmd`, macOS `FlowState review.command`, Linux
+  `flowstate-review.desktop`), which runs `flowstate review-page` with your setup's Python and
+  database. It never replaces a file of that name it didn't make; `--dry-run` only says what it
+  would do. `flowstate review-page` now opens the page FlowState already has open for your
+  database instead of failing on the busy port (another program on the port: any free one).
+- **Plainer "waiting for you" lines.** When a delete or a review-off waits for you and there is
+  no phone link, the agent now says: "Waiting for the user: ask them to open the FlowState
+  review shortcut on their desktop and approve it there (or run `flowstate approve <id>` in a
+  terminal)."; an app that came in through your tunnel names the tunnel page first. Apps on
+  another computer are told "on the computer where FlowState runs (the FlowState review
+  shortcut, or `flowstate review-page`), or on its tunnel review page if it has one".
+- Decisions in the chat walk, on the phone list and on the tunnel page go through the same
+  user-only path as the popup and are all logged with how they were made (`chat` / `phone` /
+  `tunnel page`).
 - Honest limits: a program on your own computer (an AI that runs commands or drives your browser)
   can open the 127.0.0.1 page too, as it could run `flowstate approve`. The phone list is
   protected by the site's sign-in and signing key: a leaked site signing key alone could open
@@ -275,7 +312,9 @@
   grants seen) and `approval_log` (every user-only decision). No row = approvals off.
   020 adds three nullable columns to `record_meta` (`source_set_by`, `source_set_model`,
   `source_set_at`: who set a source tag); older rows keep NULL. 021 adds `review_open_nonces`
-  (the phone review list's one-use codes; `/review/start` makes them).
+  (the phone review list's one-use codes; `/review/start` makes them). 022 adds two nullable
+  columns to it (`sub`: the site user whose start ticket made the code; `ticket`: a hash of
+  that ticket's nonce, so a ticket makes one code) and an index; older rows keep NULL.
 - Edit history rows for created records use the tool names `create/<type>` and
   `approve/<type>`. "Who did what" still lists each creation once.
 

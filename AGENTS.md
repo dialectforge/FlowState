@@ -95,8 +95,11 @@ adds a `flowstate` entry to each chosen config (everything else in the file is l
 is; a file it can't parse is refused and left untouched), with `--schedule-backups` adds a
 nightly backup to the OS scheduler (Windows Task Scheduler, macOS launchd, Linux systemd
 user timer or cron), with `--offsite-github` checks the repo is private and saves it for
-the nightly push, and with `--verify` starts the server exactly as the app will and calls
-`start_here`.
+the nightly push, puts a "FlowState review" shortcut on the desktop that opens the review page
+(Windows `FlowState review.cmd`, macOS `FlowState review.command`, Linux
+`flowstate-review.desktop`; a file of that name it didn't make is left alone; no desktop
+folder: skipped with a line), and with `--verify` starts the server exactly as the app will
+and calls `start_here`.
 
 Check: the output ends with `[verify] OK: ...` and `Done.`; exit code 0. Re-running is
 safe and reports `unchanged`.
@@ -124,7 +127,8 @@ All commands run with the venv Python: `<venv python> -m flowstate <command>`.
 | restore | `flowstate restore <backup file>` (into a new file, verified; `--to <new file>`) |
 | approvals (user) | `flowstate approvals` shows them; `approvals on [--project P]`: an AI's deletes and turning review off wait for the user (popup, phone link, terminal); `approvals off` asks for `y` on the terminal; `approvals phone on\|off`; `approvals popup add\|remove NAME` |
 | review queue (user) | `flowstate review` lists it; `flowstate approve <id> [<id> ...]` / `flowstate reject <id> [--reason ...]` ask for `y` on the terminal (never piped input; no terminal = refused) |
-| review page (user) | `flowstate review-page` (127.0.0.1:8770 only; opens the browser with a one-time link; includes "Who did what"). Without a command: the `http://127.0.0.1:<port>/` link in the brief and in `manage_review(action="walk")`'s answer, shown only to apps on the same computer (FlowState starts the page on first need, 127.0.0.1 only; `FLOWSTATE_REVIEW_PORT`) |
+| review page (user) | `flowstate review-page` (127.0.0.1:8770 only; opens the browser with a one-time link; includes "Who did what"), or the "FlowState review" desktop shortcut setup makes (runs that command; opens the page FlowState already has open, if any). Without a command: the `http://127.0.0.1:<port>/` link in the brief and in `manage_review(action="walk")`'s answer, shown only to apps on the same computer (FlowState starts the page on first need, 127.0.0.1 only; `FLOWSTATE_REVIEW_PORT`) |
+| tunnel review page (user, own tunnel) | `https://<your tunnel>/review/tunnel` on the public listener (`--public-url`), signed in with the owner passphrase (`flowstate remote passphrase`); the same page, user-only items included; agent tokens don't open it; see `docs/REMOTE-ACCESS.md` section 4 |
 | phone review list (user, relay) | the bookmarkable `https://flowstatemcp.com/review/<handle>` in the brief and the walk's answer when the relay is enrolled and phone links are on (`approvals phone on\|off`); see `docs/APPROVALS.md` section 5 |
 | per-app keys for the local/LAN HTTP server (user) | `flowstate keys add --name NAME [--read-only] [--workspace W]` (shows the key once) / `keys list` / `keys revoke --id ID` (or `--name NAME`) |
 | pause an app (user) | `flowstate apps list` / `apps pause --app NAME` / `apps resume --app NAME` |

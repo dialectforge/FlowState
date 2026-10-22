@@ -104,8 +104,11 @@ never guess or invent one. `manage_history(action="who", ...)` shows who did wha
   themselves. Otherwise (other apps, the relay) the answer says no boxes were shown and
   nothing was decided: show them the list (20 at a time; `next_page` for more) and the links
   (`review_page` on the computer where FlowState runs, given only to apps on that computer;
-  `phone` if they use the relay) and let them decide there. An app on another computer gets
-  no 127.0.0.1 link (it would open that computer itself); pass on what the answer says.
+  `phone` if they use the relay) and let them decide there. They can also open the
+  "FlowState review" shortcut on their desktop, or their tunnel review page
+  (`https://<tunnel>/review/tunnel`, owner passphrase) if they run their own tunnel. An app on
+  another computer gets no 127.0.0.1 link (it would open that computer itself); pass on what
+  the answer says.
 - **Writes come with a receipt** (`receipt.saved`). If a write times out, don't repeat it:
   the next FlowState answer says whether it saved.
 - **Delete only when the user wants something gone**: `manage_projects(action="delete" |

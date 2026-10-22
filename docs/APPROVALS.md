@@ -54,12 +54,27 @@ Whatever the approvals setting, the user can see and decide the whole review que
   public listener, a LAN peer elsewhere and unmarked requests are not this computer: no
   127.0.0.1 URL anywhere in the brief or the walk, and the page isn't started for them. They
   get the phone link when the relay is set up, and the text "on the computer where FlowState
-  runs (`flowstate review-page` there)" in the brief's line and the walk's `how_to_decide`.
+  runs (the FlowState review shortcut, or `flowstate review-page`), or on its tunnel review
+  page if it has one" in the brief's line and the walk's `how_to_decide`.
 - **Phone list (relay users):** the bookmarkable `https://flowstatemcp.com/review/<handle>`;
   section 5.
+- **Desktop shortcut:** `setup_flowstate.py` puts "FlowState review" on the desktop (Windows
+  `FlowState review.cmd`, macOS `FlowState review.command`, Linux `flowstate-review.desktop`).
+  It runs `flowstate review-page`; when a FlowState on the computer already serves this
+  database's page on that port, it opens that one.
+- **Tunnel review page (own tunnel, no relay):** `https://<your tunnel>/review/tunnel` on the
+  public listener, behind the owner passphrase; see docs/REMOTE-ACCESS.md section 4. It can
+  decide everything the local page can, user-only items included (path `tunnel page`).
 
-Decisions in the chat walk and on the phone list are all logged in `approval_log` (path `chat`
-or `phone`), user-only items or not. Honest limit: a program on the user's computer (an agent
+Decisions in the chat walk, on the phone list and on the tunnel page are all logged in
+`approval_log` (path `chat`, `phone` or `tunnel page`), user-only items or not.
+
+The one line an agent passes on when a user-only item waits and there is no phone link is
+`Waiting for the user: ask them to open the FlowState review shortcut on their desktop and
+approve it there (or run `flowstate approve <id>` in a terminal).` For an app that came in
+through this FlowState's own public listener it names the tunnel page first: `... ask them to
+approve it on their tunnel review page (https://<tunnel>/review/tunnel) or with the FlowState
+review shortcut on their desktop (or run `flowstate approve <id>` in a terminal).` Honest limit: a program on the user's computer (an agent
 that runs commands or drives the user's browser) can reach the 127.0.0.1 page, as it could run
 `flowstate approve`.
 
@@ -176,22 +191,49 @@ The link FlowState gives (in the brief's review-queue line and in the walk's pla
 
 1. **The site, bare link** `GET /review/<handle>` (no query): validate the handle; not signed
    in: `303` to `/signin?next=/review/<handle>`; the handle not an active device of the
-   account: the existing refusal page; else `303` to `https://<handle>.fsmcp.com/review/start`
-   (`Cache-Control: no-store`, `Referrer-Policy: no-referrer`). The site sees nothing about
-   the contents.
-2. **FlowState** `GET /review/start` (`review_phone.py`, on the HTTP app, so the relay reaches
-   it; GET only, `HEAD` and `POST` get 405). No sign-in here: a code is useless without a grant
-   that only the site signs, for the signed-in owner.
-   - Phone review available (relay enrolled, keys pinned, phone links not off): a FRESH one-use
-     code for the action `open_review` (43 url-safe characters, `secrets.token_urlsafe(32)`, in
-     `review_open_nonces`, valid 15 minutes), then `303` to
+   account: the existing refusal page; else `303` to
+   `https://<handle>.fsmcp.com/review/start?t=<ticket>` (`Cache-Control: no-store`,
+   `Referrer-Policy: no-referrer`). The site sees nothing about the contents.
+
+   **The start ticket** (2.4.0, task 38) is a JWS compact token signed exactly like the grants
+   in section 3 (same signing key, the pinned `FSA_PUBLIC_KEYS`, kids `fsa-1` / `fsa-2`):
+
+   - header `{"alg": "ES256", "kid": "fsa-1", "typ": "fsa+jwt"}` (kid = the site's signing kid)
+   - payload `{"iss": "https://flowstatemcp.com", "aud": "<handle>.fsmcp.com", "sub": "<site
+     user id>", "handle": "<handle>", "item": 0, "action": "start_review", "nonce": "<fresh
+     random base64url, 22-43 characters>", "iat": N, "exp": N + 300}`
+
+   FlowState checks it with the same code as every grant (`approvals.verify_start_ticket` ->
+   `_claims(ticket, handle, now, keys, "start_review", 0)`): pinned key and signature, times
+   (at most 5 minutes' life, 60 s clock skew), `iss`, `aud` and `handle` against this device's
+   own `relay.json` (never the request), `action`, `item` 0, a non-empty `sub`, and the nonce's
+   format. The action check keeps the kinds apart: an `open_review` or `approve_review` grant
+   is not a ticket, and a `start_review` ticket opens no list and approves nothing.
+2. **FlowState** `GET /review/start?t=<ticket>` (`review_phone.py`, on the HTTP app, so the
+   relay reaches it; GET only, `HEAD` and `POST` get 405). The ticket is its only sign-in.
+   - Phone review off or unavailable (checked first): a plain small page saying phone review
+     is off on this computer, pointing to the desktop shortcut / `flowstate review-page`, the
+     tunnel review page (`https://<your tunnel>/review/tunnel`, owner passphrase) for users with
+     their own tunnel, and the relay (`flowstate relay enroll`, `flowstate approvals phone on`)
+     as one more option. No code is made.
+   - No ticket, or one that fails any check above, or one already used here: a plain page in
+     the same style and headers, status `400` when it isn't even shaped like a ticket (checked
+     before any crypto or database work) and `403` otherwise. It says in plain words to open the
+     "Waiting for you" link from flowstatemcp.com again (an expired one: "This link expired after
+     5 minutes."). No code is made, nothing counts toward any limit, the ticket is never echoed,
+     and it isn't logged (the access log has the path without the query). No redirect, so no
+     loops.
+   - A good ticket: a FRESH one-use code for the action `open_review` (43 url-safe characters,
+     `secrets.token_urlsafe(32)`, in `review_open_nonces`, valid 15 minutes), then `303` to
      `https://flowstatemcp.com/review/<handle>?n=<code>`. The handle comes from this device's
      `relay.json`, never from the request (no open redirect).
-   - Limits (`approvals.start_nonce`): at most 10 codes made here open at once (making one more
-     expires the oldest), and at most 30 made per hour; then a plain `429` page
-     (`Retry-After: 3600`).
-   - Phone review off or unavailable: a plain small page saying phone review is off on this
-     computer and how to turn it on (`flowstate approvals phone on`). No code is made.
+   - Limits (`approvals.start_nonce`): each ticket makes at most one code (a hash of its nonce
+     is kept with the code, migration 022); at most 10 codes made here open at once (making
+     one more expires the oldest); at most 30 made per hour per site user (`sub`, stored with
+     each code); and 120 per hour for all users together, as a backstop (only reachable with
+     a leaked signing key, and it keeps the table small even then). Over a limit: a plain
+     `429` page (`Retry-After: 3600`). Codes from before 022 (no `sub`) count only toward the
+     120.
    - Headers: the `/review` page's (CSP `default-src 'none'; script-src 'self'; style-src
      'self'; connect-src 'self'; frame-ancestors 'none'`, `X-Frame-Options: DENY`), plus
      `Cache-Control: no-store` and `Referrer-Policy: no-referrer`.
@@ -231,9 +273,16 @@ refuses (for example a project delete without its exact name) is 409.
 
 ### 5c. Honest limits of the bookmark link
 
-- Anyone can make `/review/start` issue a code (within the limits above). The list's
-  protection is the site's sign-in plus its signing key: a leaked site signing key alone could
-  open the list on a reachable device. Per-item `/approve` links still need the one-use code
-  made on this computer for that item.
+- Only the site can make `/review/start` issue a code (it signs the ticket for the signed-in
+  owner), and each site user has their own hourly limit, so hitting `/review/start` without a
+  ticket can't lock the owner out. The list's protection is the site's sign-in plus its
+  signing key: a leaked site signing key alone could open the list on a reachable device (and
+  fill the 120-an-hour backstop). Per-item `/approve` links still need the one-use code made on
+  this computer for that item.
+- Compatibility: the site sends tickets first (it must be deployed before devices update).
+  An older device ignores `?t=` (its `/review/start` reads no query) and works as before, still
+  lockable until it updates. A newer device with an older site gets no ticket and shows the
+  plain page, so phone review is unavailable until the site is updated. Chat links with 7-day
+  codes and per-item `/approve` links don't use `/review/start` and are unchanged.
 - `flowstate approvals phone off` turns every phone link and `/review/start` off.
 - If the computer is off or the relay agent is down, the bare link can't open the list.
