@@ -41,8 +41,7 @@ from . import review_mode
 from . import safety
 from . import saves
 from . import tasks
-from . import extras
-from . import priority
+from . import extras, priority
 from . import provenance
 from . import receipts
 from . import secrets_scan
@@ -58,7 +57,7 @@ server = Server("flowstate", version="2.4.0", instructions=guide.INSTRUCTIONS)
 
 
 from .tooldefs import ALL_TOOLS  # noqa: E402 - the public tools (surface.py maps their calls)
-from . import surface, tool_labels  # noqa: E402
+from . import surface, tool_labels, waiting  # noqa: E402
 from .routing import route_tool  # noqa: E402
 
 
@@ -264,7 +263,7 @@ async def _call_internal(name: str, arguments: dict, shown: str = "") -> types.C
             if result is _PAUSED:
                 out = _error("paused_by_user", PAUSED.format(app=app))
                 return out
-            if isinstance(result, dict) and "_ask_user" in result:   # user-only (approvals.py)
+            if isinstance(result, dict) and ("_ask_user" in result or "_walk" in result):
                 from .popup import ask_user
                 result = await ask_user(result, session_obj, client)
                 deadline = time.monotonic() + call_timeout()
@@ -394,8 +393,8 @@ def _handle(name: str, args: dict, client: str, meta: dict) -> Any:
         if hit:
             raise GuardError(secrets_scan.refusal(*hit))
 
-    if name == "review_list":
-        return _review_list(args)
+    if name in ("review_list", "review_walk"):   # walk: waiting.py, then popup.ask_user
+        return _review_list(args, name == "review_walk")
     try:  # priority names: critical/urgent/normal/low (old high/medium too) -> stored values
         legacy_args.priority_args(name, args)
     except priority.PriorityError as e:
@@ -993,7 +992,7 @@ def _suggest(pid: int, args: dict, client: str) -> Any:
             "note": "Saved to the review queue, not as a record. The user decides."}
 
 
-def _review_list(args: dict) -> Any:
+def _review_list(args: dict, walk: bool = False) -> Any:
     pid = None
     named = explicit_project(args)
     if named is not None:
@@ -1003,10 +1002,11 @@ def _review_list(args: dict) -> Any:
                     "candidates": res.get("candidates", [])}
         pid = res["project"]["id"]
     try:
-        return review.list_items(backend.db_path, pid, args.get("status") or "pending",
-                                 args.get("limit") or 20)
+        out = review.list_items(backend.db_path, pid, "pending" if walk else args.get("status") or "pending",
+                                waiting.WALK_MAX if walk else args.get("limit") or 20)
     except review.ReviewError as e:
         return e.payload
+    return waiting.prepare(out, backend.db_path, _caller()[1], pid) if walk else out
 
 
 # The older direct deletes: (tool, action) -> (record type, argument holding its id). Since
@@ -1082,7 +1082,7 @@ def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
         if name == "review_reject":
             out = review.reject(backend.db_path, int(args["item_id"]), args.get("reason") or "",
                                 user_request, client)
-            if locked:
+            if locked or approvals.logs_every_decision(client, agent):   # chat walk, phone list too
                 _safe_call(approvals.log_decision, backend.db_path, item,
                            "agent" if agent else approvals.path_of(client), client, "rejected")
             if out.get("kind") == "conflict":   # the user says the two decisions fit together
@@ -1136,7 +1136,7 @@ def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
                                      "delete": apply_delete, "conflict": apply_conflict,
                                      "setting": apply_setting,
                                      "source": lambda it, _e: provenance.confirm(backend.db_path, it)})
-        if locked:
+        if locked or approvals.logs_every_decision(client, agent):
             _safe_call(approvals.log_decision, backend.db_path, item, approvals.path_of(client),
                        client, "approved")
         return {**out, **done}

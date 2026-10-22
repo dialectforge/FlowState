@@ -1,0 +1,268 @@
+"""The phone review list (waiting.py, way 3), served by FlowState's HTTP app, which the relay
+agent reaches at https://<handle>.fsmcp.com (TLS ends on this computer).
+
+The link FlowState gives is https://flowstatemcp.com/review/<handle>?n=<code>
+(approvals.review_link). The site signs the user in, checks the device is on their account,
+then sends the browser (303) to /review#g=<grant>: the same ES256 grant as the approve page,
+with action "open_review" and item 0 (approvals.verify_review_grant). The fragment never
+reaches a server or a log. This page:
+
+  GET  /review           an empty shell (no data); its script reads #g=, removes it from the
+                         address bar at once (history.replaceState) and posts it
+  POST /review/open      checks the grant and uses up its one-use code; starts a session:
+                         cookie fs_review_phone (HttpOnly, Secure, SameSite=Strict, 15 min,
+                         path /review) plus a page token for the body; answers with the list
+  POST /review/decide    {token, item_id, decision, confirm_name?, reason?}: the session cookie
+                         and its token; Approve or Reject through the user-only path
+                         (popup.as_user, label "phone (<handle>)"), logged in approval_log
+
+Same headers as /approve: strict CSP (no inline script or style), frame-ancestors 'none',
+X-Frame-Options DENY, no-store, no referrer. POSTs must be JSON, from this origin.
+"""
+
+import asyncio
+import hashlib
+import hmac
+import json
+import secrets
+import threading
+import time
+
+from . import approvals
+from .approve_page import CSS, HEADERS, _same_origin
+
+COOKIE = "fs_review_phone"
+SESSION_SECONDS = 15 * 60
+LIST_MAX = 50
+_clock = time.time
+
+SHELL = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>FlowState: waiting for you</title>
+<link rel="stylesheet" href="/review/assets/review.css">
+<script src="/review/assets/review.js" defer></script>
+</head><body><main class="wrap">
+<p class="brand">FlowState</p>
+<h1 id="title">Opening your list...</h1>
+<p id="status" class="muted"></p>
+<noscript><p class="muted">This page needs JavaScript to read your link.</p></noscript>
+<section id="list"></section>
+<p class="faint small">Your FlowState, on your own computer, shows this page. flowstatemcp.com
+only confirmed it's you; it never sees what's in it.</p>
+</main></body></html>
+"""
+
+EXTRA_CSS = """.card{border-top:1px solid var(--line);padding:18px 0 6px}
+.card .eyebrow{margin-top:0}.card .actions{margin-top:14px}
+.done{color:var(--accent);font-size:15px}"""
+
+JS = r"""(function () {
+  "use strict";
+  var m = /(?:^#|&)g=([A-Za-z0-9_.-]+)/.exec(location.hash || "");
+  var grant = m ? m[1] : null;
+  history.replaceState(null, "", location.pathname);   // the grant leaves the address bar now
+  var token = null;
+  function $(id) { return document.getElementById(id); }
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) { e.className = cls; }
+    if (text) { e.textContent = text; }
+    return e;
+  }
+  function say(title, text, bad) {
+    $("title").textContent = title;
+    $("status").textContent = text || "";
+    $("status").className = bad ? "err" : "muted";
+  }
+  function post(path, body) {
+    return fetch(path, {
+      method: "POST", credentials: "same-origin", cache: "no-store",
+      headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)
+    }).then(function (r) {
+      return r.json().then(function (j) { return {ok: r.ok, j: j}; });
+    });
+  }
+  function show(items) {
+    var list = $("list");
+    while (list.firstChild) { list.removeChild(list.firstChild); }
+    say(items.length ? "Waiting for you (" + items.length + ")" : "Nothing is waiting for you", "");
+    items.forEach(function (it) {
+      var card = el("div", "card");
+      card.appendChild(el("p", "eyebrow", it.project + " · " + it.kind_label + " #" + it.id));
+      card.appendChild(el("p", "", it.question));
+      if (it.summary) { card.appendChild(el("p", "", it.summary)); }
+      if (it.details) { card.appendChild(el("p", "muted", it.details)); }
+      card.appendChild(el("p", "faint", "From " + it.queued_by + ", " + it.queued_at + " UTC"));
+      var name = null;
+      if (it.needs_name) {
+        var label = el("label", "", "To approve, type the project's exact name");
+        name = el("input");
+        name.setAttribute("autocomplete", "off");
+        label.appendChild(name);
+        card.appendChild(label);
+      }
+      var row = el("div", "actions");
+      var yes = el("button", "btn", "Approve"), no = el("button", "btn ghost", "Reject");
+      yes.type = no.type = "button";
+      function decide(decision) {
+        yes.disabled = no.disabled = true;
+        var body = {token: token, item_id: it.id, decision: decision};
+        if (name) { body.confirm_name = name.value; }
+        post("/review/decide", body).then(function (r) {
+          if (r.ok) { show(r.j.items); $("status").textContent = r.j.message; }
+          else { yes.disabled = no.disabled = false; say("Not done", r.j.message || "", true); }
+        }, function () { say("Not done", "Your FlowState didn't answer.", true); });
+      }
+      yes.addEventListener("click", function () { decide("approve"); });
+      no.addEventListener("click", function () { decide("reject"); });
+      row.appendChild(yes);
+      row.appendChild(no);
+      card.appendChild(row);
+      $("list").appendChild(card);
+    });
+  }
+  if (!grant) { say("This link is incomplete", "Open it again from the chat.", true); return; }
+  post("/review/open", {grant: grant}).then(function (r) {
+    if (!r.ok) { say("Can't show your list", r.j.message || "", true); return; }
+    token = r.j.token;
+    show(r.j.items);
+  }, function () { say("Can't show your list", "Your FlowState didn't answer.", true); });
+})();
+"""
+
+
+def _sha(s: str) -> str:
+    return hashlib.sha256((s or "").encode()).hexdigest()
+
+
+class Sessions:
+    """Phone sessions in memory (15 minutes): hash of the cookie -> page token, handle, expiry."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._s: dict = {}
+
+    def start(self, handle: str) -> tuple[str, str]:
+        cookie, token = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+        now = _clock()
+        with self._lock:
+            self._s = {k: v for k, v in self._s.items() if v["exp"] > now}
+            self._s[_sha(cookie)] = {"token": _sha(token), "handle": handle,
+                                     "exp": now + SESSION_SECONDS}
+        return cookie, token
+
+    def check(self, cookie, token) -> dict:
+        if not isinstance(cookie, str) or not isinstance(token, str):
+            raise approvals.ApprovalError("bad_token", "This page's session has ended. Open "
+                                                       "the link again from the chat.")
+        with self._lock:
+            s = self._s.get(_sha(cookie))
+        if not s or s["exp"] <= _clock() or not hmac.compare_digest(s["token"], _sha(token)):
+            raise approvals.ApprovalError("bad_token", "This page's session has ended. Open "
+                                                       "the link again from the chat.")
+        return s
+
+
+def items(db_path) -> list:
+    """The waiting list, from the local database (all projects, oldest first)."""
+    from . import review
+    from .approve_page import view
+    from .waiting import _KIND
+    out = []
+    for it in review.list_items(db_path, None, "pending", LIST_MAX)["items"]:
+        v = view(db_path, it["id"])
+        v["kind_label"] = _KIND.get(it["kind"], it["kind"])
+        if it["kind"] not in approvals.USER_ONLY_KINDS:   # a record or idea waiting to count
+            v["question"] = "Approve to keep it; reject to leave it out."
+        v["details"] = (v["details"] or "")[:1000]
+        out.append(v)
+    return out
+
+
+def routes(db_path_fn):
+    """Starlette routes; `db_path_fn()` gives the database in use."""
+    from starlette.responses import HTMLResponse, JSONResponse, Response
+    from starlette.routing import Route
+
+    sessions = Sessions()
+
+    def answer(body: dict, status: int = 200, cookie: str = None):
+        r = JSONResponse(body, status_code=status, headers=HEADERS)
+        if cookie is not None:
+            r.set_cookie(COOKIE, cookie, max_age=SESSION_SECONDS, path="/review", secure=True,
+                         httponly=True, samesite="strict")
+        return r
+
+    def refuse(e: approvals.ApprovalError, status: int = 403):
+        return answer({"error": e.code, "message": str(e)}, status)
+
+    async def shell(request):
+        return HTMLResponse(SHELL, headers=HEADERS)
+
+    async def asset(request):
+        name = request.path_params["name"]
+        if name == "review.css":
+            return Response(CSS + EXTRA_CSS, media_type="text/css", headers=HEADERS)
+        if name == "review.js":
+            return Response(JS, media_type="text/javascript", headers=HEADERS)
+        return answer({"error": "not found"}, 404)
+
+    async def _body(request) -> dict:
+        if not _same_origin(request):
+            raise approvals.ApprovalError("bad_request", "This request didn't come from the page.")
+        try:
+            body = json.loads(await request.body() or b"{}")
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            raise approvals.ApprovalError("bad_request", "The request is incomplete.")
+        return body
+
+    async def open_(request):
+        db = db_path_fn()
+        try:
+            body = await _body(request)
+            if not isinstance(body.get("grant"), str):
+                raise approvals.ApprovalError("bad_request", "The link is incomplete.")
+            claims = await asyncio.to_thread(approvals.verify_review_grant, db, body["grant"])
+            cookie, token = sessions.start(claims["handle"])
+            listing = await asyncio.to_thread(items, db)
+        except approvals.ApprovalError as e:
+            return refuse(e)
+        return answer({"items": listing, "token": token}, cookie=cookie)
+
+    async def decide(request):
+        db = db_path_fn()
+        try:
+            body = await _body(request)
+            sess = sessions.check(request.cookies.get(COOKIE), body.get("token"))
+            item_id = body.get("item_id")
+            if not isinstance(item_id, int) or isinstance(item_id, bool) \
+                    or body.get("decision") not in ("approve", "reject"):
+                raise approvals.ApprovalError("bad_request", "Choose Approve or Reject for an item.")
+        except approvals.ApprovalError as e:
+            return refuse(e)
+        from .popup import as_user
+        label = f"phone ({sess['handle']})"
+        if body["decision"] == "approve":
+            args = {"item_id": item_id, "confirm_name": body.get("confirm_name"),
+                    "user_request": "The user approved this in their phone list (flowstatemcp.com)."}
+            res = await asyncio.to_thread(as_user, "review_approve", args, label)
+        else:
+            reason = " ".join(str(body.get("reason") or "").split())[:300]
+            args = {"item_id": item_id, "reason": reason or "rejected on the user's phone",
+                    "user_request": "The user rejected this in their phone list (flowstatemcp.com)."}
+            res = await asyncio.to_thread(as_user, "review_reject", args, label)
+        listing = await asyncio.to_thread(items, db)
+        if isinstance(res, dict) and "error" in res:
+            return answer({"error": res["error"], "message": res.get("message") or res["error"],
+                           "items": listing}, 409)
+        done = "Approved" if body["decision"] == "approve" else "Rejected"
+        return answer({"ok": True, "message": f"{done} #{item_id}.", "items": listing})
+
+    return [Route("/review/assets/{name}", asset, methods=["GET"]),
+            Route("/review", shell, methods=["GET"]),
+            Route("/review/open", open_, methods=["POST"]),
+            Route("/review/decide", decide, methods=["POST"])]

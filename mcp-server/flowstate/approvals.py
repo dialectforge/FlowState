@@ -16,7 +16,9 @@ can pass the user's OK along: only a human click or keypress decides, in this or
              item stays queued. The popup is only as trustworthy as the app showing it.
   2. phone   relay users: a link to flowstatemcp.com, which signs the user in and sends the
              browser to https://<handle>.fsmcp.com/approve/<item> with a short signed grant
-             (approve_page.py checks it here with FSA_PUBLIC_KEYS).
+             (approve_page.py checks it here with FSA_PUBLIC_KEYS). The phone review list
+             of everything waiting (review_phone.py) takes the same grants with action
+             open_review and item 0, and its own one-use code (review_link).
   3. terminal `flowstate approve <id>` asks for the user's `y` on their own terminal.
 
 Turning approvals on needs nothing; turning them off needs the user's terminal
@@ -53,6 +55,7 @@ CLOCK_SKEW = 60
 NONCE_DAYS = 7               # the phone link's one-use code, then a fresh one is made
 SITE = "https://flowstatemcp.com"
 ACTION = "approve_review"
+REVIEW_ACTION = "open_review"   # the phone review list (review_phone.py): item 0
 USER_ONLY_KINDS = ("delete", "setting", "source")
 
 # The flowstatemcp.com approval-grant public keys (ES256 / P-256 JWKs), pinned per release:
@@ -285,6 +288,53 @@ def phone_link(db_path: Path, item_id: int) -> Optional[str]:
     return f"{SITE}/approve/{handle}/{int(item_id)}?n={nonce}" if nonce else None
 
 
+def review_nonce(db_path: Path) -> Optional[str]:
+    """The phone review list's open one-use code; a fresh random one if none is open."""
+    conn = _conn(db_path)
+    try:
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                            "AND name='review_open_nonces'").fetchone():
+            return None
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT nonce FROM review_open_nonces WHERE used_at IS NULL AND "
+                           "expires_at > ? ORDER BY created_at DESC LIMIT 1", (_ts(),)).fetchone()
+        if row:
+            conn.commit()
+            return row["nonce"]
+        nonce = secrets.token_urlsafe(32)   # 43 url-safe characters, never reused
+        conn.execute("INSERT INTO review_open_nonces (nonce, action, created_at, expires_at) "
+                     "VALUES (?, ?, ?, ?)", (nonce, REVIEW_ACTION, _ts(),
+                                             _ts(_now() + timedelta(days=NONCE_DAYS))))
+        conn.commit()
+        return nonce
+    finally:
+        conn.close()
+
+
+def review_link(db_path: Path) -> Optional[str]:
+    """The phone link to the whole waiting list: relay enrolled, keys pinned, phone not off."""
+    handle = relay_handle()
+    if not handle or not phone_on(db_path) or not keys_ready():
+        return None
+    nonce = review_nonce(db_path)
+    return f"{SITE}/review/{handle}?n={nonce}" if nonce else None
+
+
+def use_review_nonce(db_path: Path, nonce: str) -> bool:
+    """Use up the review list's code. False if it was used, expired or never made here."""
+    conn = _conn(db_path)
+    try:
+        cur = conn.execute("UPDATE review_open_nonces SET used_at = ? WHERE nonce = ? AND "
+                           "used_at IS NULL AND expires_at > ? AND action = ?",
+                           (_ts(), nonce, _ts(), REVIEW_ACTION))
+        conn.commit()
+        return cur.rowcount == 1
+    except sqlite3.OperationalError:   # no table (database older than 021)
+        return False
+    finally:
+        conn.close()
+
+
 def ask_line(db_path: Path, item_id: int, what: str = "approve it") -> str:
     """The one line an agent passes on when the user must decide (no popup)."""
     link = phone_link(db_path, item_id)
@@ -363,10 +413,19 @@ def log_decision(db_path: Path, item: dict, path: str, client: str, decision: st
 def path_of(client: str) -> str:
     """How a user-only decision was made, from the decider's label."""
     c = (client or "").lower()
-    for p in ("popup", "phone", "review-page"):
+    for p in ("popup", "phone", "review-page", "chat"):
         if c.startswith(p):
             return p.replace("-", " ")
     return "terminal"
+
+
+# Paths where every decision is logged, not only user-only items': the user went through the
+# queue themselves (waiting.py's chat walk, review_phone.py's phone list).
+LOG_EVERY_DECISION = ("chat", "phone")
+
+
+def logs_every_decision(client: str, agent: bool) -> bool:
+    return not agent and path_of(client) in LOG_EVERY_DECISION
 
 
 def log_rows(db_path: Path, project_id: int, limit: int = 20) -> list:
@@ -419,9 +478,10 @@ def grant_hash(grant: str) -> str:
     return hashlib.sha256((grant or "").encode()).hexdigest()
 
 
-def verify_grant(db_path: Path, grant: str, item_id: int, handle: Optional[str] = None,
-                 now: Optional[datetime] = None, keys: Optional[dict] = None) -> dict:
-    """Check a phone grant for `item_id`. Returns its claims; raises ApprovalError."""
+def _claims(grant: str, handle: Optional[str], now: Optional[datetime], keys: Optional[dict],
+            action: str, item_id: int) -> dict:
+    """The checks every phone grant gets: pinned key and signature, times, issuer, device,
+    action, item and the code's format. Returns its claims; raises ApprovalError."""
     from .relay import RELAY_DOMAIN
     keys = FSA_PUBLIC_KEYS if keys is None else keys
     if not keys_ready(keys):
@@ -462,7 +522,7 @@ def verify_grant(db_path: Path, grant: str, item_id: int, handle: Optional[str] 
               claims.get("aud") == f"{handle}.{RELAY_DOMAIN}",
               claims.get("handle") == handle,
               isinstance(claims.get("sub"), str) and bool(claims["sub"]),
-              claims.get("action") == ACTION)
+              claims.get("action") == action)
     if not all(checks):
         raise ApprovalError("wrong_device", "This approval grant is not for this FlowState.")
     item = claims.get("item")
@@ -471,6 +531,14 @@ def verify_grant(db_path: Path, grant: str, item_id: int, handle: Optional[str] 
     nonce = claims.get("nonce")
     if not isinstance(nonce, str) or not _NONCE_RE.match(nonce):
         raise ApprovalError("bad_grant", "The approval grant's code is malformed.")
+    return claims
+
+
+def verify_grant(db_path: Path, grant: str, item_id: int, handle: Optional[str] = None,
+                 now: Optional[datetime] = None, keys: Optional[dict] = None) -> dict:
+    """Check a phone grant for `item_id`. Returns its claims; raises ApprovalError."""
+    claims = _claims(grant, handle, now, keys, ACTION, item_id)
+    item, nonce = claims["item"], claims["nonce"]
     conn = _conn(db_path)
     try:
         row = conn.execute("""SELECT q.nonce, q.expires_at, q.used_at, q.action, r.status, r.kind,
@@ -486,4 +554,15 @@ def verify_grant(db_path: Path, grant: str, item_id: int, handle: Optional[str] 
         raise ApprovalError("grant_expired", "This approval link is out of date; ask for a new one.")
     if not user_only({"kind": row["kind"], "payload": row["payload"]}):
         raise ApprovalError("not_open", "This item isn't decided by phone.")
+    return claims
+
+
+def verify_review_grant(db_path: Path, grant: str, handle: Optional[str] = None,
+                        now: Optional[datetime] = None, keys: Optional[dict] = None) -> dict:
+    """Check a phone grant that opens the waiting list (action open_review, item 0) and use up
+    its one-use code. Returns its claims; raises ApprovalError."""
+    claims = _claims(grant, handle, now, keys, REVIEW_ACTION, 0)
+    if not use_review_nonce(db_path, claims["nonce"]):
+        raise ApprovalError("grant_used", "This link was already used or is out of date. "
+                                          "Open a new one from the chat.")
     return claims

@@ -127,7 +127,7 @@ MANAGE_PROBLEMS = _tool("manage_problems", guide.PROBLEMS_DESCRIPTION, {
     "model": MODEL,
 }, ["action"])
 
-_REVIEW_ACTIONS = ("list", "get_mode", "approve", "reject", "set_mode")
+_REVIEW_ACTIONS = ("list", "walk", "get_mode", "approve", "reject", "set_mode")
 MANAGE_REVIEW = _tool("manage_review", guide.REVIEW_DESCRIPTION, {
     "action": _action(_REVIEW_ACTIONS),
     "project": _p("approve / reject: required. Else omit: all projects / whole install.",
@@ -135,9 +135,9 @@ MANAGE_REVIEW = _tool("manage_review", guide.REVIEW_DESCRIPTION, {
     "status": _p("list: which items. Default pending.",
                  enum=["pending", "approved", "rejected", "all"]),
     "limit": _p("list: max items. Default 20, max 100.", "integer"),
-    "item_id": _p("approve / reject: the item id from list.", "integer"),
-    "user_request": {**USER_REQUEST, "description": "approve / reject / set_mode (required): the "
-                                                    "user's words asking for it."},
+    "item_id": _p("approve / reject: the item's id.", "integer"),
+    "user_request": {**USER_REQUEST, "description": "approve / reject / set_mode: the user's "
+                                                    "words (required)."},
     "reason": _p("reject: the user's reason (required)."),
     "summary": _p("approve: a new summary."),
     "details": _p("approve: new details."),
@@ -145,12 +145,12 @@ MANAGE_REVIEW = _tool("manage_review", guide.REVIEW_DESCRIPTION, {
     "category": _p("approve: for a learning.", enum=_LEARNING_CATEGORIES),
     "component": _p("approve: component name to file it under."),
     "move_to": _p("approve: project to move a misfiled item to.", ["string", "integer"]),
-    "mode": _p("set_mode: the new mode (auto_only is the default).",
+    "mode": _p("set_mode: the new mode (default auto_only).",
                enum=list(review_mode.MODES)),
     "kinds": {"type": "array", "items": {"type": "string", "enum": list(review_mode.KINDS)},
               "description": "set_mode, mode=types: kinds that wait."},
     "clear": _p("set_mode: remove this project's override.", "boolean"),
-    "confirm_name": _p("approve, project delete: its exact name, typed by the user."),
+    "confirm_name": _p("approve, project delete: its exact name from the user."),
     "model": MODEL,
 }, ["action"])
 

@@ -506,13 +506,14 @@
     "readOnlyHint": false,
     "title": "Review queue (user decides)"
    },
-   "description": "The user's review queue and review mode. Session summaries, suggested records, imports, clean-up ideas, delete requests and possible conflicts wait here. list, get_mode: read-only. approve: make the item a record (edit fields or move_to first), do a delete (a project also needs confirm_name; undo: manage_history) or confirm a conflict. reject: mark it rejected (conflict: compatible). set_mode: which new records wait. Decisions are logged. approve, reject, set_mode: ONLY call this when the user has explicitly told you, in this chat; quote them in user_request; never approve your own suggestions or change the mode to get your own writes saved. Returns {items, total}, the mode, or the result.",
+   "description": "The user's review queue and mode. Session summaries, suggestions, imports, clean-ups, delete requests and conflicts wait here. list, get_mode: read-only. walk: when the user asks what's waiting: they decide each item in a box, or you get links to pass on. approve: make it a record (edit fields or move_to first), do a delete (project: confirm_name) or confirm a conflict. reject: mark it rejected. set_mode: which new records wait. approve, reject, set_mode: ONLY call this when the user has explicitly told you, in this chat; quote them in user_request; never approve your own suggestions or change the mode to get your own writes saved. Returns {items, total}, the mode, or the result.",
    "inputSchema": {
     "properties": {
      "action": {
       "description": "The operation; see the tool description.",
       "enum": [
        "list",
+       "walk",
        "get_mode",
        "approve",
        "reject",
@@ -543,7 +544,7 @@
       "type": "string"
      },
      "confirm_name": {
-      "description": "approve, project delete: its exact name, typed by the user.",
+      "description": "approve, project delete: its exact name from the user.",
       "type": "string"
      },
      "details": {
@@ -551,7 +552,7 @@
       "type": "string"
      },
      "item_id": {
-      "description": "approve / reject: the item id from list.",
+      "description": "approve / reject: the item's id.",
       "type": "integer"
      },
      "kinds": {
@@ -573,7 +574,7 @@
       "type": "integer"
      },
      "mode": {
-      "description": "set_mode: the new mode (auto_only is the default).",
+      "description": "set_mode: the new mode (default auto_only).",
       "enum": [
        "off",
        "auto_only",
@@ -631,7 +632,7 @@
       "type": "string"
      },
      "user_request": {
-      "description": "approve / reject / set_mode (required): the user's words asking for it.",
+      "description": "approve / reject / set_mode: the user's words (required).",
       "type": "string"
      }
     },
@@ -643,6 +644,7 @@
    "meta": {
     "flowstate/actions": {
      "destructive": [
+      "walk",
       "approve",
       "reject",
       "set_mode"

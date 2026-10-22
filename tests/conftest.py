@@ -47,6 +47,7 @@ _SESSION_ENV = {
     "FLOWSTATE_RELAY_DIR": SESSION / "relay", "FLOWSTATE_AUTH_DB": SESSION / "config" / "remote-auth.db",
     "FLOWSTATE_TOKEN_STORE_FILE": SESSION / "config" / "http-token",
     "FLOWSTATE_GUARD_DIRS": os.pathsep.join(LIVE_DIRS), "FLOWSTATE_GUARD_LOG": GUARD_LOG,
+    "FLOWSTATE_REVIEW_PORT": "0",   # the in-process review page (waiting.py): any free port
     "GIT_AUTHOR_NAME": "FlowState Tests", "GIT_AUTHOR_EMAIL": "tests@example.invalid",
     "GIT_COMMITTER_NAME": "FlowState Tests", "GIT_COMMITTER_EMAIL": "tests@example.invalid",
 }
@@ -190,6 +191,7 @@ def server_env(db: Path, **extra) -> dict:
                 "FLOWSTATE_AUTH_DB": str(Path(db).parent / "config" / "remote-auth.db"),
                 "FLOWSTATE_RELAY_DIR": str(Path(db).parent / "relay"),
                 "FLOWSTATE_TOKEN_STORE_FILE": str(Path(db).parent / "config" / "http-token"),
+                "FLOWSTATE_REVIEW_PORT": "0",   # never the user's 8770
                 "FLOWSTATE_GUARD_DIRS": os.environ["FLOWSTATE_GUARD_DIRS"],
                 "FLOWSTATE_GUARD_LOG": os.environ["FLOWSTATE_GUARD_LOG"]})
     env.update({k: str(v) for k, v in extra.items()})

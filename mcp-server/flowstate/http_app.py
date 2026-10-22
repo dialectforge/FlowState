@@ -42,8 +42,11 @@ def create_http_app(token: Optional[str], path: str = "/mcp", db_path: Optional[
         return JSONResponse({"ok": True, "service": "flowstate"})
 
     from .approve_page import routes as approve_routes
-    # the phone approval page (approve_page.py); it checks its own signed grants
-    routes = [Route("/health", health, methods=["GET"])] + approve_routes(lambda: S.backend.db_path)
+    from .review_phone import routes as review_routes
+    # the phone approval page and review list (approve_page.py, review_phone.py); they check
+    # their own signed grants
+    routes = [Route("/health", health, methods=["GET"])] + approve_routes(lambda: S.backend.db_path) \
+        + review_routes(lambda: S.backend.db_path)
     provider = rmd = None
     allowed_hosts = None
     if public_url:

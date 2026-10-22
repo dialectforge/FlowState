@@ -7,21 +7,30 @@ resumes apps, and shows "Who did what" (app, model, machine and identity source 
 recorded change, with Undo where the edit history allows it). Everything done here counts as the user acting (it is logged as
 "review-page").
 
-Safety:
-  * its own process, bound to 127.0.0.1 only; never mounted on the HTTP or public listener
-  * opening it needs a one-time key (in the URL the command opens in your browser); the
-    key is swapped for an HttpOnly, SameSite=Strict cookie and then stops working
-  * every form carries a CSRF token; the Host header must be 127.0.0.1/localhost (blocks
-    DNS-rebinding pages); strict Content-Security-Policy, no caching, no scripts
+Two ways to run it:
+  * `flowstate review-page`: its own process; opening it needs a one-time key (in the URL
+    the command opens in your browser), swapped for an HttpOnly, SameSite=Strict cookie
+  * the link in the brief and in manage_review(action="walk") (waiting.py): FlowState starts
+    it inside its own process the first time a link is needed, one per computer and
+    database. Opening http://127.0.0.1:<port>/ gives the browser a fresh session cookie at
+    once (no key: the link is meant to be clicked); every action still needs that cookie,
+    the page's CSRF token and a same-origin Origin header
+
+Safety (both): bound to 127.0.0.1 only, never mounted on the HTTP or public listener; every
+form carries a CSRF token; the Host header must be 127.0.0.1/localhost (blocks DNS-rebinding
+pages); strict Content-Security-Policy, no caching, no scripts, no framing. Honest limit: a
+program on this computer (an agent that runs commands or drives the user's browser) can open
+the page too, as it could run `flowstate approve`.
 """
 
+import hashlib
 import hmac
 import html
 import json
 import secrets
 import sqlite3
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional, Union
 from urllib.parse import urlencode
 
 from . import dbconn
@@ -46,17 +55,42 @@ def _e(v) -> str:
     return html.escape("" if v is None else str(v), quote=True)
 
 
-class Page:
-    """State for one review-page process."""
+MAX_SESSIONS = 20   # open-link mode: the oldest browser session goes first
 
-    def __init__(self, db_path: Path, port: int = DEFAULT_PORT):
-        self.db_path = Path(db_path)
+
+def db_tag(db_path) -> str:
+    """A short, stable tag for a database file (which page serves which database)."""
+    return hashlib.sha256(str(Path(db_path).resolve()).lower().encode()).hexdigest()[:16]
+
+
+class Page:
+    """State for one review page. `db_path` is a file, or a callable giving the database in
+    use (the in-process page follows the server's backend). `open_link`: no launch key; a
+    plain visit to / starts a browser session (waiting.py)."""
+
+    def __init__(self, db_path: Union[Path, Callable[[], Path]], port: int = DEFAULT_PORT,
+                 open_link: bool = False):
+        self._db = db_path if callable(db_path) else Path(db_path)
         self.port = port
-        self.launch_key: Optional[str] = secrets.token_urlsafe(32)
+        self.open_link = open_link
+        self.launch_key: Optional[str] = None if open_link else secrets.token_urlsafe(32)
         self.sessions: dict[str, str] = {}   # cookie value -> csrf token
 
+    @property
+    def db_path(self) -> Path:
+        return Path(self._db()) if callable(self._db) else self._db
+
     def launch_url(self) -> str:
+        if self.open_link:
+            return f"http://{HOST}:{self.port}/"
         return f"http://{HOST}:{self.port}/?{urlencode({'key': self.launch_key})}"
+
+    def new_session(self) -> str:
+        sess = secrets.token_urlsafe(32)
+        self.sessions[sess] = secrets.token_urlsafe(24)
+        while len(self.sessions) > MAX_SESSIONS:
+            self.sessions.pop(next(iter(self.sessions)))
+        return sess
 
     # ------------------------------------------------------------ data
     def _conn(self):
@@ -269,7 +303,7 @@ class Page:
 
 def create_app(page: Page):
     from starlette.applications import Starlette
-    from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse
+    from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
     from starlette.routing import Route
 
     headers = {"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; "
@@ -291,22 +325,7 @@ def create_app(page: Page):
     def host_ok(request) -> bool:
         return request.headers.get("host", "").lower() in allowed_hosts
 
-    async def index(request):
-        if not host_ok(request):
-            return deny(403, "This page only answers on 127.0.0.1.")
-        key = request.query_params.get("key")
-        if key is not None:
-            if not page.launch_key or not hmac.compare_digest(key, page.launch_key):
-                return deny(403, "This link has expired. Run `flowstate review-page` again.")
-            page.launch_key = None   # one time only
-            sess = secrets.token_urlsafe(32)
-            page.sessions[sess] = secrets.token_urlsafe(24)
-            resp = RedirectResponse("/", status_code=303, headers=headers)
-            resp.set_cookie(COOKIE, sess, httponly=True, samesite="strict", path="/")
-            return resp
-        sess = session_of(request)
-        if not sess:
-            return deny(403, "Open the page with the link from `flowstate review-page`.")
+    def page_html(request, sess: str):
         if request.query_params.get("view") == "who":
             return HTMLResponse(page.render_who(page.sessions[sess],
                                                 request.query_params.get("flash", ""),
@@ -318,12 +337,46 @@ def create_app(page: Page):
                                         ("pending", "approved", "rejected", "all") else "pending"),
                             headers=headers)
 
+    async def ping(request):
+        """Which database this page serves (waiting.py reuses a running page)."""
+        if not host_ok(request):
+            return deny(403, "This page only answers on 127.0.0.1.")
+        return JSONResponse({"service": "flowstate-review", "db": db_tag(page.db_path),
+                             "open_link": page.open_link}, headers=headers)
+
+    async def index(request):
+        if not host_ok(request):
+            return deny(403, "This page only answers on 127.0.0.1.")
+        key = request.query_params.get("key")
+        if key is not None and not page.open_link:
+            if not page.launch_key or not hmac.compare_digest(key, page.launch_key):
+                return deny(403, "This link has expired. Run `flowstate review-page` again.")
+            page.launch_key = None   # one time only
+            sess = page.new_session()
+            resp = RedirectResponse("/", status_code=303, headers=headers)
+            resp.set_cookie(COOKIE, sess, httponly=True, samesite="strict", path="/")
+            return resp
+        sess = session_of(request)
+        if not sess and page.open_link:
+            # A click on the link (often from another app or site, so a SameSite=Strict cookie
+            # wouldn't survive a redirect): the page and its cookie come in this one answer.
+            sess = page.new_session()
+            resp = page_html(request, sess)
+            resp.set_cookie(COOKIE, sess, httponly=True, samesite="strict", path="/")
+            return resp
+        if not sess:
+            return deny(403, "Open the page with the link from `flowstate review-page`.")
+        return page_html(request, sess)
+
     def action(fn, back: str = ""):
         async def handler(request):
             if not host_ok(request):
                 return deny(403, "This page only answers on 127.0.0.1.")
             origin = request.headers.get("origin")
-            if origin and origin.lower() not in {f"http://{h}" for h in allowed_hosts}:
+            if (origin and origin.lower() not in {f"http://{h}" for h in allowed_hosts}) \
+                    or (page.open_link and not origin):   # link mode: a same-origin form post only
+                return deny(403, "Cross-site request refused.")
+            if request.headers.get("sec-fetch-site", "same-origin") not in ("same-origin", "none"):
                 return deny(403, "Cross-site request refused.")
             sess = session_of(request)
             if not sess:
@@ -342,6 +395,7 @@ def create_app(page: Page):
 
     return Starlette(routes=[
         Route("/", index, methods=["GET"]),
+        Route("/ping", ping, methods=["GET"]),
         Route("/approve", action(page.approve), methods=["POST"]),
         Route("/reject", action(page.reject), methods=["POST"]),
         Route("/mode", action(page.set_mode), methods=["POST"]),

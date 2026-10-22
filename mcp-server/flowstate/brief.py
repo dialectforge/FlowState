@@ -239,9 +239,13 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
     if since:
         b.add(since)
     if pending is not None:
+        where = ""
+        if pending:   # the local page (started on first need) and the phone link (waiting.py)
+            from .waiting import where_line
+            where = where_line(db_path)
         b.add(f"Review queue: {pending} item{'s' if pending != 1 else ''} waiting for the user's OK"
               + (" (manage_review action=list shows them; approve or reject only when the user asks)."
-                 if pending else "."))
+                 + where if pending else "."))
     if mode_line:
         b.add(mode_line)
     if deleted_line:

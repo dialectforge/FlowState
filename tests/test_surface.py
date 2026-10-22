@@ -207,8 +207,10 @@ def test_routes_match_schemas_and_annotations(monkeypatch):
     monkeypatch.setenv("FLOWSTATE_TOOLS", "full")
     by = {t.name: t for t in tool_labels.visible(ALL_TOOLS)}
     assert set(by) == set(tool_labels.LABELS)
-    # the older names, the kept names, and the v2.1 delete request (deletes.py; no older name)
-    internal_ok = set(surface.OLD_NAMES) | {"start_here", "log_work", "search", "delete_request"}
+    # the older names, the kept names, the v2.1 delete request (deletes.py) and the 2.4 review
+    # walk (waiting.py); those two have no older name
+    internal_ok = set(surface.OLD_NAMES) | {"start_here", "log_work", "search", "delete_request",
+                                            "review_walk"}
     for name, tool in by.items():
         groups = tool_labels.LABELS[name][1]
         listed = sum(groups.values(), [])

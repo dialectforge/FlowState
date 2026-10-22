@@ -103,9 +103,13 @@ async def resolve(result: dict, session, client: str, db_path, request_id, decid
 
 
 async def ask_user(result: dict, session_obj, client: str) -> dict:
-    """server.py's hook: the popup for a user-only item, else the one-line phone / terminal step."""
+    """server.py's hook: the popup for a user-only item, else the one-line phone / terminal step;
+    or the review walk the user asked for (waiting.walk)."""
     from . import review
     from . import server as S
+    if "_walk" in result:
+        from .waiting import walk
+        return await walk(result, session_obj, client)
     try:
         rid = S.server.request_context.request_id
     except LookupError:
