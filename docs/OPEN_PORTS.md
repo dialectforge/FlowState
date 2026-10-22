@@ -82,6 +82,12 @@ Open:
   (read-only copy, no logs). Worth one look at the live logs for those dates.
 - **The phone list and tunnel page wording on a real phone.** Keep / Don't keep is checked in
   tests (the list's JSON, the page HTML), not looked at in a browser.
+- **`test_save_latency_on_2000_records` is load-sensitive on the host PC.** Alone it measures
+  about 15.3 ms median, both on this branch and on c7ff8a9 (5 rounds each, 15.1-15.4 ms). But
+  when the disk is busy it goes to 36-59 ms, with nothing else of the test run going on (seen
+  2026-10-22: one isolated run at 36.3 ms, and full runs at 40.7 and 58.7 ms against the
+  40 ms bound). The bound is a fixed wall-clock number, so a busy disk fails it. One fix would be to compare
+  against a same-run baseline write instead of a fixed number.
 
 Tradeoffs (decided, not debt):
 - **What counts as housekeeping** is a fixed allow-list in `autosession.py`; every other write
