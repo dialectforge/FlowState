@@ -63,6 +63,38 @@ Closed in task 31: "Docs say the phone keys are placeholders". CHANGELOG 2.4.0, 
 honest limits and docs/APPROVALS.md section 3 now say what `approvals.py` does: it pins
 `fsa-1` and `fsa-2`.
 
+## From no summaries for housekeeping sessions (task 39, branch `dev/2.4-review-fixes`)
+
+Closed in task 39: on Oct 22, 2026 one undo run left 18 session summaries (#105-#122) John
+had to reject one by one. A session made only of reads, undo, review decisions, a handoff
+pickup or todo claims (`autosession.HOUSEKEEPING`) now files no review item; summaries count
+saves by kind; the pages ask "Keep this session summary?" (Keep / Don't keep).
+
+Open:
+- **Optional one-time clean-up of already-queued housekeeping summaries.** Not built: nothing
+  decides old items. On the 2026-10-22 copy no such item was pending (all 32 were decided), so
+  it isn't needed now; if older installs have some, a `flowstate cleanup` rule that queues
+  "withdraw these N housekeeping summaries?" as one question would be the low-touch way.
+- **15 tagged sessions without an item on the live copy.** Sessions 110-136 (closed Oct 17-19)
+  carry `[auto-captured, needs review]` and `needs_review: true` but no `review_item_id` and no
+  review item. The close code on `release/2.4-trust` and here always records the item id when
+  it queues one, so they were most likely closed by an older build; not investigated further
+  (read-only copy, no logs). Worth one look at the live logs for those dates.
+- **The phone list and tunnel page wording on a real phone.** Keep / Don't keep is checked in
+  tests (the list's JSON, the page HTML), not looked at in a browser.
+
+Tradeoffs (decided, not debt):
+- **What counts as housekeeping** is a fixed allow-list in `autosession.py`; every other write
+  label keeps the summary (fail safe). Review-mode changes, clean-up suggestions, memory imports,
+  `verify` marks, link/rule changes, deletes and `session/end` stay real work. Labels written
+  before this build called a review-mode change `read:review_mode`, so such old sessions count
+  as housekeeping in the copy numbers.
+- **"saved N ..." counts calls, not where they went**: in review mode `types` / `everything` a
+  learning that was held for review still counts as "saved 1 learning" in the summary.
+- **Skipped sessions win over review mode off**: with review off, a housekeeping session gets
+  the housekeeping tag (not `[auto summary, review off]`), so the brief's "Last session" line
+  skips it in both modes. Real sessions with review off are unchanged.
+
 ## From the /review/start lockout and tunnel review (task 38, branch `dev/2.4-review-fixes`)
 
 Closed in task 38: "Rate limits on `/review/start` are per database" (task 33). It now needs the
