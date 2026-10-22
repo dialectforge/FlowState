@@ -63,6 +63,17 @@ Closed in task 31: "Docs say the phone keys are placeholders". CHANGELOG 2.4.0, 
 honest limits and docs/APPROVALS.md section 3 now say what `approvals.py` does: it pins
 `fsa-1` and `fsa-2`.
 
+## From the compact review list (task 35, branch `dev/2.4-review-fixes`)
+
+Closed in task 35: `manage_review list limit=100` on the live install (102 items, Oct 22, 2026)
+answered more text than fits in one reply. `list` now answers one line per item (a full page of
+100 long items is about 13,000 characters); `list item_id=<id>` gives one item in full.
+
+Tradeoffs (decided, not debt): `items` in `list` are now text lines ("#id (project, kind):
+summary"), not objects; a script that read `items[].id`, `.kind` or `.details` must read the
+id from the line's `#id` and fetch the item with `item_id`. At limit 100 each line is cut to
+120 characters (160 for pages of up to 75), so long summaries end in "...".
+
 ## From the local link only for local apps (task 34, branch `dev/2.4-review-fixes`)
 
 Closed in task 34: the 127.0.0.1 review link went to apps on other computers too (John's Mac
