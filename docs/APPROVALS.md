@@ -44,6 +44,15 @@ Whatever the approvals setting, the user can see and decide the whole review que
   Every change needs that session's cookie (HttpOnly, SameSite=Strict), its CSRF token, the
   Host 127.0.0.1/localhost and a same-origin `Origin` header. `flowstate review-page` keeps its
   one-time key.
+  **Only for apps on this computer** (`popup.on_this_computer`): stdio, or the LAN listener when
+  the socket peer is loopback (127.0.0.0/8, ::1). `remote_auth.Gate` decides it from the
+  listener and the real socket peer (`flowstate.on_this_computer` in the ASGI scope; uvicorn
+  runs with `proxy_headers=False`), never from a header (`X-Forwarded-For`, `Host`,
+  `X-FlowState-*` change nothing). The relay listener (its agent connects from loopback), the
+  public listener, a LAN peer elsewhere and unmarked requests are not this computer: no
+  127.0.0.1 URL anywhere in the brief or the walk, and the page isn't started for them. They
+  get the phone link when the relay is set up, and the text "on the computer where FlowState
+  runs (`flowstate review-page` there)" in the brief's line and the walk's `how_to_decide`.
 - **Phone list (relay users):** the bookmarkable `https://flowstatemcp.com/review/<handle>`;
   section 5.
 

@@ -124,7 +124,7 @@ All commands run with the venv Python: `<venv python> -m flowstate <command>`.
 | restore | `flowstate restore <backup file>` (into a new file, verified; `--to <new file>`) |
 | approvals (user) | `flowstate approvals` shows them; `approvals on [--project P]`: an AI's deletes and turning review off wait for the user (popup, phone link, terminal); `approvals off` asks for `y` on the terminal; `approvals phone on\|off`; `approvals popup add\|remove NAME` |
 | review queue (user) | `flowstate review` lists it; `flowstate approve <id> [<id> ...]` / `flowstate reject <id> [--reason ...]` ask for `y` on the terminal (never piped input; no terminal = refused) |
-| review page (user) | `flowstate review-page` (127.0.0.1:8770 only; opens the browser with a one-time link; includes "Who did what"). Without a command: the `http://127.0.0.1:<port>/` link in the brief and in `manage_review(action="walk")`'s answer (FlowState starts the page on first need, 127.0.0.1 only; `FLOWSTATE_REVIEW_PORT`) |
+| review page (user) | `flowstate review-page` (127.0.0.1:8770 only; opens the browser with a one-time link; includes "Who did what"). Without a command: the `http://127.0.0.1:<port>/` link in the brief and in `manage_review(action="walk")`'s answer, shown only to apps on the same computer (FlowState starts the page on first need, 127.0.0.1 only; `FLOWSTATE_REVIEW_PORT`) |
 | phone review list (user, relay) | the bookmarkable `https://flowstatemcp.com/review/<handle>` in the brief and the walk's answer when the relay is enrolled and phone links are on (`approvals phone on\|off`); see `docs/APPROVALS.md` section 5 |
 | per-app keys for the local/LAN HTTP server (user) | `flowstate keys add --name NAME [--read-only] [--workspace W]` (shows the key once) / `keys list` / `keys revoke --id ID` (or `--name NAME`) |
 | pause an app (user) | `flowstate apps list` / `apps pause --app NAME` / `apps resume --app NAME` |
@@ -353,7 +353,8 @@ don't show server instructions:
    FlowState asks the user about each item itself and acts only on their answer in that box;
    elsewhere (other apps, the relay, read-only) you get one page of the list (20, oldest
    first; `next_page` gives the call for more) and the links (`review_page` on the computer
-   where FlowState runs, `phone` with the relay) to show the user, and nothing was decided.
+   where FlowState runs, only for apps on that computer; `phone` with the relay) to show the
+   user, and nothing was decided.
    Never approve or reject them yourself afterwards. The brief's review-queue line carries the
    same links.
 7. The **review mode** (`off`, `auto_only` default, `types`, `everything`; shown in the brief)

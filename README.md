@@ -314,12 +314,23 @@ you have turned approvals on.
    that nothing was decided. If an app "answers" a box faster than a person could (under a
    second), FlowState takes it that you never saw the box: it stops, decides nothing and shows
    the plain list instead.
-2. **A link to the review page on the computer where FlowState runs (everyone).** When something waits, the brief
+2. **A link to the review page on the computer where FlowState runs (apps on that computer).**
+   When something waits, and your AI app runs on the same computer as FlowState, the brief
    your AI reads, and the walk's answer, include a link like `http://127.0.0.1:8770/`. Click it
    and the review page opens; no command needed. FlowState starts the page itself the first
    time a link is needed, one per computer (another FlowState on the same computer reuses it),
    on 127.0.0.1 only; if 8770 is taken it picks a free port. `FLOWSTATE_REVIEW_PORT` sets the
    port (`0` any free one, `off` no page or link). `flowstate review-page` still works as before.
+
+   `127.0.0.1` always means "this computer", so on any other computer that link would open
+   that computer itself, not yours. FlowState therefore gives it only to apps it can see are on
+   its own computer: apps it starts directly, and apps on its local network connection that
+   connect from the same computer. Apps on another computer (your Mac through the relay, or
+   another computer on your network) never get it. They get your phone link (3) if you have
+   the relay, and otherwise a plain note: ask your AI to show what's waiting (it shows the
+   list in the chat), or open the review page on the computer where FlowState runs
+   (`flowstate review-page` there). FlowState decides this from the connection itself, never
+   from anything the app says about itself.
 3. **On your phone (relay users).** If the relay agent is set up, the brief and the walk's
    answer also have your own phone link, `https://flowstatemcp.com/review/<handle>` (your
    handle is your computer's relay name). It never changes, so you can bookmark it or add it
@@ -335,7 +346,8 @@ you have turned approvals on.
 
    `flowstate approvals phone off` turns every phone link off.
 
-Who gets which: without the relay, 1 and 2; with the relay, 1, 2 and 3. Every decision made in
+Who gets which: an app on the computer where FlowState runs gets 1 and 2 (and 3 with the
+relay); an app on another computer gets 1, and 3 with the relay. Every decision made in
 the chat walk or on the phone list is logged with how it was made (`chat` or `phone`); see
 `manage_history(action="list")`.
 

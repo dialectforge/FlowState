@@ -164,7 +164,13 @@
   process reuses it), on 127.0.0.1 only, port 8770 or a free one if that is taken
   (`FLOWSTATE_REVIEW_PORT`; `off` turns it off). Clicking the link opens it at once; every
   change still needs the page's cookie, its CSRF token, a 127.0.0.1 Host and a same-origin
-  Origin. `flowstate review-page` keeps its one-time key.
+  Origin. `flowstate review-page` keeps its one-time key. The link is only given to apps on
+  the computer where FlowState runs (apps it starts directly, or its LAN listener with a
+  connection from that same computer). An app on another computer (the relay, the public
+  listener, another computer on your network) would open its own 127.0.0.1, so it gets the
+  phone link (relay users) or a note to ask for the list in the chat or use `flowstate
+  review-page` on the computer where FlowState runs; the page isn't started for it. FlowState
+  decides from the connection, never from a header.
 - **Your phone (relay users):** a link you can bookmark, `https://flowstatemcp.com/review/<handle>`,
   in the brief and the walk's answer (relay enrolled, phone links on; this release pins the
   site's keys). No code in the chat: the site signs you in and sends your phone to your own

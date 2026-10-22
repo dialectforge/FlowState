@@ -63,6 +63,18 @@ Closed in task 31: "Docs say the phone keys are placeholders". CHANGELOG 2.4.0, 
 honest limits and docs/APPROVALS.md section 3 now say what `approvals.py` does: it pins
 `fsa-1` and `fsa-2`.
 
+## From the local link only for local apps (task 34, branch `dev/2.4-review-fixes`)
+
+Closed in task 34: the 127.0.0.1 review link went to apps on other computers too (John's Mac
+through the relay, Oct 22, 2026, opened the Mac's own 127.0.0.1).
+
+Tradeoffs (decided, not debt): "on this computer" is the LAN listener with a loopback socket
+peer. A program on this computer that forwards other computers' connections to the LAN
+listener (a tunnel or proxy the user set up themselves, not FlowState's relay) looks local,
+and its apps get the 127.0.0.1 link; FlowState can't tell. An app on this computer that
+connects to the LAN listener through the computer's network address (not 127.0.0.1) looks
+remote and gets the phone link or the note instead; that is the safe side.
+
 ## From the honest walk and the bookmark link (task 33, branch `dev/2.4-review-fixes`)
 
 Closed in task 33:
@@ -110,9 +122,9 @@ Open:
   ends them; the user opens a new link from the chat. Persist them (hashed, like
   `approval_grants`) if that turns out to be annoying.
 
-Tradeoffs (decided, not debt): the brief's 127.0.0.1 link is also shown to apps on other
-machines (it now says "on the computer where FlowState runs"); the local page has no key, by
-design (the link is meant to be clicked), and its limit is documented. (The 20-per-walk limit
+Tradeoffs (decided, not debt): the local page has no key, by design (the link is meant to
+be clicked), and its limit is documented. (Closed in task 34: the brief's 127.0.0.1 link was
+also shown to apps on other machines; it is now only given to apps on the same computer.) (The 20-per-walk limit
 now pages: task 33.)
 
 ## From one commit per save (task 29, branch `release/2.4-trust`)
