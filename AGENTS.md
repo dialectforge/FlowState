@@ -373,8 +373,9 @@ don't show server instructions:
    other agents' claims are listed last, so pick something else),
    `manage_problems` (attempts and solve), `manage_history` (see edits; undo the last change
    to a record, or take back a record you created while nothing refers to it; rows changed
-   since are skipped and listed), `manage_memory(action="cleanup")` (duplicates / stale / misfiled, as review
-   suggestions only), `manage_memory(action="import")` (memory exports into the review queue),
+   since are skipped and listed), `manage_memory(action="cleanup")` (duplicate / stale todos, misfiled records, as review
+   suggestions only; it only suggests a move when the record names the other project or one of
+   its parts), `manage_memory(action="import")` (memory exports into the review queue),
    `manage_projects` (projects and components). **Deletes:** only when the user asks,
    `manage_projects(action="delete" / "delete_component")` and `manage_memory(action="delete",
    record_type=..., record_id=...)` delete at once after a safety copy; the answer says what

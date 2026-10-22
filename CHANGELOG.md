@@ -196,6 +196,26 @@
   item's code from your computer). With your computer off or the relay agent down, the phone
   link can't open the list.
 
+### Clean-up questions you can judge at a glance
+- **No unsure guesses.** A "misfiled" clean-up idea is only queued when FlowState is sure:
+  the record clearly resembles the other project's records, and it names that project or one
+  of its parts (a component), and doesn't name its own project. Similar words alone (push,
+  pull, commit) are no longer enough. Before, `flowstate cleanup --queue` could ask about
+  moves it marked "unsure", which nobody could judge.
+- **Leftovers withdrawn.** Unsure move ideas still waiting from older versions are withdrawn
+  when FlowState starts and on every clean-up run (rejected as "Withdrawn by FlowState: it
+  wasn't sure enough to ask you."; never asked again). Only the review items change; no record
+  moves. The clean-up answer and the CLI say how many ("withdrew N").
+- **One plain question per item**, with the record's title, the projects and the reason:
+  `Move learning "..." from FlowState to Atlas VPN? It mentions Atlas VPN's "VPN handler"
+  component.`, `Cancel todo "..." in FlowState? It repeats todo "...".`, `Cancel todo "..." in
+  FlowState? It has waited since 2026-01-05 (over 120 days).` The phone list asks the same
+  ("Should FlowState move the learning ...?") instead of "Approve to keep it", and the review
+  page shows it with one button ("Approve: move it" / "Approve: cancel it", plus the optional
+  "Or move it to" choice) instead of edit boxes.
+- **No duplicate ideas that do nothing.** Approving a duplicate learning or problem only noted
+  it, so those are no longer suggested; duplicate todos still are (approving cancels the newer).
+
 ### Only you can turn an AI guess into "the user said so"
 - A record's source tag (`user_stated`, `ai_inferred`, `from_code`) now stores who set it and
   when: the app, the model if the app supplied it, or `user` when you confirmed it yourself.

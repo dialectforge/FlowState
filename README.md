@@ -220,8 +220,10 @@ prompt `flowstate-start`.
   answers by quoting your own records, with their ids, and says so when it has nothing on it. It doesn't make anything up.
 - **Search**: keyword search over todos, decisions, changes, learnings, problems and solutions
   (word endings match too). Search by meaning is optional and uses a local model you install yourself.
-- **Clean-up suggestions**: likely duplicates, stale items and records filed under the wrong
-  project, sent to the review queue as suggestions. Nothing moves until you approve.
+- **Clean-up suggestions**: duplicate and stale todos, and records filed under the wrong
+  project, sent to the review queue as one plain question each (`Move learning "..." from A to
+  B? It mentions B.`). It only suggests a move when the record names the other project or one
+  of its parts, never a guess it isn't sure of. Nothing moves until you approve.
 
 **Your controls (command line and browser)**
 - **Local review page**: a small page in your browser, on this computer only: review queue,
