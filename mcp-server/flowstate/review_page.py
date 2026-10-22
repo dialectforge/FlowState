@@ -222,6 +222,10 @@ class Page:
                     out.append(f"""<p><strong>{_e(it['summary'])}</strong></p><p class="meta">{_e(it['details'])}</p>
 <form method="post" action="/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
 <button>Approve: they really conflict</button></form>""")
+                elif it["kind"] == "source":   # "did you say this?": nothing to edit
+                    out.append(f"""<p><strong>{_e(it['summary'])}</strong></p><p class="meta">{_e(it['details'])}</p>
+<form method="post" action="/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
+<button>Approve: I said this</button></form>""")
                 elif it["kind"] == "delete":   # nothing to edit; a project needs its name typed
                     confirm = ""
                     if '"record_type": "project"' in (it.get("payload") or ""):

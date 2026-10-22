@@ -5,6 +5,16 @@ code or commits). verified_at: when someone last confirmed it is still true. Bot
 `record_meta`, a side table; no row means "unknown, never verified", which is what every
 older record is.
 
+Who set the source (2.4.0, migration 020): every source write stamps source_set_by (the app,
+from identity.py, or 'user' when the user confirmed it), source_set_model (only if the app
+supplied it) and source_set_at. Only the user turns an existing record into user_stated:
+an agent asking for it (manage_memory set_source / mark_checked with source=user_stated)
+leaves the tag as it is and queues one review item of kind `source` (repeats reuse the open
+one), which only the user's own click or key decides (approvals.user_only, whatever the
+approvals setting). Moving a tag away from user_stated is allowed and stamped. A user_stated
+log_work that repeats another app's ai_inferred record (cleanup's duplicate matching) is
+saved as ai_inferred (server._log_work, user_stated_dup).
+
 Stale facts: learnings, changes, decisions, variables and methods that mention paths,
 ports, hosts, URLs or config files (all server/config/endpoint/environment variables), not
 verified (or, if never verified, not created/updated) for STALE_DAYS. They are listed for
@@ -22,6 +32,8 @@ from . import links
 
 SOURCES = ("user_stated", "ai_inferred", "from_code")
 TAGS = {"user_stated": "user", "ai_inferred": "AI", "from_code": "code"}
+USER = "user"   # source_set_by when the user confirmed the tag themselves
+STAMPS = ("source_set_by", "source_set_model", "source_set_at")
 TABLES = {"todo": "todos", "decision": "conversations", "change": "changes",
           "learning": "learnings", "problem": "problems", "variable": "project_variables",
           "method": "project_methods"}
@@ -102,68 +114,266 @@ def _upsert(conn, rtype: str, rid: int, **cols) -> None:
                  f"AND record_id = ?", (*cols.values(), _now(), rtype, rid))
 
 
-def set_source(db_path: Path, rtype: str, rid: int, source: str, client: Optional[str]) -> None:
-    """Record where a record came from (no-op if migration 011 hasn't run)."""
+def stamped(conn) -> bool:
+    """Migration 020 has run (who set the source is stored)."""
+    return "source_set_by" in {r[1] for r in conn.execute("PRAGMA table_info(record_meta)")}
+
+
+def _source_cols(conn, source: str, by: Optional[tuple] = None,
+                 client: Optional[str] = None) -> dict:
+    """source plus who set it: `by` = (app, model), else the current caller (identity.py)."""
+    cols = {"source": source}
+    if stamped(conn):
+        if by is None:
+            from . import identity
+            who = identity.stamp(client)
+            by = (who.get("app"), who.get("model"))
+        cols.update(source_set_by=(by[0] or "unknown")[:80], source_set_model=by[1],
+                    source_set_at=_now())
+    return cols
+
+
+def current_source(conn, rtype: str, rid: int) -> Optional[str]:
+    row = conn.execute("SELECT source FROM record_meta WHERE record_type = ? AND record_id = ?",
+                       (rtype, rid)).fetchone()
+    return row[0] if row else None
+
+
+def set_source(db_path: Path, rtype: str, rid: int, source: str, client: Optional[str] = None,
+               by: Optional[tuple] = None) -> None:
+    """Record where a new record came from, stamped with who said so (no-op if migration 011
+    hasn't run). At log time an app may tag what it writes (user_stated when it is quoting
+    the user); changing an existing record's tag goes through mark()."""
     if source not in SOURCES:
         raise MetaError("bad_source", "source must be one of " + ", ".join(SOURCES) + ".")
     conn = links.connect(db_path)
     try:
         if not available(conn):
             return
-        _upsert(conn, rtype, int(rid), source=source)
+        _upsert(conn, rtype, int(rid), **_source_cols(conn, source, by, client))
         conn.commit()
     finally:
         conn.close()
 
 
+def _open_confirm(conn, pid: int, rtype: str, rid: int) -> Optional[int]:
+    row = conn.execute(
+        """SELECT id FROM review_items WHERE project_id = ? AND kind = 'source'
+           AND status = 'pending' AND json_extract(payload, '$.record_type') = ?
+           AND json_extract(payload, '$.record_id') = ? ORDER BY id LIMIT 1""",
+        (pid, rtype, rid)).fetchone()
+    return row[0] if row else None
+
+
+def request_user_stated(conn, pid: int, rtype: str, rid: int, client: str) -> tuple[int, bool]:
+    """Queue (or find the open) "did you say this yourself?" item: (item id, reused?)."""
+    from . import review
+    from .deletes import _title
+    found = _open_confirm(conn, pid, rtype, rid)
+    if found is not None:
+        return found, True
+    was = current_source(conn, rtype, rid)
+    title = _title(conn, rtype, rid)
+    item = review.add_item(
+        None, pid, "source", f'Did you say this yourself? {rtype} #{rid} "{title}"',
+        f"An AI app asked to tag this {rtype} user_stated (the user said so). Only you can "
+        f"confirm that. Approve if you said it; reject to leave it {was or 'untagged'}.",
+        {"record_type": rtype, "record_id": rid, "source": "user_stated", "was": was,
+         "title": title, "user_only": True}, (client or "unknown")[:80], conn=conn)
+    return item, False
+
+
+def unchanged_message(rtype: str, was: Optional[str], item: int) -> str:
+    return (f"Not changed: only the user can confirm that they said this. The {rtype} stays "
+            f"{was or 'untagged'} until they do. Review item #{item} waits for them: the review "
+            f"page (`flowstate review-page`) or `flowstate approve {item}` in their terminal.")
+
+
 def mark(db_path: Path, pid: int, rtype: str, rid, client: str, source: Optional[str] = None,
          verified: bool = True) -> dict:
-    """The `verify` tool's mark / source actions."""
+    """manage_memory mark_checked / set_source. Setting user_stated on an existing record
+    never happens here: it queues the user's confirmation instead (see the module text)."""
     if source is not None and source not in SOURCES:
         raise MetaError("bad_source", "source must be one of " + ", ".join(SOURCES) + ".")
     conn = links.connect(db_path)
     try:
         _need(conn)
         rid = check_record(conn, pid, rtype, rid)
-        cols = {}
+        was = current_source(conn, rtype, rid)
+        cols, asked = {}, None
         if verified:
             cols.update(verified_at=_now(), verified_by=client)
-        if source:
-            cols["source"] = source
-        if not cols:
+        if source == "user_stated" and was != "user_stated":
+            asked = request_user_stated(conn, pid, rtype, rid, client)
+        elif source and source != was:
+            cols.update(_source_cols(conn, source, client=client))
+        if not cols and not source:
             raise MetaError("nothing_to_do", "Give source=... (or use action=mark).")
-        _upsert(conn, rtype, rid, **cols)
+        if cols:
+            _upsert(conn, rtype, rid, **cols)
         conn.commit()
-        return {"record_type": rtype, "record_id": rid, **get(conn, rtype, [rid]).get(rid, {})}
+        out = {"record_type": rtype, "record_id": rid, **get(conn, rtype, [rid]).get(rid, {})}
+        if asked:
+            item, reused = asked
+            out.update({"source_unchanged": True, "confirm_requested": item,
+                        **({"already_requested": True} if reused else {}),
+                        "message": unchanged_message(rtype, was, item)})
+        return out
     finally:
         conn.close()
 
 
+def confirm(db_path: Path, item: dict) -> tuple[str, int]:
+    """The user approved a `source` review item: tag the record user_stated, stamped 'user'."""
+    import json
+    p = json.loads(item.get("payload") or "{}")
+    rtype, rid = p.get("record_type"), p.get("record_id")
+    conn = links.connect(db_path)
+    try:
+        _need(conn)
+        if rtype not in TABLES or rid is None or owner(conn, rtype, rid) is None:
+            from .review import ReviewError
+            raise ReviewError("record_not_found", f"The {rtype or 'record'} #{rid} no longer exists.")
+        _upsert(conn, rtype, int(rid), **_source_cols(conn, "user_stated", (USER, None)))
+        conn.commit()
+    finally:
+        conn.close()
+    return TABLES[rtype], int(rid)
+
+
+# the text cleanup's duplicate check compares, per log_work kind
+_DUP_TEXT = {"learning": "SELECT insight FROM learnings WHERE id = ? AND project_id = ?",
+             "todo": "SELECT title FROM todos WHERE id = ? AND project_id = ?",
+             "decision": "SELECT COALESCE(key_decisions, user_prompt_summary) FROM conversations "
+                         "WHERE id = ? AND project_id = ?",
+             "problem": "SELECT p.title FROM problems p JOIN components c ON c.id = p.component_id "
+                        "WHERE p.id = ? AND c.project_id = ?",
+             "change": "SELECT ch.field_name FROM changes ch JOIN components c "
+                       "ON c.id = ch.component_id WHERE ch.id = ? AND c.project_id = ?"}
+
+
+def user_stated_dup(db_path: Path, pid: int, kind: str, summary: str,
+                    app: Optional[str]) -> Optional[int]:
+    """The id of an ai_inferred record of this kind in this project, tagged by another app (or
+    by one not recorded), that `summary` duplicates (cleanup.is_duplicate); else None."""
+    if kind not in _DUP_TEXT:
+        return None
+    from .cleanup import is_duplicate
+    conn = links.connect(db_path)
+    try:
+        if not available(conn):
+            return None
+        by = "source_set_by" if stamped(conn) else "NULL"
+        for rid, set_by in conn.execute(
+                f"SELECT record_id, {by} FROM record_meta WHERE record_type = ? "
+                f"AND source = 'ai_inferred' ORDER BY record_id DESC", (kind,)).fetchall():
+            if app and set_by == app:
+                continue
+            row = conn.execute(_DUP_TEXT[kind], (rid, pid)).fetchone()
+            if row and is_duplicate(summary, row[0] or ""):
+                return rid
+        return None
+    finally:
+        conn.close()
+
+
+def at_log_time(db_path: Path, pid: int, kind: str, summary: str, source: Optional[str],
+                app: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """(source to save, note with an {id} slot or None): user_stated stays, unless it repeats
+    another app's ai_inferred record."""
+    if source != "user_stated":
+        return source, None
+    dup = user_stated_dup(db_path, pid, kind, summary, app)
+    if dup is None:
+        return source, None
+    return "ai_inferred", (
+        f"Saved as ai_inferred, not user_stated: it repeats {kind} #{dup}, which another app "
+        f"tagged ai_inferred. Only the user can confirm they said it: manage_memory(action="
+        f"\"set_source\", record_type=\"{kind}\", record_id={{id}}, source=\"user_stated\") "
+        f"asks them.")
+
+
+def agent_refusal(db_path: Path, item: dict, name: str) -> Optional[dict]:
+    """An app tried to decide a `source` item: refused, approvals on or off (only the user
+    decides). None for other items, and for an approve with approvals on, which then waits
+    for the user like a delete (popup / phone / terminal)."""
+    import json
+    from . import approvals
+    if item.get("kind") != "source" or (
+            name == "review_approve" and approvals.is_on(db_path, item["project_id"])):
+        return None
+    p = json.loads(item.get("payload") or "{}")
+    return {"error": "user_only", "message": "Only the user decides whether they said this; no "
+            "app can pass their OK along. " + unchanged_message(
+                p.get("record_type") or "record", p.get("was"), item["id"])}
+
+
 def get(conn, rtype: str, ids) -> dict:
-    """{id: {"source": ..., "verified_at": ...}} for those that have a row."""
+    """{id: {"source", "verified_at", "source_set_by", ...}} (set values only) for those
+    that have a row."""
     ids = [int(i) for i in ids if i is not None]
     if not ids or not available(conn):
         return {}
+    names = ("source", "verified_at") + (STAMPS if stamped(conn) else ())
     out = {}
     for i in range(0, len(ids), 500):
         chunk = ids[i:i + 500]
         for r in conn.execute(
-                f"SELECT record_id, source, verified_at FROM record_meta WHERE record_type = ? "
+                f"SELECT record_id, {', '.join(names)} FROM record_meta WHERE record_type = ? "
                 f"AND record_id IN ({','.join('?' * len(chunk))})", (rtype, *chunk)):
-            out[r[0]] = {k: v for k, v in (("source", r[1]), ("verified_at", r[2])) if v}
+            out[r[0]] = {k: v for k, v in zip(names, r[1:]) if v}
     return out
 
 
+def label(meta: Optional[dict]) -> Optional[str]:
+    """'user, via cursor' / 'user, confirmed by the user' / 'user' (not recorded) / 'AI' /
+    'code'; None without a tag. Who set it is named for user tags, the ones that matter."""
+    if not meta or not meta.get("source"):
+        return None
+    by = meta.get("source_set_by") if meta["source"] == "user_stated" else None
+    if not by:
+        return TAGS[meta["source"]]
+    return "user, confirmed by the user" if by == USER else f"user, via {by}"
+
+
 def tag(meta: Optional[dict]) -> str:
-    """Compact suffix for brief lines: ' (user)', ' (AI, checked 2026-10-16)', or ''."""
+    """Compact suffix for brief lines: ' (user, via cursor)', ' (AI, checked 2026-10-16)',
+    or ''."""
     if not meta:
         return ""
     bits = []
     if meta.get("source"):
-        bits.append(TAGS[meta["source"]])
+        bits.append(label(meta))
     if meta.get("verified_at"):
         bits.append(f"checked {meta['verified_at'][:10]}")
     return f" ({', '.join(bits)})" if bits else ""
+
+
+def annotate(db_path: Path, res, key: str, type_key: str = "type", id_key: str = "id"):
+    """Add source, source_tag and who set it to the rows in res[key] that have a tag (in
+    place); returns res."""
+    rows = res.get(key) if isinstance(res, dict) else None
+    if not rows:
+        return res
+    want: dict = {}
+    for r in rows:
+        if isinstance(r, dict) and r.get(type_key) in TABLES and r.get(id_key) is not None:
+            want.setdefault(r[type_key], []).append(r[id_key])
+    if not want:
+        return res
+    conn = links.connect(db_path)
+    try:
+        metas = {t: get(conn, t, ids) for t, ids in want.items()}
+    finally:
+        conn.close()
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        m = metas.get(r.get(type_key), {}).get(r.get(id_key))
+        if m and m.get("source"):
+            r.update({"source": m["source"], "source_tag": label(m),
+                      **{k: m[k] for k in STAMPS if m.get(k)}})
+    return res
 
 
 def is_fact(text: str) -> bool:

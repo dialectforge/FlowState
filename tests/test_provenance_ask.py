@@ -62,7 +62,7 @@ def test_source_on_log_work_shown_compactly(backend, seeded_db):
     call(S, "log_work", {"project": "Alpha", "kind": "decision", "source": "ai_inferred",
                          "summary": "Use SQLite WAL later"})
     text = brief(S)
-    assert "Alex wants plain-language reports (user)" in text
+    assert "Alex wants plain-language reports (user, via Claude Desktop)" in text
     assert "Use SQLite WAL later (AI)" in text
     assert "Alpha lesson (" not in text                      # old rows: unknown, no tag
     bad = S.handle_call("log_work", {"project": "Alpha", "kind": "todo", "summary": "x",

@@ -45,6 +45,22 @@ def _dup_toks(s: str) -> set:
             if t not in _BASIC_STOP}
 
 
+def similarity(ta: set, tb: set) -> Optional[float]:
+    """Jaccard similarity of two titles' words, or None when either is too short to tell."""
+    if len(ta) < 3 or len(tb) < 3:
+        return None
+    return len(ta & tb) / len(ta | tb)
+
+
+def is_duplicate(a: str, b: str) -> bool:
+    """The duplicate check `suggest` uses, for two texts: the same words, or similar enough."""
+    ta, tb = _dup_toks(a), _dup_toks(b)
+    if ta and ta == tb:
+        return True
+    j = similarity(ta, tb)
+    return j is not None and j >= DUP_JACCARD
+
+
 def _toks(s: str) -> set:
     return {t for t in re.findall(r"[a-z][a-z0-9_]{2,}", (s or "").lower().replace("-", "_"))
             if t not in _STOP}
@@ -166,10 +182,8 @@ def suggest(db_path: Path, project_id: Optional[int] = None,
             for (_pid, kind), items in groups.items():
                 for i, (a, ta) in enumerate(items):
                     for b, tb in items[i + 1:]:
-                        if len(ta) < 3 or len(tb) < 3:
-                            continue
-                        j = len(ta & tb) / len(ta | tb)
-                        if j >= DUP_JACCARD:
+                        j = similarity(ta, tb)
+                        if j is not None and j >= DUP_JACCARD:
                             old, new = sorted((a, b), key=lambda x: x["id"])
                             out.append({"type": "duplicate", "project_id": old["project_id"],
                                         "records": [[kind, old["id"]], [kind, new["id"]]],

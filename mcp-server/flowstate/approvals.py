@@ -53,7 +53,7 @@ CLOCK_SKEW = 60
 NONCE_DAYS = 7               # the phone link's one-use code, then a fresh one is made
 SITE = "https://flowstatemcp.com"
 ACTION = "approve_review"
-USER_ONLY_KINDS = ("delete", "setting")
+USER_ONLY_KINDS = ("delete", "setting", "source")
 
 # The flowstatemcp.com approval-grant public keys (ES256 / P-256 JWKs), pinned per release:
 # fsa-1 active, fsa-2 backup so the site can rotate without a forced update.
@@ -218,10 +218,11 @@ def popup_allowed(db_path: Optional[Path], client_name: str, declared: bool) -> 
 
 # ---------------------------------------------------------------- user-only items
 def user_only(item: Optional[dict]) -> bool:
-    """Only a human click or keypress decides this item (queued while approvals were on)."""
+    """Only a human click or keypress decides this item: a delete or setting queued while
+    approvals were on, and every "did the user say this?" item (provenance.py)."""
     if not item or item.get("kind") not in USER_ONLY_KINDS:
         return False
-    if item["kind"] == "setting":
+    if item["kind"] in ("setting", "source"):   # source: always, approvals on or off
         return True
     try:
         return bool(json.loads(item.get("payload") or "{}").get("user_only"))
@@ -301,6 +302,11 @@ def describe(item: dict, project: str) -> str:
     if item["kind"] == "setting":
         where = "the whole install" if p.get("scope") == "install" else project
         return f"turn review off for {where}"
+    if item["kind"] == "source":
+        title = " ".join(str(p.get("title") or "").split())
+        title = title if len(title) <= 60 else title[:57] + "..."
+        return (f'mark the {p.get("record_type") or "record"} "{title}" in {project} as '
+                f"something you said yourself (user_stated)")
     if item["kind"] == "delete":
         rtype, title = p.get("record_type") or "record", " ".join(str(p.get("title") or "").split())
         title = title if len(title) <= 60 else title[:57] + "..."

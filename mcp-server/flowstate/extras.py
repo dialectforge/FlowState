@@ -5,7 +5,7 @@ no project, or named one that doesn't exist)."""
 
 from typing import Any, Optional
 
-from . import handoffs, provenance, rules
+from . import approvals, handoffs, provenance, rules
 from .guard import explicit_project
 
 TOOLS = ("rules", "handoff", "verify", "ask")
@@ -57,8 +57,12 @@ def handle(name: str, pid: Optional[int], args: dict, client: str, db_path) -> A
                 if act == "source" and not args.get("source"):
                     return {"error": "source_required", "message": "Give source: "
                             + ", ".join(provenance.SOURCES) + "."}
-                return provenance.mark(db_path, pid, args.get("record_type"), args.get("record_id"),
-                                       client, args.get("source"), verified=(act == "mark"))
+                out = provenance.mark(db_path, pid, args.get("record_type"), args.get("record_id"),
+                                      client, args.get("source"), verified=(act == "mark"))
+                if out.get("confirm_requested") and approvals.is_on(db_path, pid):
+                    from .server import _user_only   # popup / phone / terminal, as for deletes
+                    return _user_only(out, out["confirm_requested"], client)
+                return out
             return {"error": "bad_action", "message": "action must be stale, mark or source."}
     except (rules.RuleError, handoffs.HandoffError) as e:
         return e.payload

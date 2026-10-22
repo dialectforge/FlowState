@@ -95,12 +95,15 @@ def route_tool(name: str, args: dict, db_path) -> Any:
     
     elif name == "search":
         from . import meaning
+        from . import provenance
         if not str(args.get("query") or "").strip():   # no query: the newest records
-            return meaning.recent(db_path, args.get("project_id"), args.get("content_types"),
-                                  args.get("since_hours"), args.get("limit", 10))
-        return meaning.search(db_path, args["query"], args.get("project_id"),
-                              args.get("content_types"), args.get("limit", 10),
-                              args.get("mode") or "auto")
+            res = meaning.recent(db_path, args.get("project_id"), args.get("content_types"),
+                                 args.get("since_hours"), args.get("limit", 10))
+        else:
+            res = meaning.search(db_path, args["query"], args.get("project_id"),
+                                 args.get("content_types"), args.get("limit", 10),
+                                 args.get("mode") or "auto")
+        return provenance.annotate(db_path, res, "results", "content_type", "content_id")
     
     # ----------------------------------------
     # CONSOLIDATED TOOL ROUTING

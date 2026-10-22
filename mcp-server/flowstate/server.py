@@ -432,7 +432,7 @@ def _handle(name: str, args: dict, client: str, meta: dict) -> Any:
             db_path, pid, args.get("kind"), suggested=bool(args.get("suggested"))):
         result = _suggest(pid, args, client)
     elif name == "log_work":
-        result = _log_work(pid, args, sid)
+        result = _log_work(pid, args, sid, client=client)
         if isinstance(result, dict) and isinstance(result.get("record"), dict) \
                 and result["record"].get("id") is not None:
             meta["record"] = (result["logged"], result["record"]["id"])
@@ -583,7 +583,7 @@ def _save_commit(pid: int, summary: str, details: str):
     if review_mode.should_queue(backend.db_path, pid, "change"):
         return review.add_item(backend.db_path, pid, "change", summary, details,
                                {"component": "Git", "source": "from_code"}, "git-capture")
-    return _log_work(pid, args, None)
+    return _log_work(pid, args, None, ("git-capture", None))
 
 
 def _component_id(pid: int, name: Optional[str]) -> int:
@@ -605,7 +605,8 @@ def _component_id(pid: int, name: Optional[str]) -> int:
     return tools.create_component(pid, wanted, "Created by FlowState log_work" if wanted == "General" else None)["id"]
 
 
-def _log_work(pid: int, args: dict, sid: Optional[int]) -> Any:
+def _log_work(pid: int, args: dict, sid: Optional[int], by: Optional[tuple] = None,
+              client: Optional[str] = None) -> Any:
     kind, summary = args.get("kind"), (args.get("summary") or "").strip()
     details = args.get("details") or None
     if not summary:
@@ -618,6 +619,8 @@ def _log_work(pid: int, args: dict, sid: Optional[int]) -> Any:
     if source is not None and source not in provenance.SOURCES:
         return {"error": "bad_source", "message": "source must be one of "
                 + ", ".join(provenance.SOURCES) + "."}
+    source, source_note = provenance.at_log_time(   # no way around the user's confirmation
+        backend.db_path, pid, kind, summary, source, by[0] if by else identity.stamp(client)["app"])
     replaces = args.get("replaces")
     if replaces is not None and kind != "decision":
         return {"error": "bad_request", "message": "replaces only applies to kind=decision."}
@@ -655,8 +658,9 @@ def _log_work(pid: int, args: dict, sid: Optional[int]) -> Any:
         return {"error": "bad_kind", "message": "kind must be decision, change, problem, learning or todo."}
     out = {"logged": kind, "project_id": pid, "record": r}
     if source and isinstance(r, dict) and r.get("id") is not None:
-        _safe_call(provenance.set_source, backend.db_path, kind, r["id"], source, None)
+        _safe_call(provenance.set_source, backend.db_path, kind, r["id"], source, client, by)
         out["source"] = source
+        out.update({"source_note": source_note.format(id=r["id"])} if source_note else {})
     if comp_id is not None and kind in ("change", "decision"):
         alerted = _alert_watchers(pid, comp_id, kind, r.get("id") if isinstance(r, dict) else None,
                                   summary)
@@ -805,8 +809,9 @@ def _history(pid: Optional[int], args: dict, client: str) -> Any:
                         "message": "undo needs record_type and record_id (see manage_history list)."}
             return history.undo(backend.db_path, pid, args["record_type"], int(args["record_id"]),
                                 client)
-        return history.list_history(backend.db_path, pid, args.get("record_type"),
-                                    args.get("record_id"), args.get("limit") or 20)
+        return provenance.annotate(backend.db_path, history.list_history(   # who set each tag
+            backend.db_path, pid, args.get("record_type"), args.get("record_id"),
+            args.get("limit") or 20), "history", "record_type", "record_id")
     except history.HistoryError as e:
         return e.payload
 
@@ -1061,6 +1066,8 @@ def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
         item = review.get_item(backend.db_path, int(args["item_id"]))
         agent = identity.current() is not None   # None: command line, review page, popup, phone
         locked = approvals.user_only(item) and item["status"] == "pending"
+        if locked and agent and (no := provenance.agent_refusal(backend.db_path, item, name)):
+            return no   # a "did the user say this?" item: the user's alone
         if locked and agent and name == "review_approve":   # only the user's own click or key
             return _user_only({"item_id": item["id"], "kind": item["kind"]}, item["id"], client)
         own = review.own_item_refusal(item, identity.current(), user_request)
@@ -1082,8 +1089,8 @@ def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
                 out.update(conflicts.dismiss(backend.db_path, int(args["item_id"]), client))
             return out
 
-        def apply(item: dict, payload: dict):
-            r = _log_work(item["project_id"], payload, None)
+        def apply(item: dict, payload: dict):   # a source tag is the queuing app's say-so
+            r = _log_work(item["project_id"], payload, None, (item.get("app") or client, item.get("model")))
             if isinstance(r, dict) and "error" in r:
                 raise review.ReviewError(r["error"], r.get("message", "could not create the record"))
             rec = r.get("record") if isinstance(r, dict) else None
@@ -1127,7 +1134,8 @@ def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
         out = review.approve(backend.db_path, int(args["item_id"]), user_request, client, apply, edits,
                              others={"cleanup": apply_cleanup, "edit": apply_edit,
                                      "delete": apply_delete, "conflict": apply_conflict,
-                                     "setting": apply_setting})
+                                     "setting": apply_setting,
+                                     "source": lambda it, _e: provenance.confirm(backend.db_path, it)})
         if locked:
             _safe_call(approvals.log_decision, backend.db_path, item, approvals.path_of(client),
                        client, "approved")

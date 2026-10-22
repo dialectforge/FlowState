@@ -1,6 +1,7 @@
 """A v2.3.0 database upgrades cleanly to 2.4.0: built by the real v2.3.0 code (git archive
 of the v2.3.0 commit into a temp folder), then migrated by this code. Only new tables
-arrive (015-017); every existing table keeps its schema and rows."""
+arrive (015-019), plus three NULL columns on FlowState's own record_meta (020, who set a
+source tag); every other table keeps its schema, and every table its rows."""
 
 import json
 import shutil
@@ -70,12 +71,19 @@ def test_v230_database_upgrades_with_new_tables_only(v230_db, tmp_path):
                                       "AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'memory_fts%'")]
     data = {t: _rows(db, f'SELECT * FROM "{t}" ORDER BY rowid') for t in tables
             if t != "schema_migrations"}
+    cols = lambda: [r[1:] for r in _rows(db, "PRAGMA table_info(record_meta)")]
+    meta_before = cols()
     res = M.migrate(db, tmp_path / "bk")
     assert res["applied"] == ["015_session_runs", "016_write_receipts", "017_run_views",
-                              "018_run_views_upto", "019_approvals"]
+                              "018_run_views_upto", "019_approvals", "020_source_stamps"]
     assert res["backup"] and "pre-migration" in res["backup"]
     after = _schemas(db)
-    assert {k: v for k, v in after.items() if k in before} == before      # nothing altered
+    changed = {k for k in before if after.get(k) != before[k]}
+    assert changed == {"record_meta"}                       # nothing else altered
+    now = cols()
+    assert now[:-3] == meta_before                          # only added at the end
+    assert [c[0] for c in now[-3:]] == ["source_set_by", "source_set_model", "source_set_at"]
+    assert all(c[1] == "TEXT" and c[2] == 0 and c[3] == "NULL" for c in now[-3:])
     assert {n for n in after if n not in before} >= NEW
     assert {t: _rows(db, f'SELECT * FROM "{t}" ORDER BY rowid') for t in data} == data
     assert _rows(db, "PRAGMA integrity_check") == [("ok",)]
