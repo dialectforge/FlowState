@@ -1786,6 +1786,14 @@ def report(W, started, test_changed, live_changed):
     return "\n".join(lines)
 
 
+def rmtree(root: Path) -> None:
+    """Delete the sandbox. git's object files are read-only, which Windows won't delete as is."""
+    def again(fn, path, _exc):
+        os.chmod(path, 0o700)
+        fn(path)
+    shutil.rmtree(root, **({"onexc": again} if sys.version_info >= (3, 12) else {"onerror": again}))
+
+
 def git(*a):
     return subprocess.run(["git", "-C", str(REPO), *a], capture_output=True, text=True).stdout.strip()
 
@@ -1826,7 +1834,7 @@ def main():
     (root / "report.md").write_text(text)
     print("\n" + text)
     if not args.keep:
-        shutil.rmtree(root, ignore_errors=True)
+        rmtree(root)
         print(f"\n(removed {root})")
     return 0 if all(ok for cs in R.checks.values() for ok, *_ in cs) else 1
 
