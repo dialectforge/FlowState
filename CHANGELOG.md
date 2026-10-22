@@ -25,6 +25,8 @@
   HTTP server's `/health`, the relay tunnel). Any failure puts the exact old commit, branch and
   `.venv` back and starts the old services. The database is never put back or overwritten.
 - `flowstate update --rollback`: back to the version before the last update.
+- Known limit: on Windows a release that changes the Python packages is refused before anything
+  changes (the command runs from the `.venv` it would have to replace); update that one by hand.
 - An app still running the old code after an update says in its brief: `FlowState was updated
   to X; this app still runs Y. Ask the user to restart it.`
 

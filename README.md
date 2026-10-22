@@ -602,7 +602,9 @@ plan, then `<venv python> -m flowstate update --yes --user-said "<your words>"`.
 4. stops this folder's FlowState services (scheduled tasks, LaunchAgents or systemd user units
    that run from this folder; your AI apps are listed, not stopped), moves the code to the new
    tag (a fresh `.venv` only when the release changes the Python packages, and then every app
-   must be quit first), migrates the database, starts the services again and checks them;
+   must be quit first; on Windows such a release is refused up front, because the command runs
+   from that `.venv`: update it by hand), migrates the database, starts the services again and
+   checks them;
 5. if anything in step 4 fails, it puts the old version back on its own: the same commit and
    branch, the same `.venv`, the old services. Your database is never put back or overwritten
    (migrations only add tables and columns, so the old version reads it as it is).

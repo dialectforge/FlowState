@@ -77,6 +77,11 @@ Open (need John or a spare machine; none can be closed from a test):
   `cmd /c` running, and whether the leftover check finds it (a venv `python.exe` is a launcher:
   its child is the base Python, whose command line may not name the folder; the kill uses
   `/T` on the launcher). Same for macOS and Linux.
+- **Dependency-changing releases on Windows are refused.** `flowstate update` runs from the
+  `.venv` it would replace, and a Windows venv's `python.exe` launcher keeps running (and holds
+  the folder) while it does, so such a release is refused up front with the manual steps. Doing
+  it would need a runner outside the `.venv` (for example a small stdlib-only script started
+  with the base Python).
 - **Real dependency-change path never ran.** A fresh `.venv` with real pip (`Pip`), and Windows
   refusing to rename a `.venv` in use, are covered by fakes only.
 - **Developer-install opt-out.** When 2.5 lands, add `"self_update": false` to the host PC's FlowState

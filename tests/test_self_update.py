@@ -658,6 +658,27 @@ def test_pip_failure_puts_the_old_venv_back(world):
     _rolled_back(w, up, head, branch, ["while installing packages", "no matching distribution"])
 
 
+def test_dependency_change_from_inside_the_venv_on_windows_is_refused_up_front(world, monkeypatch):
+    """On Windows the venv's python.exe launcher holds the .venv while the update runs from it,
+    so a release that changes the packages is refused before anything changes."""
+    w = world
+    w.release("2.5.0", deps='["mcp>=1.30,<2"]')
+    monkeypatch.setattr(SU.Updater, "_runs_from_this_venv", lambda self: True)
+    _refused(w, make(w), "changes FlowState's Python packages", "same .venv", before=snapshot(w))
+    w.out.clear()
+    assert make(w).run(dry_run=True) == 1 and "changes FlowState's Python packages" in text(w)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="the Windows venv launcher")
+def test_runs_from_this_venv_on_windows(tmp_path):
+    here = SU.Updater(folder=Path(sys.prefix).parent, db=tmp_path / "x.db", say=lambda m: None)
+    assert here.venv.name == ".venv" or not here._runs_from_this_venv()
+    if Path(sys.prefix).name == ".venv":
+        assert here._runs_from_this_venv() is True
+    other = SU.Updater(folder=tmp_path, db=tmp_path / "x.db", say=lambda m: None)
+    assert other._runs_from_this_venv() is False
+
+
 def test_dependency_change_needs_every_app_quit(world):
     w = world
     w.release("2.5.0", deps='["mcp>=1.30,<2"]')

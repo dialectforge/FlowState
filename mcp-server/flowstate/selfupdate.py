@@ -514,6 +514,13 @@ class Updater:
             raise Refused(f"release {tag} is not a fast-forward of main here")
         plan.deps_changed = _deps(self.git.out("show", f"HEAD:{PYPROJECT}") or "") != _deps(pyproject)
 
+    def _runs_from_this_venv(self) -> bool:
+        """Windows: a venv's python.exe is a launcher that keeps running (holding files in the
+        .venv) while this command runs, so the .venv can't be renamed or replaced from inside."""
+        if os.name != "nt":
+            return False
+        return mentions(os.path.realpath(sys.prefix), Path(os.path.realpath(self.venv)))
+
     def _drop_temp_ref(self, plan: Plan) -> None:
         if plan.ref.startswith(TEMP_REF):
             self.git.run("update-ref", "-d", plan.ref)
@@ -668,6 +675,9 @@ class Updater:
                 return 0
             signers = self.read_signers()
             self.fetch_and_verify(plan, signers)
+            if plan.deps_changed and self._runs_from_this_venv():
+                raise Refused(f"release {plan.target['tag']} changes FlowState's Python packages, and on "
+                              f"Windows they can't be replaced while this command runs from the same .venv")
             plan.services = self.services.find(self.folder)
             plan.apps = [p for p in self._venv_procs() if self._is_app(p)]
             if dry_run:
