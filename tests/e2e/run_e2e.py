@@ -1093,21 +1093,22 @@ def s8_backups(W):
             not err(r) and W.count("todos", "title='Throw this away'") == 1, r)
     # clean-up suggestions -> approve one (safety copy reused within a minute)
     for i in range(2):
-        cursor.call("log_work", project=P, kind="learning", summary="Sourdough starter needs feeding twice a day")
-        cc2.call("log_work", project=P, kind="learning", summary="Sourdough starter needs feeding twice a day!")
+        cursor.call("log_work", project=P, kind="todo", summary="Feed the sourdough starter twice a day")
+        cc2.call("log_work", project=P, kind="todo", summary="Feed the sourdough starter twice a day!")
     r = cc1.call("manage_memory", action="cleanup", project=P)
-    R.check(8, "manage_memory cleanup queues suggestions (and changes nothing)", not err(r), r)
+    R.check(8, "manage_memory cleanup queues suggestions (and changes nothing; reports withdrew)",
+            not err(r) and r.get("withdrew") == 0, r)
     lst = cc1.call("manage_review", action="list", project=P, limit=100)
-    cl = [line_id(x) for x in review_lines(lst) if "clean-up idea" in x]
+    cl = [line_id(x) for x in review_lines(lst) if "clean-up idea" in x and 'Cancel todo "Feed the sourdough' in x]
     if cl:
         n0 = len(list(W.backups.glob("*")))
         r = cursor.call("manage_review", action="approve", project=P, item_id=cl[0],
-                        user_request="yes merge those duplicate sourdough notes")
+                        user_request="yes cancel that duplicate sourdough todo")
         R.check(8, "approving a clean-up idea works (shares the recent safety copy)",
                 not err(r) and len(list(W.backups.glob("*"))) == n0, short(r, 200))
     else:
-        R.word("manage_memory cleanup found no duplicate in two near-identical learnings "
-               "('Sourdough starter needs feeding twice a day' vs the same with '!').")
+        R.check(8, "manage_memory cleanup asks one plain question for two near-identical todos",
+                False, review_lines(lst))
     # stale, mark_checked, set_source, import
     r = cc1.call("manage_memory", action="stale", project=P, days=0, limit=5)
     R.check(8, "manage_memory stale (days=0 lists facts)", not err(r), r)

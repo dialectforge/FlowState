@@ -44,7 +44,8 @@ def cmd_cleanup(a) -> int:
     if a.queue:
         res = cleanup.queue(db, found, source="cleanup (cli)")
         say(f"Added {res['queued']} to the review queue ({res['already_suggested']} were already "
-            f"suggested before). Nothing was moved or changed.")
+            f"suggested before; withdrew {res['withdrew']} unsure one(s) from older versions). "
+            f"Nothing was moved or changed.")
     else:
         say("Nothing was changed (add --queue to put these in the review queue).")
     return 0

@@ -250,9 +250,14 @@ class Page:
                 if it["kind"] == "cleanup" and '"misfiled"' in (it.get("payload") or ""):
                     targets = "".join(f'<option value="{p["id"]}">{_e(p["name"])}</option>'
                                       for p in projects)
-                    move = ('<label>Move to (empty = the suggested project)<select name="move_to">'
+                    move = ('<label>Or move it to (empty = the suggested project)<select name="move_to">'
                             f'<option value=""></option>{targets}</select></label>')
-                if it["kind"] == "conflict":   # possible conflicting decisions: nothing to edit
+                if it["kind"] == "cleanup":   # one plain question: nothing to edit
+                    verb = "move" if move else "cancel"
+                    out.append(f"""<p><strong>{_e(it['summary'])}</strong></p><p class="meta">{_e(it['details'])}</p>
+<form method="post" action="/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">{move}
+<button>Approve: {verb} it</button></form>""")
+                elif it["kind"] == "conflict":   # possible conflicting decisions: nothing to edit
                     out.append(f"""<p><strong>{_e(it['summary'])}</strong></p><p class="meta">{_e(it['details'])}</p>
 <form method="post" action="/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
 <button>Approve: they really conflict</button></form>""")

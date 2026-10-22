@@ -368,12 +368,15 @@ def ask_line(db_path: Path, item_id: int, what: str = "approve it") -> str:
     return f"Waiting for the user: ask them to run `flowstate approve {item_id}` in their terminal."
 
 
-def describe(item: dict, project: str) -> str:
+def describe(item: dict, project: str, db_path: Optional[Path] = None) -> str:
     """What the user is asked, in plain words (without the app's name)."""
     try:
         p = json.loads(item.get("payload") or "{}")
     except ValueError:
         p = {}
+    if item["kind"] == "cleanup":
+        from . import cleanup
+        return cleanup.ask(p, project, db_path)
     if item["kind"] == "setting":
         where = "the whole install" if p.get("scope") == "install" else project
         return f"turn review off for {where}"
@@ -408,7 +411,7 @@ def ask_payload(db_path: Path, item_id: int, app: str) -> dict:
         p = json.loads(item.get("payload") or "{}")
     except ValueError:
         p = {}
-    out = {"item_id": item_id, "message": f"{app} wants to {describe(item, project)}.",
+    out = {"item_id": item_id, "message": f"{app} wants to {describe(item, project, db_path)}.",
            "line": ask_line(db_path, item_id)}
     if item["kind"] == "delete" and p.get("record_type") == "project":
         out["project_name"] = p.get("project_name") or project

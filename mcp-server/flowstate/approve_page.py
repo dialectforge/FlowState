@@ -159,8 +159,13 @@ def view(db_path, item_id: int) -> dict:
     project = row[0] if row else f"project #{item['project_id']}"
     p = json.loads(item.get("payload") or "{}")
     app = item.get("app") or item.get("source") or "An app"
-    return {"id": item["id"], "project": project, "kind": item["kind"],
-            "question": f"{app} wants to {approvals.describe(item, project)}.",
+    ask = approvals.describe(item, project, db_path)
+    if item["kind"] == "cleanup":   # FlowState's own idea: one plain question and its reason
+        why = p.get("reason") or ""
+        question = f"Should FlowState {ask}?" + (f" {why[:1].upper()}{why[1:]}." if why else "")
+    else:
+        question = f"{app} wants to {ask}."
+    return {"id": item["id"], "project": project, "kind": item["kind"], "question": question,
             "summary": item.get("summary") or "", "details": item.get("details") or "",
             "queued_by": app + (f" on {item['machine']}" if item.get("machine") else ""),
             "queued_at": item.get("created_at") or "",

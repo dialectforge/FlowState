@@ -182,7 +182,7 @@ def items(db_path) -> list:
     for it in review.list_items(db_path, None, "pending", LIST_MAX)["items"]:
         v = view(db_path, it["id"])
         v["kind_label"] = _KIND.get(it["kind"], it["kind"])
-        if it["kind"] not in approvals.USER_ONLY_KINDS:   # a record or idea waiting to count
+        if it["kind"] not in approvals.USER_ONLY_KINDS + ("cleanup",):   # a record waiting to count
             v["question"] = "Approve to keep it; reject to leave it out."
         v["details"] = (v["details"] or "")[:1000]
         out.append(v)

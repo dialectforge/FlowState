@@ -7,8 +7,13 @@ history, so it can be undone. A suggestion the user rejected is not suggested ag
 
 Misfiled: a record whose words match another project's names and components (project name,
 description, component names, weighted by how rare each word is across projects) much
-better than its own project's; the suggested target is the project whose own records it
-most resembles. Local word statistics only; no AI service.
+better than its own project's, and that clearly resembles that project's own records more
+than any other's. Even then it is only suggested when the record names the target: its text
+contains the target project's name or one of its components' names (not "General"; names of
+4+ characters), and not its own project's name. FlowState never asks the user to judge a
+guess it isn't sure of; `withdraw_unsure` takes back unsure ones queued by older versions.
+Each suggestion is one plain question ('Move learning "..." from A to B? It mentions B.').
+Local word statistics only; no AI service.
 """
 
 import json
@@ -70,6 +75,53 @@ def _short(s: str, n: int = 70) -> str:
     return links._one_line(s, n)
 
 
+TITLE_MAX = 40   # keeps the question and its reason within about 150 characters
+WITHDRAWN = "Withdrawn by FlowState: it wasn't sure enough to ask you."
+
+
+def _words(s: Optional[str]) -> str:
+    """Lowercase words joined by single spaces, padded, for whole-name matching."""
+    return " " + " ".join(re.findall(r"[a-z0-9]+", (s or "").lower())) + " "
+
+
+def _names(text: str, name: Optional[str]) -> bool:
+    n = _words(name).strip()
+    return len(n) >= 4 and f" {n} " in text
+
+
+def question(kind: str, rkind: str, title: str, project: str, target: Optional[str] = None,
+             reason: str = "") -> str:
+    """The one plain line a clean-up item asks the user: the question, then its reason."""
+    t = f'"{_short(title, TITLE_MAX)}"'
+    q = (f"Move {rkind} {t} from {project} to {target}?" if kind == "misfiled"
+         else f"Cancel {rkind} {t} in {project}?")
+    full = f"{q} {reason[:1].upper()}{reason[1:]}." if reason else q
+    if len(full) > 150 and kind == "misfiled":
+        full = f"{q} It mentions {target}."
+    return full
+
+
+def ask(payload: dict, project: str, db_path: Optional[Path] = None) -> str:
+    """A clean-up item's question in verb form, for the approval pages:
+    'move the learning "..." from A to B' / 'cancel the todo "..." in A'."""
+    recs = payload.get("records") or []
+    rkind, rid = recs[-1] if recs else ("record", None)
+    title = None
+    if db_path and rid is not None:
+        try:
+            conn = links.connect(db_path)
+            try:
+                title = links.label(conn, rkind, rid)
+            finally:
+                conn.close()
+        except Exception:  # noqa: BLE001 - the question still reads without the title
+            title = None
+    what = f'the {rkind} "{_short(title, TITLE_MAX)}"' if title else f"{rkind} #{rid}"
+    if payload.get("type") == "misfiled":
+        return f"move {what} from {project} to {payload.get('target') or 'another project'}"
+    return f"cancel {what} in {project}"
+
+
 def _records(conn) -> list[dict]:
     """Every movable record: kind, id, project, text, open?"""
     out = []
@@ -98,6 +150,10 @@ class _Model:
 
     def __init__(self, conn, recs: list[dict]):
         self.names = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM projects")}
+        self.parts = defaultdict(list)
+        for pid, name in conn.execute("SELECT project_id, name FROM components ORDER BY id"):
+            if (name or "").strip().lower() != "general":
+                self.parts[pid].append(name)
         sig = defaultdict(set)
         for r in conn.execute("SELECT id, name, description FROM projects"):
             sig[r[0]] |= _toks(f"{r[1]} {r[2] or ''}")
@@ -144,11 +200,21 @@ class _Model:
             return None
         target, s1 = top[0]
         s2 = top[1][1] if len(top) > 1 else 0.0
-        sure = s1 >= 0.08 and s1 >= 1.5 * s2
-        return {"target_project_id": target, "target": self.names.get(target),
-                "also_possible": None if sure or len(top) < 2 else self.names.get(top[1][0]),
-                "confidence": "likely" if sure else "unsure",
-                "words": sorted(set(evidence[best]))[:6]}
+        if s1 < 0.08 or s1 < 1.5 * s2:
+            return None   # not sure: never asked
+        text, name = _words(rec["text"]), self.names.get(target)
+        if _names(text, self.names.get(own)):
+            return None   # it names its own project too
+        if _names(text, name):
+            reason = f"it mentions {name}"
+        else:
+            hits = [c for c in self.parts.get(target, []) if _names(text, c)]
+            if not hits:
+                return None   # it names neither the other project nor any of its parts
+            hit = min(hits, key=lambda c: text.index(f" {_words(c).strip()} "))
+            reason = f'it mentions {name}\'s "{hit}" component'
+        return {"target_project_id": target, "target": name, "confidence": "likely",
+                "reason": reason, "words": sorted(set(evidence[best]))[:6]}
 
 
 def suggest(db_path: Path, project_id: Optional[int] = None,
@@ -166,18 +232,17 @@ def suggest(db_path: Path, project_id: Optional[int] = None,
             for r in mine:
                 m = model.misfiled(r)
                 if m:
-                    where = f"{m['target']}" + (f" (or {m['also_possible']})" if m["also_possible"] else "")
+                    here = names[r["project_id"]]
                     out.append({"type": "misfiled", "project_id": r["project_id"],
                                 "records": [[r["kind"], r["id"]]], **m,
-                                "summary": f"Misfiled? {r['kind']} #{r['id']} \"{_short(r['title'])}\" "
-                                           f"looks like {where}, not {names[r['project_id']]}",
-                                "details": f"Matching words: {', '.join(m['words'])}. Confidence: "
-                                           f"{m['confidence']}. Approve to move it to {m['target']} "
-                                           f"(or pass move_to=\"<project>\"); reject to keep it here."})
+                                "summary": question("misfiled", r["kind"], r["title"], here,
+                                                    m["target"], m["reason"]),
+                                "details": f"Approve moves it (undo puts it back). Reject keeps it "
+                                           f"in {here}; FlowState won't ask again."})
         if "duplicate" in kinds:
             groups = defaultdict(list)
-            for r in mine:
-                if r["kind"] in ("todo", "learning", "problem") and r["open"]:
+            for r in mine:   # todos only: approving a duplicate of another kind would do nothing
+                if r["kind"] == "todo" and r["open"]:
                     groups[(r["project_id"], r["kind"])].append((r, _dup_toks(r["title"])))
             for (_pid, kind), items in groups.items():
                 for i, (a, ta) in enumerate(items):
@@ -185,27 +250,27 @@ def suggest(db_path: Path, project_id: Optional[int] = None,
                         j = similarity(ta, tb)
                         if j is not None and j >= DUP_JACCARD:
                             old, new = sorted((a, b), key=lambda x: x["id"])
+                            why = f'it repeats {kind} "{_short(old["title"], TITLE_MAX)}"'
                             out.append({"type": "duplicate", "project_id": old["project_id"],
                                         "records": [[kind, old["id"]], [kind, new["id"]]],
-                                        "similarity": round(j, 2),
-                                        "summary": f"Duplicate? {kind} #{new['id']} \"{_short(new['title'], 50)}\" "
-                                                   f"repeats #{old['id']}",
-                                        "details": ("Approve to cancel the newer todo (kept, marked "
-                                                    "cancelled)." if kind == "todo" else
-                                                    "Approving only notes it; to remove one, ask for a "
-                                                    "delete (manage_memory action=delete), which "
-                                                    "the user approves.")})
+                                        "similarity": round(j, 2), "reason": why,
+                                        "summary": question("duplicate", kind, new["title"],
+                                                            names[old["project_id"]], reason=why),
+                                        "details": "Approve cancels the newer todo (kept, marked "
+                                                   "cancelled; undo reopens it). Reject keeps both; "
+                                                   "FlowState won't ask again."})
         if "stale" in kinds:
             cutoff = ((now or datetime.now(timezone.utc)) - timedelta(days=STALE_TODO_DAYS)
                       ).strftime("%Y-%m-%d %H:%M:%S")
             for r in mine:
                 if r["kind"] == "todo" and r["status"] == "pending" and (r["created_at"] or "9") < cutoff:
+                    why = f"it has waited since {(r['created_at'] or '')[:10]} (over {STALE_TODO_DAYS} days)"
                     out.append({"type": "stale", "project_id": r["project_id"],
-                                "records": [["todo", r["id"]]],
-                                "summary": f"Stale? todo #{r['id']} \"{_short(r['title'], 60)}\" has "
-                                           f"waited since {(r['created_at'] or '')[:10]}",
-                                "details": f"Pending for over {STALE_TODO_DAYS} days. Approve to cancel "
-                                           f"it (kept, marked cancelled); reject to keep it open."})
+                                "records": [["todo", r["id"]]], "reason": why,
+                                "summary": question("stale", "todo", r["title"], names[r["project_id"]],
+                                                    reason=why),
+                                "details": "Approve cancels it (kept, marked cancelled; undo reopens "
+                                           "it). Reject keeps it open; FlowState won't ask again."})
         order = {"misfiled": 0, "duplicate": 1, "stale": 2}
         out.sort(key=lambda s: (order[s["type"]], s["project_id"], s["records"]))
         return out
@@ -217,9 +282,41 @@ def _fingerprint(s: dict) -> str:
     return f"{s['type']}:" + ",".join(f"{k}#{i}" for k, i in s["records"])
 
 
+def withdraw_unsure(db_path: Path, timeout: float = 5.0) -> int:
+    """Reject, as FlowState, pending misfiled suggestions an older version queued without
+    being sure (confidence "unsure", or neither "likely" nor a `reason`). Only review_items
+    rows change, never a record; the fingerprint stays, so they are not suggested again.
+    Returns the count."""
+    conn = dbconn.connect(str(db_path), timeout=timeout)
+    try:
+        if not review.available(conn):
+            return 0
+        ids = []
+        for iid, payload in conn.execute("SELECT id, payload FROM review_items "
+                                         "WHERE kind = 'cleanup' AND status = 'pending'"):
+            try:
+                p = json.loads(payload or "{}")
+            except ValueError:
+                continue
+            sure = p.get("confidence") == "likely" or (p.get("reason") and p.get("confidence") != "unsure")
+            if p.get("type") == "misfiled" and not sure:
+                ids.append(iid)
+        if ids:
+            conn.executemany("UPDATE review_items SET status = 'rejected', decided_at = ?, "
+                             "decided_by = 'FlowState', reject_reason = ? "
+                             "WHERE id = ? AND status = 'pending'",
+                             [(review._now(), WITHDRAWN, i) for i in ids])
+            conn.commit()
+        return len(ids)
+    finally:
+        conn.close()
+
+
 def queue(db_path: Path, suggestions: list[dict], source: str = "cleanup") -> dict:
     """Add suggestions to the review queue (additive). Skips any already suggested before,
-    whatever its status (so rejected ones don't come back)."""
+    whatever its status (so rejected ones don't come back). First withdraws unsure ones
+    left by older versions (`withdrew`)."""
+    withdrew = withdraw_unsure(db_path)
     conn = dbconn.connect(str(db_path), timeout=5.0)
     try:
         if not review.available(conn):
@@ -242,7 +339,8 @@ def queue(db_path: Path, suggestions: list[dict], source: str = "cleanup") -> di
                                          s["details"], payload, source, conn=conn))
             seen.add(fp)
         conn.commit()
-        return {"queued": len(added), "item_ids": added, "already_suggested": skipped}
+        return {"queued": len(added), "item_ids": added, "already_suggested": skipped,
+                "withdrew": withdrew}
     finally:
         conn.close()
 

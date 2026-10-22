@@ -95,6 +95,7 @@ def init_backend(db_path: Optional[Path] = None) -> None:
         _migrate(path)
         backend.health = _safe_call(safety.health_line, path, backend.migration_error)
         ensure_schema(path)  # Phase A table, in case the migrations could not run
+        _safe_call(cleanup.withdraw_unsure, path, 1.0)   # unsure clean-up ideas from older versions
         tools.set_db(db)
         backend.tracker = AutoSessions(path)
     except Exception as e:  # noqa: BLE001 - any failure means "unavailable"
