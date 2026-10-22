@@ -212,6 +212,7 @@ def server_env(db: Path, **extra) -> dict:
                 "FLOWSTATE_RELAY_DIR": str(Path(db).parent / "relay"),
                 "FLOWSTATE_TOKEN_STORE_FILE": str(Path(db).parent / "config" / "http-token"),
                 "FLOWSTATE_REVIEW_PORT": "0",   # never the user's 8770
+                "FLOWSTATE_UPDATE_CHECK": "0",  # never asks GitHub (the guard refuses it too)
                 "FLOWSTATE_GUARD_DIRS": os.environ["FLOWSTATE_GUARD_DIRS"],
                 "FLOWSTATE_GUARD_LOG": os.environ["FLOWSTATE_GUARD_LOG"]})
     env.update({k: str(v) for k, v in extra.items()})

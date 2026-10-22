@@ -62,7 +62,8 @@ def _probe(tmp_path):
     env.update(FLOWSTATE_DB=str(tmp_path / "default-fallback.db"),
                FLOWSTATE_BACKUP_DIR=str(tmp_path / "backups"),
                FLOWSTATE_CONFIG_DIR=str(tmp_path / "config"),
-               FLOWSTATE_RELAY_DIR=str(tmp_path / "relay"), FLOWSTATE_REVIEW_PORT="0")
+               FLOWSTATE_RELAY_DIR=str(tmp_path / "relay"), FLOWSTATE_REVIEW_PORT="0",
+               FLOWSTATE_UPDATE_CHECK="0")   # the daily update check (updates.py) never asks GitHub here
     out = subprocess.run([sys.executable, "-c", PROBE, str(tmp_path / "fs.db")],
                          cwd=str(SERVER_DIR), env=env, capture_output=True, text=True, timeout=120)
     assert out.returncode == 0, out.stderr
