@@ -63,6 +63,39 @@ Closed in task 31: "Docs say the phone keys are placeholders". CHANGELOG 2.4.0, 
 honest limits and docs/APPROVALS.md section 3 now say what `approvals.py` does: it pins
 `fsa-1` and `fsa-2`.
 
+## From the /review/start lockout and tunnel review (task 38, branch `dev/2.4-review-fixes`)
+
+Closed in task 38: "Rate limits on `/review/start` are per database" (task 33). It now needs the
+site's signed start ticket; limits are per site user (30 an hour) with a 120-an-hour backstop,
+one code per ticket; ticketless requests count nothing.
+
+Open:
+- **Deploy order and the live check.** The site's half (`/review/<handle>` 303 to
+  `/review/start?t=<ticket>`) is built separately to docs/APPROVALS.md section 5a. Deploy the
+  site first; a device on this build with the old site shows the plain "open the link again"
+  page, so phone review is unavailable until the site ships. Then check the whole flow end to
+  end against the live site (FlowState's side is tested with test keys only).
+- **The tunnel page on a real phone.** Sizing for 390 px (viewport, 44 px tap targets, wrapped
+  rows, tables that scroll inside themselves) is checked in tests by its CSS rules only, not
+  rendered in a browser. Look at it on a phone once.
+- **Passphrase lockout is shared and global.** The tunnel page uses the consent page's lockout
+  (5 wrong in 15 minutes for everyone, as before), so someone who reaches the tunnel can lock
+  the owner out of both pages for 15 minutes; the per-address limit (10 tries per 15 minutes)
+  doesn't stop many addresses. A Cloudflare Access rule on `/review/tunnel` and `/consent`
+  (docs/REMOTE-ACCESS.md) avoids it; a per-address lockout would soften it in FlowState.
+- **Linux desktop folder.** The shortcut goes to `~/Desktop` (skipped with a line when it
+  doesn't exist); a desktop renamed through `XDG_DESKTOP_DIR` (other languages) isn't read.
+
+Tradeoffs (decided, not debt):
+- **Ticket storage**: two NULL columns on `review_open_nonces` (022) instead of a new table; the
+  ticket's nonce is kept only as a hash on the code it made, so a ticket refused for the limit
+  is not remembered (it made no code) and can be retried within its 5 minutes.
+- **Tunnel sessions and sign-in form tokens live in memory** (like the phone list's): a
+  restart signs the user out. Form tokens are capped at 500 (the oldest go first), so a flood
+  of page loads can make an open sign-in form say "expired; try again".
+- **Windows shortcut is a `.cmd` file**, not a `.lnk`: no PowerShell or COM, and its console
+  window shows the review page's "Ctrl+C stops it" line while the page runs.
+
 ## From plain clean-up questions (task 37, branch `dev/2.4-review-fixes`)
 
 Closed in task 37: on Oct 22, 2026 John approved 50 "Misfiled?" items he couldn't judge (27
@@ -121,7 +154,8 @@ Open:
 - **The site's side of the bookmark link.** `GET https://flowstatemcp.com/review/<handle>`
   (bare: sign-in, device check, 303 to `/review/start`) and `/review/<handle>?n=` (Continue
   page, grant) are built in the web repo at the same time; on Oct 22, 2026 13:07 UTC the live
-  site answered 404 for both. FlowState's side follows docs/APPROVALS.md section 5 and is
+  site answered 404 for both. Since task 38 the bare link must also sign a start ticket
+  (`?t=`, docs/APPROVALS.md section 5a); see task 38's list. FlowState's side follows docs/APPROVALS.md section 5 and is
   tested with test keys only (unit tests and e2e S15); check it end to end against the live
   site once that ships.
 - **The 1-second "too fast" rule is a heuristic.** An app that waits a second and then
@@ -131,11 +165,6 @@ Open:
   be the real fix; MCP has none today.
 - **Phone list shows the oldest 50.** The phone page says how many wait in total and that
   deciding some shows more; it has no "next page" button yet.
-- **Rate limits on `/review/start` are per database, counted in the database.** 30 an hour
-  for everyone together, so someone hammering the bare link (they can, without signing in:
-  the site's sign-in protects the next step) can make the owner's own tap wait up to an hour.
-  The relay's per-IP limit (60 a minute) applies first. A per-IP budget on this route would
-  soften it.
 
 ## From "see what's waiting without a terminal" (task 31, branch `release/2.4-trust`)
 
