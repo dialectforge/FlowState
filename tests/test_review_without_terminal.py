@@ -465,9 +465,10 @@ def test_relay_connection_named_cursor_gets_the_plain_list_and_no_boxes(backend,
         assert seen == [], via                                         # zero forms sent
         assert out["note"] == waiting.NOT_SHOWN and "walked" not in out
         assert "decided these" not in json.dumps(out)
-        assert out["waiting"] == 3 and len(out["items"]) == 3 and out["review_page"]
+        assert out["waiting"] == 3 and len(out["items"]) == 3
+        assert "review_page" not in out and "127.0.0.1" not in json.dumps(out)   # task 34
         assert ("relay" in out["how_to_decide"]) == (via == "relay")
-        assert "on the computer where FlowState runs" in out["how_to_decide"]
+        assert "on the computer where FlowState runs (`flowstate review-page` there)" in out["how_to_decide"]
     assert log(db) == [] and [status(db, i) for i in items] == ["pending"] * 3
 
 
@@ -723,3 +724,146 @@ def test_brief_and_walk_show_the_bare_bookmark_link(backend, relay):
     out = call(S, "manage_review", {"action": "walk"}, app="grok")
     assert out["phone"] == "https://flowstatemcp.com/review/testbox" and "?n=" not in json.dumps(out)
     assert _q(db, "SELECT COUNT(*) FROM review_open_nonces") == [(0,)]
+
+
+# ---------------------------------------------------------------- 6. (task 34) local link only here
+TOKEN = "t" * 32
+
+
+def http_calls(db, peer, calls, relay=False, headers=None):
+    """Tool calls over FlowState's real HTTP app (remote_auth.Gate included), the socket peer
+    being `peer`; the LAN listener, or the relay listener with relay=True."""
+    from flowstate.http_app import create_http_app
+    h = {"Authorization": f"Bearer {TOKEN}", "Accept": "application/json, text/event-stream",
+         "Content-Type": "application/json", **(headers or {})}
+
+    def rpc(c, method, params, sid=None, id_=1):
+        hh = dict(h, **({"Mcp-Session-Id": sid, "Mcp-Protocol-Version": "2025-06-18"} if sid else {}))
+        msg = {"jsonrpc": "2.0", "method": method, "params": params, **({"id": id_} if id_ else {})}
+        return c.post("/mcp", content=json.dumps(msg), headers=hh)
+
+    out = []
+    with TestClient(create_http_app(TOKEN, db_path=db, relay=relay), client=(peer, 50123),
+                    base_url="http://127.0.0.1:8766") as c:
+        # an app that declares boxes gets them on the LAN listener; this one answers none
+        caps = {"elicitation": {}} if relay else {}
+        r = rpc(c, "initialize", {"protocolVersion": "2025-06-18", "capabilities": caps,
+                                  "clientInfo": {"name": "Cursor", "version": "1"}})
+        assert r.status_code == 200, r.text
+        sid = r.headers["mcp-session-id"]
+        assert rpc(c, "notifications/initialized", {}, sid, None).status_code == 202
+        for i, (name, args) in enumerate(calls, 2):
+            r = rpc(c, "tools/call", {"name": name, "arguments": args}, sid, i)
+            data = next(m for m in (json.loads(l[5:]) for l in r.text.splitlines() if l.startswith("data:"))
+                        if m.get("id") == i and "result" in m)
+            text = data["result"]["content"][0]["text"]
+            try:
+                out.append(json.loads(text))
+            except ValueError:
+                out.append(text)
+    return out
+
+
+CALLS = [("start_here", {"project": "Alpha"}), ("manage_review", {"action": "walk"}),
+         ("manage_review", {"action": "list"})]
+
+
+@pytest.fixture
+def no_page(monkeypatch):
+    """Records any start of the local review page."""
+    started = []
+    monkeypatch.setattr(waiting, "_start", lambda *a: started.append(a) or 1)
+    return started
+
+
+def test_stdio_still_gets_the_local_link(backend, relay_dir):
+    S, db = backend, backend.backend.db_path
+    pile(db, 1)
+    assert "http://127.0.0.1:" in call(S, "start_here", {"project": "Alpha"})
+    out = call(S, "manage_review", {"action": "walk"}, app="grok")
+    assert out["review_page"].startswith("http://127.0.0.1:") and "review-page` there" not in out["how_to_decide"]
+
+
+@pytest.mark.parametrize("peer", ["127.0.0.1", "::1"])
+def test_lan_from_this_computer_gets_the_local_link(backend, relay_dir, peer):
+    db = backend.backend.db_path
+    pile(db, 2)
+    brief, walk, _ = http_calls(db, peer, CALLS)
+    line = next(l for l in brief.splitlines() if l.startswith("Review queue:"))
+    assert re.search(r"on the computer where FlowState runs at http://127\.0\.0\.1:\d+/ or in this chat", line), line
+    assert walk["review_page"].startswith("http://127.0.0.1:") and walk["note"] == waiting.NOT_SHOWN
+
+
+SPOOF = {"X-Forwarded-For": "127.0.0.1", "X-Real-IP": "127.0.0.1", "Forwarded": "for=127.0.0.1",
+         "CF-Connecting-IP": "127.0.0.1", "X-FlowState-Workspace": "this computer",
+         "X-FlowState-Model": "local", "X-FlowState-Listener": "lan",
+         "flowstate.on_this_computer": "true"}
+
+
+@pytest.mark.parametrize("spoof", [False, True])
+def test_lan_from_another_computer_gets_no_local_link(backend, relay_dir, no_page, spoof):
+    """John's Mac (Oct 22, 2026): 127.0.0.1 on another computer is that computer itself."""
+    db = backend.backend.db_path
+    items = pile(db, 2)
+    brief, walk, listing = http_calls(db, "192.0.2.51", CALLS, headers=SPOOF if spoof else None)
+    for answer in (brief, walk, listing):
+        assert "127.0.0.1" not in json.dumps(answer) and "flowstatemcp.com" not in json.dumps(answer)
+    line = next(l for l in brief.splitlines() if l.startswith("Review queue:"))
+    assert line.endswith('in this chat when they ask (manage_review action="walk") or on the computer '
+                         'where FlowState runs (`flowstate review-page` there).'), line
+    assert "review_page" not in walk and "phone" not in walk and walk["note"] == waiting.NOT_SHOWN
+    assert "`flowstate review-page` there" in walk["how_to_decide"]
+    assert [i["id"] for i in listing["items"]] == items
+    assert no_page == []                                                 # the page wasn't started
+    assert log(db) == []
+
+
+@pytest.mark.parametrize("peer", ["127.0.0.1", "192.0.2.51"])
+def test_relay_gets_the_phone_link_never_the_local_one(backend, relay, no_page, peer):
+    """The relay agent connects from loopback, but the app is on another computer."""
+    db = backend.backend.db_path
+    pile(db, 2)
+    brief, walk, listing = http_calls(db, peer, CALLS, relay=True, headers=SPOOF)
+    for answer in (brief, walk, listing):
+        assert "127.0.0.1" not in json.dumps(answer)
+    assert "on their phone: https://flowstatemcp.com/review/testbox, in this chat" in brief
+    assert "(`flowstate review-page` there)" in brief and "?n=" not in brief
+    assert walk["phone"] == "https://flowstatemcp.com/review/testbox" and "review_page" not in walk
+    assert "relay" in walk["how_to_decide"] and walk["phone"] in walk["how_to_decide"]
+    assert no_page == [] and log(db) == []
+    assert _q(db, "SELECT COUNT(*) FROM review_open_nonces") == [(0,)]
+
+
+def test_on_this_computer_is_decided_by_the_server(backend):
+    """Gate's LOCAL_KEY: LAN listener and a loopback socket peer only; headers can't set it."""
+    from types import SimpleNamespace
+    from mcp.server.lowlevel.server import request_ctx
+    from mcp.shared.context import RequestContext
+    from flowstate import popup
+    from flowstate.remote_auth import LISTENER_KEY, LOCAL_KEY, Gate, is_loopback
+    assert all(map(is_loopback, ["127.0.0.1", "127.5.0.1", "::1", "::ffff:127.0.0.1"]))
+    assert not any(map(is_loopback, ["192.0.2.51", "10.0.0.2", "::ffff:192.0.2.5", "fe80::1",
+                                     "", None, "testclient", "localhost"]))
+    seen = {}
+
+    async def app(scope, receive, send):
+        seen.clear()
+        seen.update(scope)
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+    for listener, peer, want in (("lan", "127.0.0.1", True), ("lan", "::1", True),
+                                 ("lan", "192.0.2.51", False), ("relay", "127.0.0.1", False),
+                                 ("public", "127.0.0.1", False)):
+        c = TestClient(Gate(app, None, "/mcp", listener=listener), client=(peer, 5000))
+        c.get("/health", headers=SPOOF)
+        assert seen[LOCAL_KEY] is want and seen[LISTENER_KEY] == listener, (listener, peer)
+    assert popup.on_this_computer() is True                              # stdio
+    for scope, want in (({LISTENER_KEY: "lan", LOCAL_KEY: True}, True),
+                        ({LISTENER_KEY: "lan", LOCAL_KEY: False}, False), ({LISTENER_KEY: "lan"}, False),
+                        ({LISTENER_KEY: "relay", LOCAL_KEY: True}, False), ({LOCAL_KEY: True}, False),
+                        ({}, False)):
+        tok = request_ctx.set(RequestContext(1, None, None, None, request=SimpleNamespace(scope=scope)))
+        try:
+            assert popup.on_this_computer() is want, scope
+        finally:
+            request_ctx.reset(tok)

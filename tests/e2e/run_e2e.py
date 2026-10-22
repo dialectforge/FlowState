@@ -1814,6 +1814,50 @@ def s14_user_stated(W):
             [meta(i) for i in copies])
 
 
+# headers an app can set, none of which may make a request from elsewhere count as this computer
+SPOOF_LOCAL = {"X-Forwarded-For": "127.0.0.1", "X-Real-IP": "127.0.0.1", "Forwarded": "for=127.0.0.1",
+               "CF-Connecting-IP": "127.0.0.1", "X-FlowState-Workspace": "this computer",
+               "X-FlowState-Listener": "lan"}
+
+
+def _test_listener(W, env, mode, name):
+    """tests/e2e/relay_listener.py on a free loopback port: FlowState's HTTP app as the relay
+    agent builds it (mode "relay") or the LAN listener with every request from 192.0.2.51
+    ("lan-remote"). Returns (process, base url, log file)."""
+    with socket.socket() as sk:
+        sk.bind(("127.0.0.1", 0))
+        port = sk.getsockname()[1]
+    plog = open(W.logs / f"{name}.log", "ab")
+    srv = subprocess.Popen([PY, str(Path(__file__).resolve().parent / "relay_listener.py"), str(port)]
+                           + ([mode] if mode != "relay" else []),
+                           env=dict(env, FS_E2E_TOKEN=W.shared_token), cwd=str(REPO),
+                           stdin=subprocess.DEVNULL, stdout=plog, stderr=plog)
+    W.started.append(srv)
+    return srv, f"http://127.0.0.1:{port}", plog
+
+
+def _stop(srv, plog):
+    if srv.poll() is None:
+        srv.terminate()            # our own PID only
+        try:
+            srv.wait(15)
+        except subprocess.TimeoutExpired:
+            srv.kill()
+    plog.close()
+
+
+def _from_elsewhere(W, base, Q):
+    """start_here and the walk from an app on another computer (spoofed "local" headers)."""
+    rc = HttpClient(f"{base}/mcp", W.shared_token, "Cursor", headers=SPOOF_LOCAL,
+                    capabilities={"elicitation": {}})
+    try:
+        b = brief_text(rc.call("start_here", project=Q))
+        r = rc.call("manage_review", action="walk", project=Q)
+    finally:
+        rc.close()
+    return next((ln for ln in b.splitlines() if ln.startswith("Review queue:")), ""), b, r, rc
+
+
 def s15_without_terminal(W):
     """Items pile up with approvals off; the user sees and decides them without a terminal:
     in the chat (Approve / Reject boxes, simulated answers), on the local review page the
@@ -1924,6 +1968,22 @@ def s15_without_terminal(W):
             and W.count("review_items", "id = ? AND status = 'pending'", (ids[2],)) == 1, r)
     R.word(f"Walk, too fast: {r.get('how_to_decide')}")
     fast.close()
+    # ---- an app on another computer (LAN listener, peer 192.0.2.51): no 127.0.0.1 link, which
+    # would open that computer's own 127.0.0.1; no relay yet, so the plain note
+    srv, base, plog = _test_listener(W, W.env, "lan-remote", "s15-lan-remote")
+    try:
+        wait_port("127.0.0.1", int(base.rsplit(":", 1)[1]), 40)
+        line, b, r, rc = _from_elsewhere(W, base, Q)
+    finally:
+        _stop(srv, plog)
+    R.check(15, "an app on another computer (LAN, spoofed local headers): no 127.0.0.1 in the brief or the "
+                "walk, no phone link without relay, the plain note to ask in the chat or use the computer "
+                "where FlowState runs",
+            line and "127.0.0.1" not in b and "127.0.0.1" not in json.dumps(r) and "flowstatemcp.com" not in b
+            and "`flowstate review-page` there" in line and 'manage_review action="walk"' in line
+            and "review_page" not in r and "phone" not in r and r.get("items")
+            and "`flowstate review-page` there" in r.get("how_to_decide", ""), (line, r))
+    R.word(f"Brief line, another computer on the LAN: {line}")
 
     # ---- relay enrolled: the phone link in the brief and the walk; the phone list works
     relay = Path(W.env["FLOWSTATE_RELAY_DIR"])
@@ -1960,18 +2020,30 @@ def s15_without_terminal(W):
         hdr = {"content-type": "application/json", "origin": base, "sec-fetch-site": "same-origin"}
         # the live bug: a relay connection calling itself "Cursor" that declares elicitation
         rows = W.count("approval_log")
-        rc = HttpClient(f"{base}/mcp", W.shared_token, "Cursor", capabilities={"elicitation": {}})
-        try:
-            r = rc.call("manage_review", action="walk", project=Q)
-        finally:
-            rc.close()
+        rline, rb, r, rc = _from_elsewhere(W, base, Q)
         R.check(15, "through the relay, an app calling itself Cursor (elicitation declared): no boxes sent, "
                     "nothing logged, the honest plain list with the links",
                 rc.server_requests == [] and "walked" not in r and r.get("items")
                 and r.get("note") == "No boxes were shown here; nothing was decided."
                 and "relay" in r.get("how_to_decide", "") and r.get("phone") == (pm.group(1) if pm else "?")
                 and W.count("approval_log") == rows, (rc.server_requests, r))
+        R.check(15, "through the relay (the agent connects from 127.0.0.1): no 127.0.0.1 link in the brief or "
+                    "the walk, the bare phone link instead",
+                pm and "127.0.0.1" not in rb and "127.0.0.1" not in json.dumps(r) and "review_page" not in r
+                and f"on their phone: {pm.group(1)}," in rline and "?n=" not in rline
+                and pm.group(1) in r.get("how_to_decide", ""), (rline, r))
+        R.word(f"Brief line through the relay: {rline}")
         R.word(f"Walk through the relay: {r.get('how_to_decide')}")
+        ls, lbase, llog = _test_listener(W, penv, "lan-remote", "s15-lan-remote-phone")
+        try:
+            wait_port("127.0.0.1", int(lbase.rsplit(":", 1)[1]), 40)
+            lline, lb, lr, _ = _from_elsewhere(W, lbase, Q)
+        finally:
+            _stop(ls, llog)
+        R.check(15, "an app on another computer on the LAN, relay set up: the bare phone link, no 127.0.0.1",
+                pm and "127.0.0.1" not in lb and "127.0.0.1" not in json.dumps(lr)
+                and f"on their phone: {pm.group(1)}," in lline and lr.get("phone") == pm.group(1)
+                and "review_page" not in lr, (lline, lr))
         with httpx.Client(timeout=30) as hc:
             # the bookmark link: the site (signed-in owner) sends the browser to /review/start
             st = hc.get(f"{base}/review/start", params={"handle": "evil"}, headers={"X-Forwarded-Host": "evil.example"},

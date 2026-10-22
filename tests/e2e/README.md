@@ -13,9 +13,12 @@ project ("Lakeside Bakery ordering app") the way AI apps do, only through MCP to
   descriptions, approvals on: the popup, the phone page and the terminal, only the user turns a
   guess into user_stated, and what's waiting without a terminal: the chat walk, an app that
   answers boxes at once, a relay connection calling itself Cursor (no boxes, nothing logged),
-  the local review link, and the bookmarkable phone link through `/review/start`; the relay
-  listener is `relay_listener.py`, FlowState's app built as the relay agent builds it, on
-  loopback), each pass/fail with evidence;
+  the local review link (only for apps on this computer: a relay connection and an app on
+  another computer on the LAN get no 127.0.0.1 link), and the bookmarkable phone link through
+  `/review/start`; the relay listener is `relay_listener.py`, FlowState's app built as the
+  relay agent builds it, on loopback; `relay_listener.py <port> lan-remote` is the LAN
+  listener with every request's address set to 192.0.2.51, standing in for another
+  computer), each pass/fail with evidence;
 - every tool and every action it offers is called at least once (the report says how many).
 
 ```bash

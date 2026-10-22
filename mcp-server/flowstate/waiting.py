@@ -14,7 +14,10 @@ Three ways, none of which shows anything unless the user asks (or has approvals 
      passes along counts as the user's answer.
   2. A local link, http://127.0.0.1:<port>/: the review page (review_page.py) started inside
      this FlowState process the first time a link is needed, one per computer and database
-     (a running one is reused), on 127.0.0.1 only.
+     (a running one is reused), on 127.0.0.1 only. Offered (and started) only for apps on this
+     computer (popup.on_this_computer: stdio, or the LAN listener with a loopback peer); on any
+     other computer 127.0.0.1 is that computer itself, so those apps get the phone link or a
+     plain note to ask for the list instead (`flowstate review-page` on this computer).
   3. Relay users: a bookmarkable phone link to the whole list, https://flowstatemcp.com/review/
      <handle> (approvals.review_link, review_phone.py; no code in the chat).
 
@@ -157,12 +160,16 @@ def local_link(db_path: Optional[Path]) -> Optional[str]:
 
 
 # ---------------------------------------------------------------- links in answers
-def links(db_path: Path) -> dict:
-    """The local link and, for relay users, the phone link (only what is available)."""
+def links(db_path: Path, local: Optional[bool] = None) -> dict:
+    """The local link (only for an app on this computer; the page isn't started for others)
+    and, for relay users, the phone link (only what is available)."""
+    from .popup import on_this_computer
     out = {}
-    local = local_link(db_path)
-    if local:
-        out["review_page"] = local
+    if local is None:
+        local = on_this_computer()
+    page = local_link(db_path) if local else None
+    if page:
+        out["review_page"] = page
     try:
         phone = approvals.review_link(db_path)
     except Exception:  # noqa: BLE001 - no phone link, nothing more
@@ -174,15 +181,23 @@ def links(db_path: Path) -> dict:
 
 def where_line(db_path: Path) -> str:
     """The brief's addition to "N items waiting for the user's OK"."""
-    ways = links(db_path)
+    from .popup import on_this_computer
+    local = on_this_computer()
+    ways = links(db_path, local)
     parts = []
     if ways.get("review_page"):
         parts.append(f"on the computer where FlowState runs at {ways['review_page']}")
     if ways.get("phone"):
         parts.append(f"on their phone: {ways['phone']}")
     parts.append('in this chat when they ask (manage_review action="walk")')
+    if not local:   # an app on another computer: no 127.0.0.1 link (it would open its own)
+        parts.append(ELSEWHERE)
     return " The user can see and decide them " + ", ".join(parts[:-1]) + \
         (" or " if len(parts) > 1 else "") + parts[-1] + "."
+
+
+# for apps on another computer (relay, public, LAN from elsewhere), instead of a 127.0.0.1 link
+ELSEWHERE = "on the computer where FlowState runs (`flowstate review-page` there)"
 
 
 # ---------------------------------------------------------------- 1. the chat walk
@@ -252,21 +267,26 @@ def prepare(listing: dict, db_path: Path, scopes, project_id: Optional[int] = No
         out["note"] = (f"Nothing more is waiting after #{after}." if after
                        else "Nothing is waiting for the user.")
         return out
+    from .popup import on_this_computer
+    local = on_this_computer()
     out["_walk"] = {"ids": [it["id"] for it in items], "project_id": project_id,
                     "may_decide": scopes is None or "flowstate:write" in scopes,
-                    "links": links(db_path)}
+                    "links": links(db_path, local), "local": local}
     return out
 
 
 NOT_SHOWN = "No boxes were shown here; nothing was decided."
 
 
-def _plain_answer(out: dict, ways: dict, why: str) -> dict:
+def _plain_answer(out: dict, ways: dict, why: str, local: bool = True) -> dict:
     out["note"] = NOT_SHOWN
+    where = [f"{'on the computer where FlowState runs' if k == 'review_page' else 'on their phone'}: {v}"
+             for k, v in ways.items()]
+    if not local:   # no 127.0.0.1 link for an app on another computer
+        where.append(ELSEWHERE)
     out["how_to_decide"] = (f"{why} Show the user this list. They decide each item themselves: "
-                            + "; ".join(f"{'on the computer where FlowState runs' if k == 'review_page' else 'on their phone'}: {v}"
-                                        for k, v in ways.items())
-                            + ("; " if ways else "") + "or in a terminal: `flowstate review`. Don't "
+                            + "; ".join(where) + ("; " if where else "")
+                            + "or in a terminal: `flowstate review`. Don't "
                             "approve or reject anything for them.")
     out.update(ways)
     return out
@@ -310,13 +330,13 @@ async def walk(result: dict, session, client: str) -> dict:
     from .popup import as_user, elicit, no_box
     plan = result.pop("_walk")
     db = S.backend.db_path
-    ways = plan["links"]
+    ways, local = plan["links"], plan.get("local", True)
     if not plan["may_decide"]:
         return _plain_answer(result, ways, "This app has read-only access, so FlowState shows "
-                                           "no Approve / Reject boxes here.")
+                                           "no Approve / Reject boxes here.", local)
     why = no_box(session, client, db)
     if why:
-        return _plain_answer(result, ways, why)
+        return _plain_answer(result, ways, why, local)
     try:
         rid = S.server.request_context.request_id
     except LookupError:
@@ -360,7 +380,7 @@ async def walk(result: dict, session, client: str) -> dict:
             break
     if unseen and not done:   # not one box reached a person: the honest plain list
         return _plain_answer(result, ways, "This app answered FlowState's box at once, faster "
-                                           "than a person could, so no box was shown.")
+                                           "than a person could, so no box was shown.", local)
     left = await asyncio.to_thread(S._safe_call, _pending_total, db, plan.get("project_id"))
     for k in ("items", "showing", "next_page"):
         result.pop(k, None)

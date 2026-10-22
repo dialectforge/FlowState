@@ -50,18 +50,32 @@ def declared(session) -> bool:
     return getattr(caps, "form", None) is not None or getattr(caps, "url", None) is None
 
 
-def listener() -> str:
-    """How this request reached FlowState: stdio, or the HTTP listener remote_auth.Gate
-    marked it with (lan / public / relay; "unknown" if unmarked)."""
+def _scope() -> Optional[dict]:
+    """The ASGI scope of the HTTP request FlowState is answering; None for stdio."""
     from . import server as S
-    from .remote_auth import LISTENER_KEY
     try:
         req = S.server.request_context.request
     except LookupError:
-        return "stdio"
-    if req is None:
-        return "stdio"
-    return getattr(req, "scope", {}).get(LISTENER_KEY) or "unknown"
+        return None
+    return None if req is None else (getattr(req, "scope", None) or {})
+
+
+def listener() -> str:
+    """How this request reached FlowState: stdio, or the HTTP listener remote_auth.Gate
+    marked it with (lan / public / relay; "unknown" if unmarked)."""
+    from .remote_auth import LISTENER_KEY
+    scope = _scope()
+    return "stdio" if scope is None else scope.get(LISTENER_KEY) or "unknown"
+
+
+def on_this_computer() -> bool:
+    """Is the app on the computer where FlowState runs? stdio, or the LAN listener with a
+    loopback socket peer (remote_auth.Gate's LOCAL_KEY). Relay, public, other peers and
+    unmarked requests are not. Decides whether the 127.0.0.1 review link is offered."""
+    from .remote_auth import LOCAL_KEY
+    if listener() == "stdio":
+        return True
+    return listener() == "lan" and (_scope() or {}).get(LOCAL_KEY) is True
 
 
 def no_box(session, client: str, db_path) -> Optional[str]:

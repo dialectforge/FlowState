@@ -609,6 +609,20 @@ def _int_env(name: str, default: int) -> int:
 
 # ---------------------------------------------------------------- ASGI guard
 LISTENER_KEY = "flowstate.listener"   # ASGI scope key Gate sets: lan / public / relay
+# ASGI scope key Gate sets: True only for the LAN listener with a loopback socket peer (an app
+# on this computer); the 127.0.0.1 review link is offered only then (waiting.links)
+LOCAL_KEY = "flowstate.on_this_computer"
+
+
+def is_loopback(peer) -> bool:
+    """The socket peer address is this computer (127.0.0.0/8, ::1, ::ffff:127.x)."""
+    import ipaddress
+    try:
+        ip = ipaddress.ip_address(str(peer or "").split("%")[0])
+    except ValueError:
+        return False
+    mapped = getattr(ip, "ipv4_mapped", None)
+    return (mapped or ip).is_loopback
 
 
 class Gate:
@@ -651,6 +665,9 @@ class Gate:
             await self.app(scope, receive, send)
             return
         scope[LISTENER_KEY] = self.listener
+        # the real socket peer (uvicorn runs with proxy_headers=False), never a header; the relay
+        # agent also connects from loopback, so only the LAN listener can count as local
+        scope[LOCAL_KEY] = self.listener == "lan" and is_loopback((scope.get("client") or ("",))[0])
         from starlette.authentication import AuthCredentials
         from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
         t0 = time.monotonic()
