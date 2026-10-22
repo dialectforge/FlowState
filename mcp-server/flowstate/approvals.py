@@ -1,0 +1,479 @@
+"""Opt-in user-only approvals (2.4.0, migration 019).
+
+Off by default (also for upgraded installs): FlowState never asks the user anything. An
+agent's delete then goes through at once, after a safety copy, and stays fully undoable
+(deletes.py, history.py). Review-mode changes just happen, logged and shown in the brief.
+
+`flowstate approvals on` (per install, or --project for one project) turns them on. Then an
+agent's delete request and turning review off wait for the user's own approval, and no app
+can pass the user's OK along: only a human click or keypress decides, in this order:
+
+  1. popup   the app shows an MCP elicitation form with one required checkbox `approve`.
+             Only for apps on POPUP_CLIENTS (they show a real dialog), only when the
+             connection declared the `elicitation` capability, never to a client that calls
+             itself claude.ai / Anthropic. FlowState waits at most POPUP_SECONDS, holding no
+             database lock. Decline, cancel, approve=false or no answer: not approved, the
+             item stays queued. The popup is only as trustworthy as the app showing it.
+  2. phone   relay users: a link to flowstatemcp.com, which signs the user in and sends the
+             browser to https://<handle>.fsmcp.com/approve/<item> with a short signed grant
+             (approve_page.py checks it here with FSA_PUBLIC_KEYS).
+  3. terminal `flowstate approve <id>` asks for the user's `y` on their own terminal.
+
+Turning approvals on needs nothing; turning them off needs the user's terminal
+(`flowstate approvals off` asks for `y` there). Every user-only decision is logged
+(approval_log; manage_history list shows it). Unanswered requests never approve themselves.
+
+Honest limit: an agent that controls the user's own logged-in browser or terminal could still
+get through. This stops agents approving their own work through FlowState.
+"""
+
+import base64
+import hashlib
+import hmac
+import json
+import re
+import secrets
+import sqlite3
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Optional
+
+# Apps known to show the elicitation form as a real dialog to the user (clientInfo name,
+# lower case). `flowstate approvals popup add|remove NAME` changes this per install.
+POPUP_CLIENTS = ("claude-code", "cursor", "cursor-vscode", "visual studio code",
+                 "visual studio code - insiders", "vscode")
+# Never a popup for these, whatever they declare: claude.ai, Claude Desktop / mobile and the
+# Anthropic connector proxy don't show one (and the proxy drops the connection).
+CONNECTOR_MARKS = ("claude-ai", "claude.ai", "claudeai", "anthropic")
+POPUP_SECONDS = 120
+GRANT_SECONDS = 300          # a phone grant lives 5 minutes
+CLOCK_SKEW = 60
+NONCE_DAYS = 7               # the phone link's one-use code, then a fresh one is made
+SITE = "https://flowstatemcp.com"
+ACTION = "approve_review"
+USER_ONLY_KINDS = ("delete", "setting")
+
+# The flowstatemcp.com approval-grant public keys (ES256 / P-256 JWKs), pinned per release:
+# fsa-1 active, fsa-2 backup so the site can rotate without a forced update.
+# PLACEHOLDER: the web task (27) produces the real keys. While a kid maps to None, every grant
+# signed with it is refused; while both do, phone approvals are off entirely.
+FSA_PUBLIC_KEYS: dict = {
+    "fsa-1": None,   # PLACEHOLDER, replace with {"kty": "EC", "crv": "P-256", "x": ..., "y": ...}
+    "fsa-2": None,   # PLACEHOLDER (backup key)
+}
+
+_NONCE_RE = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
+
+
+class ApprovalError(Exception):
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.payload = {"error": code, "message": message}
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _ts(dt: Optional[datetime] = None) -> str:
+    return (dt or _now()).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _conn(db_path: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(str(db_path), timeout=5.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 5000")
+    return conn
+
+
+def available(conn) -> bool:
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                        "AND name='approval_settings'").fetchone() is not None
+
+
+# ---------------------------------------------------------------- settings
+def _get(conn, key: str) -> Optional[str]:
+    row = conn.execute("SELECT value FROM approval_settings WHERE key = ?", (key,)).fetchone()
+    return row[0] if row else None
+
+
+def _put(conn, key: str, value: Optional[str], who: str) -> None:
+    if value is None:
+        conn.execute("DELETE FROM approval_settings WHERE key = ?", (key,))
+    else:
+        conn.execute("""INSERT INTO approval_settings (key, value, updated_at, updated_by)
+                        VALUES (?, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                        updated_at = excluded.updated_at, updated_by = excluded.updated_by""",
+                     (key, value, _ts(), (who or "")[:80]))
+
+
+def is_on(db_path: Path, project_id: Optional[int] = None) -> bool:
+    """Approvals on for this project (its own setting, else the install's; default off)."""
+    try:
+        conn = _conn(db_path)
+    except sqlite3.Error:
+        return False
+    try:
+        return on_with(conn, project_id)
+    finally:
+        conn.close()
+
+
+def on_with(conn, project_id: Optional[int] = None) -> bool:
+    if not available(conn):
+        return False
+    v = _get(conn, f"approvals:project:{int(project_id)}") if project_id is not None else None
+    return (v or _get(conn, "approvals") or "off") == "on"
+
+
+def set_on(db_path: Path, on: Optional[bool], project_id: Optional[int] = None,
+           who: str = "command-line") -> dict:
+    """on True/False, or None to drop a project's own setting. Logged with review-mode changes."""
+    key = "approvals" if project_id is None else f"approvals:project:{int(project_id)}"
+    conn = _conn(db_path)
+    try:
+        if not available(conn):
+            raise ApprovalError("approvals_unavailable", "Approvals aren't set up in this database "
+                                                         "yet (migration 019); restart FlowState.")
+        conn.execute("BEGIN IMMEDIATE")
+        old = _get(conn, key)
+        new = None if on is None else ("on" if on else "off")
+        _put(conn, key, new, who)
+        from . import identity
+        identity.insert(conn, "review_mode_log", {
+            "scope": key, "old_mode": old, "new_mode": new, "client": who[:80],
+            "caller": "command-line", "user_request": "set in the user's terminal",
+            "changed_at": _ts()}, who)
+        conn.commit()
+    finally:
+        conn.close()
+    return {"scope": key, "old": old, "now": "on" if is_on(db_path, project_id) else "off"}
+
+
+def phone_on(db_path: Path) -> bool:
+    conn = _conn(db_path)
+    try:
+        return not available(conn) or (_get(conn, "phone_approvals") or "on") == "on"
+    finally:
+        conn.close()
+
+
+def set_value(db_path: Path, key: str, value: Optional[str], who: str = "command-line") -> None:
+    conn = _conn(db_path)
+    try:
+        _put(conn, key, value, who)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def popup_clients(db_path: Optional[Path]) -> set:
+    names = set(POPUP_CLIENTS)
+    if db_path is None:
+        return names
+    conn = _conn(db_path)
+    try:
+        if not available(conn):
+            return names
+        add = json.loads(_get(conn, "popup_clients_add") or "[]")
+        drop = json.loads(_get(conn, "popup_clients_remove") or "[]")
+    except (ValueError, sqlite3.Error):
+        return names
+    finally:
+        conn.close()
+    return (names | {str(n).lower() for n in add}) - {str(n).lower() for n in drop}
+
+
+def change_popup_clients(db_path: Path, name: str, add: bool) -> set:
+    name = (name or "").strip().lower()
+    if not name:
+        raise ApprovalError("name_required", "Give the app's name as it connects (clientInfo name).")
+    conn = _conn(db_path)
+    try:
+        lists = {k: set(json.loads(_get(conn, k) or "[]"))
+                 for k in ("popup_clients_add", "popup_clients_remove")}
+        (lists["popup_clients_add"] if add else lists["popup_clients_remove"]).add(name)
+        (lists["popup_clients_remove"] if add else lists["popup_clients_add"]).discard(name)
+        for k, v in lists.items():
+            _put(conn, k, json.dumps(sorted(v)) if v else None, "command-line")
+        conn.commit()
+    finally:
+        conn.close()
+    return popup_clients(db_path)
+
+
+def popup_allowed(db_path: Optional[Path], client_name: str, declared: bool) -> bool:
+    """May FlowState show this connection a popup? Declared the capability, on the allowlist,
+    and not claude.ai / the Anthropic connector."""
+    name = (client_name or "").strip().lower()
+    if not declared or not name or any(m in name for m in CONNECTOR_MARKS):
+        return False
+    return name in popup_clients(db_path)
+
+
+# ---------------------------------------------------------------- user-only items
+def user_only(item: Optional[dict]) -> bool:
+    """Only a human click or keypress decides this item (queued while approvals were on)."""
+    if not item or item.get("kind") not in USER_ONLY_KINDS:
+        return False
+    if item["kind"] == "setting":
+        return True
+    try:
+        return bool(json.loads(item.get("payload") or "{}").get("user_only"))
+    except ValueError:
+        return False
+
+
+def nonce_for(db_path: Path, item_id: int) -> Optional[str]:
+    """The item's open one-use code; a fresh random one if it has none or it expired."""
+    conn = _conn(db_path)
+    try:
+        if not available(conn):
+            return None
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT nonce, expires_at, used_at FROM approval_requests "
+                           "WHERE item_id = ?", (item_id,)).fetchone()
+        if row and row["used_at"] is None and row["expires_at"] > _ts():
+            conn.commit()
+            return row["nonce"]
+        nonce = secrets.token_urlsafe(32)   # 43 url-safe characters, never reused
+        conn.execute("""INSERT INTO approval_requests (item_id, nonce, action, created_at,
+                        expires_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(item_id) DO UPDATE SET
+                        nonce = excluded.nonce, created_at = excluded.created_at,
+                        expires_at = excluded.expires_at, used_at = NULL""",
+                     (item_id, nonce, ACTION, _ts(), _ts(_now() + timedelta(days=NONCE_DAYS))))
+        conn.commit()
+        return nonce
+    finally:
+        conn.close()
+
+
+def consume_nonce(conn, item_id: int) -> None:
+    conn.execute("UPDATE approval_requests SET used_at = ? WHERE item_id = ? AND used_at IS NULL",
+                 (_ts(), item_id))
+
+
+def relay_handle() -> Optional[str]:
+    """This device's relay handle, if the relay agent is enrolled and on. Without relay state
+    on disk this is one file check: no relay module is imported."""
+    try:
+        import os
+        from . import paths
+        env = os.environ.get("FLOWSTATE_RELAY_DIR")
+        root = Path(env).expanduser() if env else paths.data_root() / "relay"
+        if not (root / "relay.json").exists():
+            return None
+        from .relay.store import RelayStore
+        store = RelayStore()
+        cfg = store.config()
+        return cfg.get("handle") if cfg.get("enabled") and store.enrolled() else None
+    except Exception:  # noqa: BLE001 - no relay means no phone link, nothing more
+        return None
+
+
+def phone_link(db_path: Path, item_id: int) -> Optional[str]:
+    handle = relay_handle()
+    if not handle or not phone_on(db_path) or not keys_ready():
+        return None
+    nonce = nonce_for(db_path, item_id)
+    return f"{SITE}/approve/{handle}/{int(item_id)}?n={nonce}" if nonce else None
+
+
+def ask_line(db_path: Path, item_id: int, what: str = "approve it") -> str:
+    """The one line an agent passes on when the user must decide (no popup)."""
+    link = phone_link(db_path, item_id)
+    if link:
+        return f"Waiting for the user: ask them to {what} on their phone: {link}"
+    return f"Waiting for the user: ask them to run `flowstate approve {item_id}` in their terminal."
+
+
+def describe(item: dict, project: str) -> str:
+    """What the user is asked, in plain words (without the app's name)."""
+    try:
+        p = json.loads(item.get("payload") or "{}")
+    except ValueError:
+        p = {}
+    if item["kind"] == "setting":
+        where = "the whole install" if p.get("scope") == "install" else project
+        return f"turn review off for {where}"
+    if item["kind"] == "delete":
+        rtype, title = p.get("record_type") or "record", " ".join(str(p.get("title") or "").split())
+        title = title if len(title) <= 60 else title[:57] + "..."
+        if rtype == "project":
+            what = f'delete the whole project "{project}"'
+        else:
+            what = f'delete the {rtype} "{title}"' if title else f"delete {rtype} #{p.get('record_id')}"
+        extra = ", ".join(f"{n} {k}" for k, n in (p.get("counts") or {}).items())
+        return what + (f" (with {extra})" if extra else "") + \
+            ("" if rtype == "project" else f" from {project}")
+    return f"decide review item #{item['id']} in {project}"
+
+
+def ask_payload(db_path: Path, item_id: int, app: str) -> dict:
+    """What the popup shows and the one-line fallback, for a queued user-only item."""
+    conn = _conn(db_path)
+    try:
+        item = dict(conn.execute("SELECT * FROM review_items WHERE id = ?", (item_id,)).fetchone())
+        row = conn.execute("SELECT name FROM projects WHERE id = ?", (item["project_id"],)).fetchone()
+    finally:
+        conn.close()
+    project = row[0] if row else f"project #{item['project_id']}"
+    try:
+        p = json.loads(item.get("payload") or "{}")
+    except ValueError:
+        p = {}
+    out = {"item_id": item_id, "message": f"{app} wants to {describe(item, project)}.",
+           "line": ask_line(db_path, item_id)}
+    if item["kind"] == "delete" and p.get("record_type") == "project":
+        out["project_name"] = p.get("project_name") or project
+    return out
+
+
+def log_decision(db_path: Path, item: dict, path: str, client: str, decision: str,
+                 conn=None) -> None:
+    own = conn is None
+    conn = conn or _conn(db_path)
+    try:
+        if not available(conn):
+            return
+        conn.execute("""INSERT INTO approval_log (item_id, project_id, kind, path, client, decision,
+                        decided_at) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                     (item["id"], item.get("project_id"), item.get("kind"), path,
+                      (client or "")[:80], decision, _ts()))
+        if decision in ("approved", "rejected"):
+            consume_nonce(conn, item["id"])
+        if own:
+            conn.commit()
+    finally:
+        if own:
+            conn.close()
+
+
+def path_of(client: str) -> str:
+    """How a user-only decision was made, from the decider's label."""
+    c = (client or "").lower()
+    for p in ("popup", "phone", "review-page"):
+        if c.startswith(p):
+            return p.replace("-", " ")
+    return "terminal"
+
+
+def log_rows(db_path: Path, project_id: int, limit: int = 20) -> list:
+    conn = _conn(db_path)
+    try:
+        if not available(conn):
+            return []
+        return [dict(r) for r in conn.execute(
+            """SELECT item_id, kind, path, client, decision, decided_at FROM approval_log
+               WHERE project_id = ? ORDER BY id DESC LIMIT ?""", (project_id, limit))]
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------- phone grants (ES256 JWS)
+def keys_ready(keys: Optional[dict] = None) -> bool:
+    keys = FSA_PUBLIC_KEYS if keys is None else keys
+    return any(isinstance(v, dict) for v in keys.values())
+
+
+def _b64d(s: str) -> bytes:
+    if not isinstance(s, str) or not re.fullmatch(r"[A-Za-z0-9_-]*", s):
+        raise ApprovalError("bad_grant", "The approval grant is malformed.")
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def _verify_es256(jwk: dict, signing_input: bytes, sig: bytes) -> bool:
+    try:
+        from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+    except ImportError as e:  # pragma: no cover - the relay needs it anyway
+        raise ApprovalError("crypto_missing", "Phone approvals need the Python package "
+                                              "'cryptography' (the relay uses it too).") from e
+    if len(sig) != 64 or jwk.get("kty") != "EC" or jwk.get("crv") != "P-256":
+        return False
+    try:
+        x = int.from_bytes(_b64d(jwk["x"]), "big")
+        y = int.from_bytes(_b64d(jwk["y"]), "big")
+        key = ec.EllipticCurvePublicNumbers(x, y, ec.SECP256R1()).public_key()
+        der = encode_dss_signature(int.from_bytes(sig[:32], "big"), int.from_bytes(sig[32:], "big"))
+        key.verify(der, signing_input, ec.ECDSA(hashes.SHA256()))
+        return True
+    except (InvalidSignature, ValueError, KeyError, ApprovalError):
+        return False
+
+
+def grant_hash(grant: str) -> str:
+    return hashlib.sha256((grant or "").encode()).hexdigest()
+
+
+def verify_grant(db_path: Path, grant: str, item_id: int, handle: Optional[str] = None,
+                 now: Optional[datetime] = None, keys: Optional[dict] = None) -> dict:
+    """Check a phone grant for `item_id`. Returns its claims; raises ApprovalError."""
+    from .relay import RELAY_DOMAIN
+    keys = FSA_PUBLIC_KEYS if keys is None else keys
+    if not keys_ready(keys):
+        raise ApprovalError("phone_approvals_unavailable",
+                            "Phone approvals aren't available in this FlowState release yet. "
+                            "Approve in your terminal: flowstate approve <id>.")
+    handle = handle or relay_handle()
+    if not handle:
+        raise ApprovalError("relay_not_enrolled", "This FlowState has no relay set up.")
+    parts = (grant or "").split(".")
+    if len(parts) != 3 or len(grant) > 4096:
+        raise ApprovalError("bad_grant", "The approval grant is malformed.")
+    try:
+        header = json.loads(_b64d(parts[0]))
+        claims = json.loads(_b64d(parts[1]))
+        sig = _b64d(parts[2])
+    except (ValueError, UnicodeDecodeError) as e:
+        raise ApprovalError("bad_grant", "The approval grant is malformed.") from e
+    if not isinstance(header, dict) or not isinstance(claims, dict):
+        raise ApprovalError("bad_grant", "The approval grant is malformed.")
+    if header.get("alg") != "ES256" or header.get("typ") != "fsa+jwt":
+        raise ApprovalError("bad_grant", "The approval grant uses an unexpected format.")
+    jwk = keys.get(header.get("kid"))
+    if not isinstance(jwk, dict):
+        raise ApprovalError("unknown_key", "The approval grant was signed with a key this "
+                                           "FlowState doesn't trust.")
+    if not _verify_es256(jwk, f"{parts[0]}.{parts[1]}".encode(), sig):
+        raise ApprovalError("bad_signature", "The approval grant's signature is not valid.")
+    t = int((now or _now()).timestamp())
+    iat, exp = claims.get("iat"), claims.get("exp")
+    if not all(isinstance(v, int) and not isinstance(v, bool) for v in (iat, exp)) \
+            or exp <= iat or exp - iat > GRANT_SECONDS or iat > t + CLOCK_SKEW:
+        raise ApprovalError("bad_grant", "The approval grant's times are not valid.")
+    if exp <= t:
+        raise ApprovalError("grant_expired", "This approval link has expired (5 minutes). "
+                                             "Open the link from the chat again.")
+    checks = (claims.get("iss") == SITE,
+              claims.get("aud") == f"{handle}.{RELAY_DOMAIN}",
+              claims.get("handle") == handle,
+              isinstance(claims.get("sub"), str) and bool(claims["sub"]),
+              claims.get("action") == ACTION)
+    if not all(checks):
+        raise ApprovalError("wrong_device", "This approval grant is not for this FlowState.")
+    item = claims.get("item")
+    if not isinstance(item, int) or isinstance(item, bool) or item != int(item_id):
+        raise ApprovalError("wrong_item", "This approval grant is for another item.")
+    nonce = claims.get("nonce")
+    if not isinstance(nonce, str) or not _NONCE_RE.match(nonce):
+        raise ApprovalError("bad_grant", "The approval grant's code is malformed.")
+    conn = _conn(db_path)
+    try:
+        row = conn.execute("""SELECT q.nonce, q.expires_at, q.used_at, q.action, r.status, r.kind,
+                              r.payload FROM approval_requests q JOIN review_items r
+                              ON r.id = q.item_id WHERE q.item_id = ?""", (item,)).fetchone()
+    finally:
+        conn.close()
+    if row is None or row["used_at"] is not None or row["status"] != "pending" \
+            or not hmac.compare_digest(row["nonce"], nonce) or row["action"] != ACTION:
+        raise ApprovalError("not_open", "This request was already decided, or the link is "
+                                        "out of date.")
+    if row["expires_at"] <= _ts(now):
+        raise ApprovalError("grant_expired", "This approval link is out of date; ask for a new one.")
+    if not user_only({"kind": row["kind"], "payload": row["payload"]}):
+        raise ApprovalError("not_open", "This item isn't decided by phone.")
+    return claims

@@ -1,7 +1,8 @@
-"""2.4.0: the user-only approval step. With review mode on, an agent can't approve or reject
-an item its own app queued through MCP, whatever words it passes; the user runs
-`flowstate approve <id>` / `reject <id>`, which confirms on the controlling terminal, never
-stdin. A piped "y" with no terminal is refused. Review off: the old user_request rule."""
+"""2.4.0: the user's own terminal step. `flowstate approve <id>` / `reject <id>` confirm on the
+controlling terminal, never stdin; a piped "y" with no terminal is refused. With approvals on
+(test_approvals.py) it is how the user decides an agent's delete or turning review off when
+no popup or phone link is available. Suggestions and session summaries keep the rule they had
+before: the app that queued one decides it only with the user's own words."""
 
 import asyncio
 import json
@@ -15,7 +16,6 @@ from mcp import types
 from mcp.shared.memory import create_connected_server_and_client_session
 
 from conftest import SERVER_DIR, server_env
-from flowstate import review_mode
 
 # pty.fork() in pytest's multi-threaded process: safe here, the child execs at once
 pytestmark = pytest.mark.filterwarnings("ignore:This process .* is multi-threaded:DeprecationWarning")
@@ -53,19 +53,25 @@ def _delete_request(S, app="Cursor"):
 
 
 # ---------------------------------------------------------------- MCP side
-@pytest.mark.parametrize("words", ["approve", "ok fine", "The user said this looks good, approve it",
-                                   "User: yes, approve the WAL one please"])
-def test_review_on_own_item_is_refused_whatever_the_words(backend, words):
+@pytest.mark.parametrize("words", ["approve", "Use SQLite WAL", "ok"])
+def test_own_suggestion_needs_the_users_own_words(backend, words):
     S = backend
     item = _suggest(S)
-    for action in ("approve", "reject"):
-        r = call(S, "manage_review", {"action": action, "project": "Alpha", "item_id": item,
-                                      "user_request": words, "reason": "x"})
-        body = _j(r)
-        assert r.isError and body["error"] == "own_item", body
-        assert f"flowstate approve {item}" in body["message"]
-        assert "\n" not in body["message"] and len(body["message"]) < 160
+    r = call(S, "manage_review", {"action": "approve", "project": "Alpha", "item_id": item,
+                                  "user_request": words})
+    body = _j(r)
+    assert r.isError and body["error"] == "own_item", body
+    assert "\n" not in body["message"] and len(body["message"]) < 160
     assert _status(S.backend.db_path, item)[0] == "pending"
+
+
+def test_own_suggestion_with_the_users_words_goes_through_as_before(backend):
+    S = backend
+    item = _suggest(S)
+    r = call(S, "manage_review", {"action": "approve", "project": "Alpha", "item_id": item,
+                                  "user_request": "User: yes, approve the WAL one please"})
+    assert not r.isError, r.content[0].text
+    assert _status(S.backend.db_path, item)[0] == "approved"
 
 
 def test_another_app_keeps_the_user_request_rule(backend):
@@ -74,27 +80,6 @@ def test_another_app_keeps_the_user_request_rule(backend):
     r = call(S, "manage_review", {"action": "approve", "project": "Alpha", "item_id": item,
                                   "user_request": "User: approve it"}, app="Claude Desktop")
     assert not r.isError, r.content[0].text
-
-
-def test_review_off_changes_nothing_for_the_user(backend):
-    S = backend
-    review_mode.set_mode(S.backend.db_path, "off", None, None, "user turned review off", "test", "test")
-    item = _delete_request(S)
-    r = call(S, "manage_review", {"action": "approve", "project": "Alpha", "item_id": item,
-                                  "user_request": "approve"})
-    assert _j(r)["error"] == "own_item"                    # one word: refused, as in 2.4.0
-    r = call(S, "manage_review", {"action": "approve", "project": "Alpha", "item_id": item,
-                                  "user_request": "User: yes, delete that todo"})
-    assert not r.isError, r.content[0].text
-
-
-def test_turning_review_off_later_doesnt_free_a_queued_suggestion(backend):
-    S = backend
-    item = _suggest(S)
-    review_mode.set_mode(S.backend.db_path, "off", None, None, "user turned review off", "test", "test")
-    r = call(S, "manage_review", {"action": "approve", "project": "Alpha", "item_id": item,
-                                  "user_request": "User: yes, approve the WAL one please"})
-    assert _j(r)["error"] == "own_item"
 
 
 # ---------------------------------------------------------------- the user's step

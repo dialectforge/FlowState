@@ -41,7 +41,9 @@ def create_http_app(token: Optional[str], path: str = "/mcp", db_path: Optional[
         # Deliberately says nothing about the data; safe to expose through a tunnel.
         return JSONResponse({"ok": True, "service": "flowstate"})
 
-    routes = [Route("/health", health, methods=["GET"])]
+    from .approve_page import routes as approve_routes
+    # the phone approval page (approve_page.py); it checks its own signed grants
+    routes = [Route("/health", health, methods=["GET"])] + approve_routes(lambda: S.backend.db_path)
     provider = rmd = None
     allowed_hosts = None
     if public_url:

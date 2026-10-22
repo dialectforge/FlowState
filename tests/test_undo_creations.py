@@ -96,16 +96,13 @@ def test_undo_of_a_creation_changed_outside_flowstate_is_refused(backend):
 
 def test_partial_undo_restores_the_rest_and_lists_what_it_skipped(backend):
     S, db = backend, backend.backend.db_path
-    # an approved delete of a problem takes its attempt with it (one edit, several rows)
+    # a delete of a problem takes its attempt with it (one edit, several rows)
     att = _call(S, "manage_problems", {"action": "add_attempt", "project": "Alpha",
                                        "problem_id": 1, "description": "try one"})
     assert "error" not in att, att
-    req = _call(S, "delete_request", {"action": "record", "project": "Alpha",
-                                      "record_type": "problem", "record_id": 1})
-    item = req["delete_requested"]
-    done = _call(S, "review_approve", {"project": "Alpha", "item_id": item,
-                                       "user_request": "User: yes delete that bug"}, app="review-page")
-    assert "error" not in done, done
+    done = _call(S, "delete_request", {"action": "record", "project": "Alpha",
+                                       "record_type": "problem", "record_id": 1})
+    assert "error" not in done and done["deleted"]["record_type"] == "problem", done
     gone = _q(db, "SELECT table_name, record_id FROM record_history WHERE tool = 'delete/problem'")
     assert ("problems", 1) in gone and len(gone) >= 2
     # someone puts a different row back in one of those places outside FlowState

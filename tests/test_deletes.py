@@ -1,7 +1,8 @@
-"""User-approved deletes (deletes.py): an AI's delete call only queues a request; only the
-user's approval (manage_review approve with user_request, and a project's exact name)
-deletes; reject keeps everything; undo puts back the record and every row removed with it,
-exactly. Remote, OAuth, per-app LAN and read-only keys can neither ask nor approve.
+"""User-approved deletes (deletes.py) with approvals on (approvals.py): an AI's delete call
+only queues a request; only the user's own decision (here as in their terminal, and a
+project's exact name) deletes; reject keeps everything; undo puts back the record and every
+row removed with it, exactly. Remote, OAuth, per-app LAN and read-only keys can neither ask nor
+approve. With approvals off (the default) deletes go through at once: test_approvals.py.
 Temp DBs only."""
 
 import asyncio
@@ -20,7 +21,8 @@ ASK = "User: yes, delete it"
 # or are a rebuilt cache; everything else must come back exactly.
 _MOVING = {"sessions", "auto_sessions", "review_items", "record_history", "activity_log",
            "meaning_index", "project_views", "schema_migrations",
-           "session_runs", "run_writes", "run_views"}   # 2.4.0 run ledger: grows with every call
+           "session_runs", "run_writes", "run_views",   # 2.4.0 run ledger: grows with every call
+           "approval_requests", "approval_grants", "approval_log"}   # approvals bookkeeping
 
 
 def run(coro):
@@ -28,16 +30,23 @@ def run(coro):
 
 
 def call(S, name, args, client="Claude Desktop"):
-    # The user's go-ahead comes in through another app: with review on, an app can't
-    # decide what it queued itself (test_user_approval.py covers that).
-    if name == "manage_review" and args.get("action") in ("approve", "reject") \
-            and client == "Claude Desktop":
-        client = "Claude Code"
+    # With approvals on only the user decides a delete request: here as in their own terminal
+    # (flowstate approve / reject run this same code). Agents asking: test_approvals.py.
+    if name == "manage_review" and args.get("action") in ("approve", "reject"):
+        return user_decides(args)
     async def go():
         async with create_connected_server_and_client_session(
                 S.server, client_info=types.Implementation(name=client, version="1")) as c:
             return await c.call_tool(name, args)
     return run(go())
+
+
+def user_decides(args):
+    from flowstate.popup import as_user
+    a = {k: v for k, v in args.items() if k not in ("action", "project")}
+    out = as_user(f"review_{args['action']}", a, "command-line")
+    return types.CallToolResult(content=[types.TextContent(type="text", text=json.dumps(out))],
+                                isError="error" in out)
 
 
 def _j(r):
@@ -100,6 +109,8 @@ def rich(backend, seeded_db):
                                 "target_project": "Alpha", "target_component": "Core"}))
     ok(call(S, "log_work", {"project": "Alpha", "kind": "change", "summary": "shared change",
                             "component": "Core"}))
+    from flowstate import approvals
+    approvals.set_on(seeded_db, True)
     return S
 
 
@@ -118,8 +129,9 @@ def test_an_ai_delete_call_only_queues_a_request(rich, seeded_db):
         r = call(S, name, args)
         assert not r.isError, r.content[0].text
         out = _j(r)
-        assert out["delete_requested"] and "Nothing was deleted" in out["note"]
-        assert "user" in out["note"] and "approve" in out["note"]
+        assert out["delete_requested"] and out["status"] == "waiting for the user"
+        assert out["next"] == (f"Waiting for the user: ask them to run `flowstate approve "
+                               f"{out['delete_requested']}` in their terminal.")
     assert dump(seeded_db) == before                       # not one row removed or changed
     kinds = [k for _i, k, _s in _pending(seeded_db)]
     assert kinds.count("delete") == 5                      # the repeat returned the same item
@@ -196,14 +208,19 @@ def _request(S, args):
     return out["delete_requested"]
 
 
-def test_approval_needs_the_users_words(rich, seeded_db):
+def test_an_agent_can_not_approve_a_delete_whatever_it_says(rich, seeded_db):
     S = rich
     before = dump(seeded_db)
     item = _request(S, {"action": "delete", "project": "Alpha", "record_type": "todo", "record_id": 1})
-    for extra in ({}, {"user_request": "  "}):
-        r = _j(call(S, "manage_review", {"action": "approve", "project": "Alpha", "item_id": item,
-                                         **extra}))
-        assert r["error"] == "user_request_required"
+    for client in ("Claude Desktop", "Claude Code", "Cursor"):
+        async def go():
+            async with create_connected_server_and_client_session(
+                    S.server, client_info=types.Implementation(name=client, version="1")) as c:
+                return await c.call_tool("manage_review", {"action": "approve", "project": "Alpha",
+                                                           "item_id": item, "user_request": ASK})
+        out = _j(run(go()))
+        assert out["status"] == "waiting for the user" and "approved" not in out
+        assert f"flowstate approve {item}" in out["next"]
     assert dump(seeded_db) == before
     assert (item, "delete", "pending") in _pending(seeded_db)
 
@@ -227,9 +244,9 @@ def test_approve_deletes_and_undo_restores_exactly(rich, seeded_db):
                                          "record_type": "problem", "record_id": 1}))
     assert hist["history"][0]["tool"] == "delete/problem"
     assert hist["history"][0]["changes"] == {"deleted": True}
-    act = _q(db, "SELECT tool, ok, project_id FROM activity_log WHERE tool = 'review_approve' "
-                 "ORDER BY id DESC LIMIT 1")
-    assert act == [("review_approve", 1, 1)]
+    logged = _j(call(S, "manage_history", {"action": "list", "project": "Alpha"}))["approvals"]
+    assert logged[0]["item_id"] == item and (logged[0]["path"], logged[0]["decision"]) \
+        == ("terminal", "approved")
     undo = _j(call(S, "manage_history", {"action": "undo", "project": "Alpha",
                                          "record_type": "problem", "record_id": 1}))
     assert "error" not in undo, undo
@@ -381,7 +398,7 @@ def test_remote_callers_can_not_approve(rich, seeded_db, monkeypatch):
     monkeypatch.setattr(S, "_caller", lambda: ("phone", ["flowstate:read", "flowstate:write"]))
     r = _j(call(S, "manage_review", {"action": "approve", "project": "Alpha", "item_id": item,
                                      "user_request": ASK}))
-    assert r["error"] == "not_allowed_remotely"
+    assert r["error"] == "not_allowed_remotely"   # even the user's own step, from a remote app
     assert dump(seeded_db) == before and (item, "delete", "pending") in _pending(seeded_db)
     # an ordinary review item is still approvable remotely
     q = _j(call(S, "log_work", {"project": "Alpha", "kind": "todo", "summary": "idea",

@@ -105,17 +105,15 @@ def _count(db, sql):
         conn.close()
 
 
-def _delete_item(S):
-    r = _call(S, "manage_memory", {"action": "delete", "project": "Alpha", "record_type": "todo",
-                                   "record_id": 1})
-    return r["delete_requested"]
+def _delete(S, rtype="todo"):
+    """Approvals off (the default): the delete goes through at once."""
+    return _call(S, "manage_memory", {"action": "delete", "project": "Alpha", "record_type": rtype,
+                                      "record_id": 1})
 
 
-def test_approved_delete_takes_a_safety_copy_first(backend):
+def test_a_delete_takes_a_safety_copy_first(backend):
     S = backend
-    item = _delete_item(S)
-    out = _call(S, "manage_review", {"action": "approve", "project": "Alpha", "item_id": item,
-                                     "user_request": ASK})
+    out = _delete(S)
     assert "error" not in out, out
     copies = [p for _ts, p in B.list_backups(_bk()) if B.is_safety_copy(p)]
     assert len(copies) == 1 and out["safety_copy"] == copies[0].name
@@ -124,28 +122,34 @@ def test_approved_delete_takes_a_safety_copy_first(backend):
     assert _count(S.backend.db_path, "SELECT COUNT(*) FROM todos WHERE id = 1") == 0
 
 
+def test_an_approved_delete_takes_a_safety_copy_first(backend):
+    from flowstate import approvals
+    from flowstate.popup import as_user
+    S = backend
+    approvals.set_on(S.backend.db_path, True)
+    item = _delete(S)["delete_requested"]
+    out = as_user("review_approve", {"item_id": item, "user_request": ASK}, "command-line")
+    assert "error" not in out, out
+    copies = [p for _ts, p in B.list_backups(_bk()) if B.is_safety_copy(p)]
+    assert len(copies) == 1 and out["safety_copy"] == copies[0].name
+    assert _count(S.backend.db_path, "SELECT COUNT(*) FROM todos WHERE id = 1") == 0
+
+
 def test_no_copy_no_change(backend, monkeypatch):
     S = backend
-    item = _delete_item(S)
 
     def boom(*a, **k):
         raise B.BackupError("disk full")
     monkeypatch.setattr(B, "backup_now", boom)
-    out = _call(S, "manage_review", {"action": "approve", "project": "Alpha", "item_id": item,
-                                     "user_request": ASK})
+    out = _delete(S)
     assert out["error"] == "safety_copy_failed" and "nothing was changed" in out["message"]
     assert _count(S.backend.db_path, "SELECT COUNT(*) FROM todos WHERE id = 1") == 1
-    assert _count(S.backend.db_path, f"SELECT COUNT(*) FROM review_items WHERE id = {item} "
-                                     f"AND status = 'pending'") == 1
 
 
-def test_approvals_in_quick_succession_share_one_copy(backend):
+def test_deletes_in_quick_succession_share_one_copy(backend):
     S = backend
     for rtype in ("todo", "learning"):
-        r = _call(S, "manage_memory", {"action": "delete", "project": "Alpha",
-                                       "record_type": rtype, "record_id": 1})
-        out = _call(S, "manage_review", {"action": "approve", "project": "Alpha",
-                                         "item_id": r["delete_requested"], "user_request": ASK})
+        out = _delete(S, rtype)
         assert "error" not in out, out
     assert len([p for _ts, p in B.list_backups(_bk()) if B.is_safety_copy(p)]) == 1
 

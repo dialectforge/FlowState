@@ -177,6 +177,8 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
         alerts = links.alert_lines(conn, pid)
         conflict_line = conflicts.brief_line(conn, pid)
         mode_line = review_mode.brief_line(db_path, pid) if review_mode.available(conn) else None
+        from .deletes import recent_line
+        deleted_line = recent_line(conn, pid, name)
         learnings = q("""SELECT id, category, insight, verified FROM learnings WHERE project_id=?
                          ORDER BY verified DESC, created_at DESC, id DESC LIMIT ?""", pid, n_learn)
         meta = {k: provenance.get(conn, k, [r["id"] for r in rows]) for k, rows in
@@ -240,6 +242,8 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
                  if pending else "."))
     if mode_line:
         b.add(mode_line)
+    if deleted_line:
+        b.add(deleted_line)
     for line in alerts:
         b.add(line)
     if conflict_line:

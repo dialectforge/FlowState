@@ -3,9 +3,12 @@
     flowstate review   [--project P] [--all] [--db FILE]     list what waits for you (read-only)
     flowstate approve  ID [ID ...] [--db FILE]               asks you to confirm, then approves
     flowstate reject   ID [ID ...] [--reason TEXT] [--db FILE]  asks you to confirm, then rejects
+    flowstate approvals [status|on|off] [--project P] [--clear]   user-only approvals (approvals.py)
+    flowstate approvals phone on|off / popup add|remove NAME        phone link, popup apps
 
-With review mode on, an agent can't decide an item its own app queued through MCP; it asks
-you to run one of these instead. approve / reject read your "y" from the controlling
+With approvals on, an agent can't approve its own delete requests or turn review off; it asks
+you to run one of these (or to use the popup or the phone link). approve / reject and
+`approvals off` read your "y" from the controlling
 terminal (/dev/tty; on Windows the console), never from stdin, so an agent piping "y" into
 the command from its own shell can't confirm, and with no terminal they refuse. This stops
 agents approving their own work through FlowState; an agent with full control of your own
@@ -18,7 +21,7 @@ from pathlib import Path
 
 CLIENT = "command-line"
 USER_WORDS = "The user confirmed this in their own terminal (flowstate {what})."
-COMMANDS = ("review", "approve", "reject")
+COMMANDS = ("review", "approve", "reject", "approvals")
 
 
 def say(msg: str) -> None:
@@ -179,6 +182,68 @@ def cmd_reject(a) -> int:
     return _decide(a, False)
 
 
+def cmd_approvals(a) -> int:
+    from . import approvals
+    from . import server as S
+    from .cli_more import _project_id
+    db = _db(a)
+    S.init_backend(db)   # migrations first (019 holds the settings)
+    S.backend.tracker = None
+    if S.backend.error:
+        say(f"FAILED: FlowState database unavailable: {S.backend.error}")
+        return 1
+    pid = _project_id(db, a.project)
+    where = "this project" if pid is not None else "this install"
+    what, arg = a.what, a.arg
+    if what == "phone":
+        if arg not in ("on", "off"):
+            say("Use: flowstate approvals phone on|off")
+            return 2
+        approvals.set_value(db, "phone_approvals", arg)
+        say(f"Phone approval links are {arg}.")
+        return 0
+    if what == "popup":
+        if arg not in ("add", "remove") or not a.name:
+            say("Use: flowstate approvals popup add|remove NAME (the app's MCP client name)")
+            return 2
+        names = approvals.change_popup_clients(db, a.name, arg == "add")
+        say("Popup apps: " + ", ".join(sorted(names)))
+        return 0
+    if what == "off" or (a.clear and pid is not None and approvals.is_on(db, pid)):
+        tty = open_terminal()
+        if tty is None:
+            say("Refused: turning approvals off asks you to confirm in a terminal, and there is "
+                "none here (piped input doesn't count). Run it yourself in a terminal window.")
+            return 2
+        try:
+            if tty.ask(f"Turn approvals off for {where}? Agents' deletes then go through at once "
+                       f"(with a safety copy and undo). Type y to confirm: ").lower() not in ("y", "yes"):
+                say("Not confirmed; nothing changed.")
+                return 1
+        finally:
+            tty.close()
+    if what in ("on", "off"):
+        res = approvals.set_on(db, what == "on", pid)
+    elif a.clear:
+        if pid is None:
+            say("--clear removes a project's own setting; name it with --project.")
+            return 2
+        res = approvals.set_on(db, None, pid)
+    else:
+        on = approvals.is_on(db, pid)
+        say(f"Approvals are {'on' if on else 'off'} for {where}. "
+            + ("Agents' deletes and turning review off wait for your own click or key (popup, "
+               "phone link, or `flowstate approve <id>`)." if on else
+               "Agents' deletes go through at once, after a safety copy, and can be undone."))
+        say(f"Phone links: {'on' if approvals.phone_on(db) else 'off'}"
+            + ("" if approvals.relay_handle() else " (no relay set up)")
+            + ("" if approvals.keys_ready() else "; not available in this release yet") + ".")
+        say("Popup apps: " + ", ".join(sorted(approvals.popup_clients(db))))
+        return 0
+    say(f"Approvals are now {res['now']} for {where}.")
+    return 0
+
+
 def register(sub) -> None:
     p = sub.add_parser("review", help="list what waits in the review queue (read-only)")
     p.add_argument("--project", help="one project (name or id); default: all")
@@ -195,3 +260,11 @@ def register(sub) -> None:
     p.add_argument("--reason")
     p.add_argument("--db")
     p.set_defaults(fn=cmd_reject)
+    p = sub.add_parser("approvals", help="user-only approvals: status, on, off (off asks you to confirm)")
+    p.add_argument("what", nargs="?", default="status", choices=["status", "on", "off", "phone", "popup"])
+    p.add_argument("arg", nargs="?", help="phone: on|off; popup: add|remove")
+    p.add_argument("name", nargs="?", help="popup: the app's MCP client name")
+    p.add_argument("--project", help="one project's own setting (name or id)")
+    p.add_argument("--clear", action="store_true", help="drop the project's own setting")
+    p.add_argument("--db")
+    p.set_defaults(fn=cmd_approvals)

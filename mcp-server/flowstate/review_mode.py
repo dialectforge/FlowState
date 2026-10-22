@@ -6,7 +6,9 @@
   everything  every new record waits for the user's OK
 
 Set per install, with an optional per-project override. Only the user changes it (an AI
-must quote the user's request); every change is logged.
+must quote the user's request); every change is logged. With approvals on (approvals.py),
+turning review off waits for the user's own click or key: queue_if_off queues it as a review
+item of kind `setting`, and apply_queued makes the change once the user approves it.
 """
 
 import json
@@ -186,3 +188,49 @@ def history(db_path: Path, limit: int = 20) -> list[dict]:
             "SELECT * FROM review_mode_log ORDER BY id DESC LIMIT ?", (limit,))]
     finally:
         conn.close()
+
+
+def queue_if_off(db_path: Path, mode: Optional[str], kinds, project_id: Optional[int],
+                 user_request: str, client: str, clear: bool = False) -> Optional[int]:
+    """Approvals on: a change that turns review off (mode off, or clearing a project's
+    override when the install is off) becomes a user-only review item. Returns its id, or
+    None when the change may go ahead as usual."""
+    if not (user_request or "").strip():
+        return None   # set_mode refuses it as before
+    if clear:
+        if project_id is None or get(db_path, None)["mode"] != "off":
+            return None
+    elif mode != "off":
+        return None
+    if get(db_path, project_id)["mode"] == "off":
+        return None   # already off: nothing to turn off
+    from . import review
+    pid = project_id
+    if pid is None:   # an install-wide change is filed under the most recently updated project
+        conn = _conn(db_path)
+        try:
+            row = conn.execute("SELECT id FROM projects ORDER BY COALESCE(updated_at, created_at) "
+                               "DESC, id DESC LIMIT 1").fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            return None
+        pid = row[0]
+    where = "the whole install" if project_id is None else "this project"
+    return review.add_item(db_path, pid, "setting", f"Turn review off for {where}",
+                           "Approve to turn review off (nothing waits for review then); reject to "
+                           "keep it as it is.",
+                           {"scope": _scope(project_id), "mode": None if clear else mode,
+                            "kinds": [], "clear": bool(clear), "user_request": user_request[:500]},
+                           client)
+
+
+def apply_queued(db_path: Path, item: dict, client: str) -> tuple[str, int]:
+    """Make a review-setting change the user approved (queue_if_off)."""
+    p = json.loads(item.get("payload") or "{}")
+    scope = p.get("scope") or "install"
+    pid = None if scope == "install" else int(scope.split(":", 1)[1])
+    out = set_mode(db_path, p.get("mode"), p.get("kinds"), pid,
+                   p.get("user_request") or "approved by the user", client, "user approval",
+                   clear=bool(p.get("clear")))
+    return "review_mode_log", out["log_id"]

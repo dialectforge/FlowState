@@ -330,9 +330,15 @@ def list_history(db_path: Path, project_id: int, record_type: Optional[str] = No
                         "at": r["created_at"], "undone_at": r["undone_at"],
                         "undo_of": r["undo_of"], "changes": _changed_fields(old, new),
                         **{k: r[k] for k in identity.FIELDS if k in r.keys()}})
-        return {"history": out, "count": len(out),
-                "note": "manage_history(action=undo, record_type=..., record_id=...) reverts the last "
-                        "change to a record."}
+        res = {"history": out, "count": len(out),
+               "note": "manage_history(action=undo, record_type=..., record_id=...) reverts the last "
+                       "change to a record."}
+        if not record_type:   # user-only decisions (approvals.py): how, from which app, when
+            from .approvals import log_rows
+            decided = log_rows(db_path, project_id, max(1, min(int(limit or 20), 100)))
+            if decided:
+                res["approvals"] = decided
+        return res
     finally:
         conn.close()
 

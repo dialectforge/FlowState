@@ -84,7 +84,8 @@ def test_no_relay_code_runs_without_enrollment(tmp_path):
 
 def test_relay_only_starts_from_its_own_command():
     """Nothing outside flowstate/relay/ starts the agent: the only references are the CLI
-    registration and the start_here alert check (which reads relay state only if it exists)."""
+    registration, the start_here alert check and the phone approval link (approvals.py: the
+    handle and domain); the last two read relay state only if it exists."""
     pkg = SERVER_DIR / "flowstate"
     hits = {}
     for p in pkg.rglob("*.py"):
@@ -93,7 +94,7 @@ def test_relay_only_starts_from_its_own_command():
         for line in p.read_text(encoding="utf-8").splitlines():
             if re.search(r"from \.?relay|import relay|flowstate\.relay|\.relay\.", line):
                 hits.setdefault(p.name, []).append(line.strip())
-    assert set(hits) <= {"cli.py", "server.py"}, hits
+    assert set(hits) <= {"cli.py", "server.py", "approvals.py"}, hits
     assert not any("runner" in l or "tunnel" in l for ls in hits.values() for l in ls), hits
     setup = (SERVER_DIR.parent / "setup_flowstate.py").read_text(encoding="utf-8")
     assert "relay" not in setup.lower()            # the installer never enrolls or auto-starts

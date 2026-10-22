@@ -78,9 +78,7 @@ def test_a_removed_attachment_is_no_longer_found(backend, tmp_path):
     f.write_text("attached by mistake\n", encoding="utf-8")
     att = attach(backend, f)
     assert search(backend, "mistake")
-    req = call(backend, "manage_files", {"action": "remove", "project": "Alpha", "attachment_id": att["id"]})
-    item = req.get("delete_requested") or req.get("queued_for_review")
-    r = call(backend, "manage_review", {"action": "approve", "project": "Alpha", "item_id": item,
-                                        "user_request": "User: yes, detach it"}, app="Claude Code")
-    assert "error" not in r, r
+    # approvals off (the default): the removal goes through at once, undoable
+    r = call(backend, "manage_files", {"action": "remove", "project": "Alpha", "attachment_id": att["id"]})
+    assert "error" not in r and r["deleted"]["record_type"] == "attachment", r
     assert search(backend, "mistake") == []

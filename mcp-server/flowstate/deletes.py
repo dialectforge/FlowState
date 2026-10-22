@@ -1,15 +1,15 @@
-"""User-approved deletes (v2.1).
+"""Deletes (v2.1; 2.4.0: at once unless approvals are on).
 
-An AI can only ask. manage_projects(action="delete" / "delete_component") and
-manage_memory(action="delete") create a review item of kind `delete` that says what would
-go: the record, and every row that goes with it (a project's components, todos, decisions,
-...; a component's changes and problems; a problem's attempts and solution). Nothing is
-removed then. Only manage_review(action="approve") with the user's words in user_request
-carries it out, and a project also needs its exact name in confirm_name. Rejecting the item
-leaves everything as it was. Apps without the local scope (remote, OAuth, per-app LAN keys)
-can neither ask nor approve.
+manage_projects(action="delete" / "delete_component") and manage_memory(action="delete")
+remove the record and every row that goes with it (a project's components, todos, decisions,
+...; a component's changes and problems; a problem's attempts and solution). With approvals
+off (the default, approvals.py) delete_now does it at once, after a safety copy. With them on,
+request() queues a review item of kind `delete` that says what would go, and nothing is removed
+until the user approves it themselves (popup, phone page or terminal; a project also needs its
+exact name). Rejecting it leaves everything as it was. Apps without the local scope (remote,
+OAuth, per-app LAN keys) can neither delete, ask nor approve.
 
-On approval, in one transaction: every row the delete will remove or change is worked out
+When it is carried out, in one transaction: every row the delete will remove or change is worked out
 from the database's own foreign keys (plus the cross-project links that point at a removed
 record), copied into the edit history as one edit (record_history, tool `delete/<type>`),
 the record is deleted (the ON DELETE rules remove its children), and the result is checked
@@ -294,27 +294,61 @@ def execute(db_path: Path, item: dict, client: str = "unknown",
     if rtype not in TYPES or rid is None:
         raise DeleteError("bad_request", "This delete request is incomplete; reject it.")
     check_approval(item, confirm_name)
+    return _carry_out(db_path, item["project_id"], rtype, rid, client,
+                      asked=payload.get("counts") or {}, confirm_name=confirm_name,
+                      pname=payload.get("project_name"), title=payload.get("title"))
+
+
+def delete_now(db_path: Path, project_id: int, rtype: str, rid, client: str = "unknown") -> dict:
+    """Approvals off (approvals.py): an agent's delete goes through at once, after a verified
+    safety copy, as one undoable edit. Returns what went and the one-line undo."""
+    from . import safety
+    if rtype not in TYPES:
+        raise DeleteError("bad_type", f"record_type must be one of: {', '.join(RECORD_TYPES)}.")
+    if rid is None:
+        raise DeleteError("record_required", f"Name the {rtype} to delete by its id.")
+    copy = safety.copy_before(db_path)   # SafetyError: no copy, no delete
+    out = _carry_out(db_path, project_id, rtype, int(rid), client)
+    d = out["deleted"]
+    what = f'{rtype} #{d["id"]} "{_one_line(d["title"], 60)}"'
+    if d["with"]:
+        what += " with " + ", ".join(f"{n} {k}" for k, n in d["with"].items())
+    out["safety_copy"] = copy.name
+    out["note"] = f"Deleted {what} (safety copy taken). Undo: {out['undo']}"
+    return out
+
+
+def _carry_out(db_path: Path, pid: int, rtype: str, rid: int, client: str,
+               asked: Optional[dict] = None, confirm_name: Optional[str] = None,
+               pname: Optional[str] = None, title: Optional[str] = None) -> dict:
+    """The delete itself, in one transaction. `asked` (an approved request's counts): refuse
+    if what would go changed since; None for a delete made at once."""
     table = TYPES[rtype][0]
-    pid = item["project_id"]
     conn = connect(db_path)
     try:
         conn.execute("BEGIN IMMEDIATE")
         own = owners(conn, rtype, rid)
         if own is None:
-            raise DeleteError("record_not_found", f"{rtype} #{rid} no longer exists; reject the "
-                                                  f"request.")
+            raise DeleteError("record_not_found", f"{rtype} #{rid} no longer exists"
+                              + ("; reject the request." if asked is not None else "."))
         if pid not in own:
-            raise DeleteError("project_mismatch", f"{rtype} #{rid} has moved to another project "
-                                                  f"since the request; reject it and ask again.")
-        if rtype == "project":
+            raise DeleteError("project_mismatch",
+                              f"{rtype} #{rid} has moved to another project since the request; "
+                              f"reject it and ask again." if asked is not None else
+                              f"{rtype.capitalize()} #{rid} is not in this project; name the "
+                              f"project it belongs to.")
+        if pname is None:
+            pname = conn.execute("SELECT name FROM projects WHERE id = ?", (pid,)).fetchone()[0]
+        if title is None:
+            title = _title(conn, rtype, rid)
+        if rtype == "project" and asked is not None:
             name = conn.execute("SELECT name FROM projects WHERE id = ?", (rid,)).fetchone()[0]
             if name != confirm_name:
                 raise DeleteError("confirm_name_mismatch", f"The project is now called {name!r}; "
                                                            f"reject the request and ask again.")
         gone, changed = plan(conn, table, rid)
         now = counts(gone, (table, rid))
-        asked = payload.get("counts") or {}
-        if any(now.get(k, 0) != asked.get(k, 0) for k in _FIXED):
+        if asked is not None and any(now.get(k, 0) != asked.get(k, 0) for k in _FIXED):
             raise DeleteError("changed_since_request",
                               f"What would be deleted changed since the request (then {asked}, now "
                               f"{now}). Nothing was deleted; reject this request and ask again.")
@@ -340,10 +374,10 @@ def execute(db_path: Path, item: dict, client: str = "unknown",
         raise
     finally:
         conn.close()
-    return {"deleted": {"record_type": rtype, "id": rid, "title": payload.get("title"),
+    return {"deleted": {"record_type": rtype, "id": rid, "title": title,
                         "with": now, "changed_rows": len(changed)},
             "edit_id": edit_id,
-            "undo": undo_call(payload.get("project_name") or str(pid), rtype, rid),
+            "undo": undo_call(pname or str(pid), rtype, rid),
             "note": ("Deleted. Everything is kept in the edit history; the undo call above puts "
                      "it all back.")}
 
@@ -365,6 +399,51 @@ def _verify(conn, gone: dict, changed: dict, before: dict) -> None:
         if history._row(conn, t, k) is None:
             raise DeleteError("delete_mismatch", f"{t} #{k} was removed, not only unlinked. "
                                                  f"Nothing was deleted.")
+
+
+# ---------------------------------------------------------------- recent deletes (the brief)
+_TITLE_KEYS = ("name", "title", "insight", "key_decisions", "user_prompt_summary", "rule",
+               "field_name", "file_name", "where_i_was", "description", "link_type")
+
+
+def _recent(conn, project_id: Optional[int], days: int, limit: int) -> list:
+    from datetime import datetime, timedelta, timezone
+    if not history.available(conn):
+        return []
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    where = "project_id = ?" if project_id is not None else "table_name = 'projects'"
+    rows = conn.execute(
+        f"""SELECT h.* FROM record_history h JOIN (SELECT MIN(id) AS first FROM record_history
+            WHERE tool LIKE 'delete/%' AND new_row IS NULL AND created_at >= ? AND {where}
+            GROUP BY edit_id) f ON f.first = h.id ORDER BY h.id DESC LIMIT ?""",
+        (since, *(() if project_id is None else (project_id,)), limit)).fetchall()
+    out = []
+    for r in rows:
+        if r["undone_at"] or (project_id is None and r["table_name"] != "projects"):
+            continue
+        old = json.loads(r["old_row"] or "{}")
+        title = next((old[k] for k in _TITLE_KEYS if old.get(k)), "")
+        rtype = r["tool"].split("/", 1)[1]
+        app = r["app"] if "app" in r.keys() and r["app"] else r["client"]
+        out.append((rtype, r["record_id"], _one_line(title, 40), app, r["created_at"][5:10],
+                    old.get("name") if rtype == "project" else None))
+    return out
+
+
+def recent_line(conn, project_id: Optional[int], project: str = "", days: int = 7) -> Optional[str]:
+    """One line: what agents deleted here in the last `days` (not undone) and how to undo it.
+    project_id None: deleted projects (for the project list)."""
+    try:
+        got = _recent(conn, project_id, days, 4)
+    except sqlite3.Error:
+        return None
+    if not got:
+        return None
+    shown = "; ".join(f'{t} #{i} "{title}" ({app}, {when})' for t, i, title, app, when, _ in got[:3])
+    more = f"; and more (manage_history list)" if len(got) > 3 else ""
+    t, i, _title, _app, _when, pname = got[0]
+    return (f"Deleted in the last {days} days: {shown}{more}. Undo: "
+            f"{undo_call(pname or project, t, i)}.")
 
 
 # ---------------------------------------------------------------- undo of a project delete

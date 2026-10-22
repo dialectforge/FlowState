@@ -72,7 +72,7 @@ def test_v230_database_upgrades_with_new_tables_only(v230_db, tmp_path):
             if t != "schema_migrations"}
     res = M.migrate(db, tmp_path / "bk")
     assert res["applied"] == ["015_session_runs", "016_write_receipts", "017_run_views",
-                              "018_run_views_upto"]
+                              "018_run_views_upto", "019_approvals"]
     assert res["backup"] and "pre-migration" in res["backup"]
     after = _schemas(db)
     assert {k: v for k, v in after.items() if k in before} == before      # nothing altered

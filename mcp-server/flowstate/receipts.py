@@ -31,7 +31,8 @@ from pathlib import Path
 from typing import Optional
 
 WINDOW_SECONDS = 120
-NOT_REPEATS = {("history", "undo"), ("todo", "renew")}
+NOT_REPEATS = {("history", "undo"), ("todo", "renew"), ("review_approve", None),
+               ("review_reject", None)}   # asking the user again (approvals.py) is not a repeat
 NO_RECEIPT = {"git"}   # runs git on the data repo (status, history, sync): not a record write
 _IGNORED_ARGS = ("model",)   # the same content however the caller names itself
 _PROJECT_ARGS = ("project", "project_id", "project_name")   # compared by the project's id

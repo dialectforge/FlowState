@@ -124,9 +124,6 @@ def _norm(text: str) -> str:
     return " ".join("".join(c.lower() if c.isalnum() else " " for c in (text or "")).split())
 
 
-USER_STEP = "flowstate approve {id}"   # the user-only step (cli_review.py): their own terminal
-
-
 def _own(item: Optional[dict], ident) -> bool:
     """Did this caller's app (on the same machine, when recorded) queue the item?"""
     if not item or ident is None or not item.get("app") or item["app"] != ident.app:
@@ -134,32 +131,15 @@ def _own(item: Optional[dict], ident) -> bool:
     return not (item.get("machine") and ident.machine and item["machine"] != ident.machine)
 
 
-def _review_on(db_path: Optional[Path], item: dict) -> bool:
-    """Review mode on for the item's project, or an item only review mode queues (a session
-    summary or a suggestion): turning review off later doesn't free it."""
-    if item.get("kind") == "session_summary" or item.get("kind") in RECORD_KINDS:
-        return True
-    if db_path is None:
-        return True
-    from .review_mode import get
-    return get(db_path, item.get("project_id"))["mode"] != "off"
-
-
 def own_item_refusal(item: Optional[dict], ident, user_request: str,
                      db_path: Optional[Path] = None) -> Optional[dict]:
-    """The app that queued an item (same app, and same machine when recorded) can't decide
-    it through MCP. With review on (2.4.0) never, whatever words it passes: the user does it
-    with `flowstate approve <id>` / `reject <id>` in their own terminal, or on the review page.
-    With review off, as before: only with the user's own words (two words or more, not the
-    item's own text). Anyone else relaying the user is checked as before. None = allowed.
-    `ident` is None on the command line and the review page (the user)."""
+    """The app that queued an item (same app, and same machine when recorded) decides it only
+    with the user's own words (two words or more, not the item's own text). Anyone else
+    relaying the user is checked as before. None = allowed. `ident` is None on the command
+    line, the review page, the popup and the phone page (the user). Items only the user's own
+    click or key decides (approvals on) are handled before this (approvals.user_only)."""
     if not _own(item, ident):
         return None
-    if _review_on(db_path, item):
-        return {"error": "own_item",
-                "message": f"You queued review item #{item['id']}; only the user can decide it. "
-                           f"Ask them to run `{USER_STEP.format(id=item['id'])}` (or reject) "
-                           f"in their terminal."}
     words = _norm(user_request)
     own = " ".join(_norm(item.get(k) or "") for k in ("summary", "details"))
     if len(words.split()) >= 2 and words not in own:

@@ -9,7 +9,7 @@ INSTRUCTIONS = """FlowState is the user's project memory (todos, changes, decisi
 1. At the start of every conversation about a project, call start_here(project="<name>") first and read the brief. If you don't know the project, call start_here() with no arguments (or with folder="<working folder>") to see the list, then pick one.
 2. As you work, record what matters with log_work(project="<name>", kind=..., summary=...): kind=decision for choices made, change for things changed, problem for bugs/blockers, learning for lessons, todo for follow-ups. One short line each; add details only when useful. Look things up with search (answer=true for a question).
 3. Every write must name the project. Never put passwords, tokens or keys in any text. If you know your model name, pass it as model="<name>" on writes; never guess or invent it (leave it out).
-4. A session is opened and closed for you automatically; you don't need to manage it. Its auto-captured summary, and anything you log with suggested=true, waits in a review queue for the user. Never approve or reject review items unless the user explicitly asks you to in this chat. Deleting (manage_projects or manage_memory action=delete) only queues a request there for the user. The user's review mode (shown in the brief) decides what else waits; never change it unless the user asks you to in this chat.
+4. A session is opened and closed for you automatically; you don't need to manage it. Its auto-captured summary, and anything you log with suggested=true, waits in a review queue for the user. Never approve or reject review items unless the user explicitly asks you to in this chat. Delete (manage_projects or manage_memory action=delete) only when the user asks: it goes through after a safety copy and manage_history undo brings it back; if the user turned approvals on, it waits for them and the answer's next line says what to tell them. The user's review mode (shown in the brief) decides what else waits; never change it unless the user asks you to in this chat.
 5. Things shared between projects (a protocol, a library) are linked with manage_links; log changes to a shared component by its name and the other projects are alerted.
 6. The brief starts with the project's HARD RULES: never break them. If it shows a HANDOFF note, continue from it and mark it picked up (manage_handoffs action=pickup). If you must stop mid-task, leave one: manage_handoffs(action="leave", project=..., where_i_was=..., next_step=...).
 7. If FlowState is slow, errors, or is unavailable, tell the user once and carry on with their task without it. Never retry more than once."""
@@ -99,7 +99,7 @@ LINKS_DESCRIPTION = (
 
 HISTORY_DESCRIPTION = (
     "The edit trail of records. list: edits with old and new values. undo: take back a "
-    "record's last edit, a record you created (if nothing refers to it), or an approved "
+    "record's last edit, a record you created (if nothing refers to it), or a "
     "delete with everything removed with it (a deleted project: its old name and id); rows "
     "changed since are skipped and listed. who: who did what (app, model, machine), filtered and paged. "
     "Logged changes (kind=change): find them with search. Reads: list, who. "
@@ -111,20 +111,21 @@ PROJECTS_DESCRIPTION = (
     "create: only when the user asks; names are unique. update: rename, describe, or set "
     "status (archived retires it). list_components / add_component / update_component: the "
     "same for components (deprecated retires one). delete / delete_component: only when the "
-    "user asks. Deletes nothing yet: queues a request with the child record counts, which the "
-    "user must approve in manage_review (a project also needs its exact name); undo restores "
-    "it. Reads: list, list_components. Returns project or component rows, or the request."
+    "user asks. Deletes it with its child records after a safety copy; the answer gives the "
+    "undo call. If the user turned approvals on it waits for their own approve instead "
+    "(manage_review lists it; tell them the answer's next line). Reads: list, "
+    "list_components. Returns project or component rows, or what was deleted."
 )
 
 MEMORY_DESCRIPTION = (
-    "Memory upkeep; nothing here edits records directly. cleanup: queue likely duplicate, "
+    "Memory upkeep. cleanup: queue likely duplicate, "
     "stale and misfiled records as suggestions (rejected ideas not repeated). import: a "
     "memory export (Claude, ChatGPT) or edited FlowState markdown into the review queue. "
     "stale: facts (paths, ports, URLs, config) unchecked for 60+ days (read-only). "
     "mark_checked: you re-checked one. set_source: correct a record's origin. delete: only "
-    "when the user asks; queues a request to delete one record (and its attempts or links), "
-    "carried out only when the user approves it in manage_review; undo restores it. A "
-    "changed fact is log_work. Requires project. Returns counts and ids, {facts} or the request."
+    "when the user asks; deletes one record (and its attempts or links) after a safety copy, "
+    "undo restores it; with approvals on it waits for the user's approve (manage_review). A "
+    "changed fact is log_work. Requires project. Returns counts and ids, {facts} or the result."
 )
 
 SESSIONS_DESCRIPTION = (
@@ -138,8 +139,8 @@ SESSIONS_DESCRIPTION = (
 FILES_DESCRIPTION = (
     "File attachments of a project. attach: a file on this computer, to the project, a "
     "component or a problem; copied into FlowState's bundle by default. list, search (text "
-    "in attached files): read. remove: asks the user to detach it (a delete request they "
-    "approve in manage_review; the bundle copy is kept; undo restores it). Local apps only: "
+    "in attached files): read. remove: detaches it (the bundle copy is kept; undo restores "
+    "it; with approvals on it waits for the user). Local apps only: "
     "attach and remove are refused over HTTP. Requires project for writes. Returns "
     "attachment rows, hits or the request."
 )
@@ -153,8 +154,8 @@ DATA_GIT_DESCRIPTION = (
 
 VARIABLES_DESCRIPTION = (
     "Non-secret project settings: hosts, ports, endpoints, config. create, list (read), "
-    "update (undo with manage_history), delete (queues a request the user approves in "
-    "manage_review; undo restores it; refused for HTTP app keys and remote apps). Secrets "
+    "update (undo with manage_history), delete (undo restores it; with approvals on it waits "
+    "for the user; refused for HTTP app keys and remote apps). Secrets "
     "are refused; is_secret only "
     "labels a value and does not hide it, so never store passwords, tokens or keys. "
     "Requires project. Returns variable rows."
@@ -163,8 +164,8 @@ VARIABLES_DESCRIPTION = (
 METHODS_DESCRIPTION = (
     "Documented reusable procedures of a project (deploy, test, a code convention), with "
     "ordered steps. create, list (read), update (steps replaces the whole list; undo with "
-    "manage_history), delete (queues a request the user approves in manage_review; refused "
-    "for HTTP app keys and remote apps). A one-off choice is log_work kind=decision; a "
+    "manage_history), delete (undo restores it; with approvals on it waits for the user; "
+    "refused for HTTP app keys and remote apps). A one-off choice is log_work kind=decision; a "
     "lesson is kind=learning. Requires project. Returns method rows."
 )
 

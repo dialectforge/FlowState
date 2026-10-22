@@ -25,6 +25,7 @@ from mcp.types import Tool, TextContent
 from . import tools
 from . import agent_guide as guide
 from . import activity
+from . import approvals
 from . import claims
 from . import cleanup
 from . import conflicts
@@ -259,6 +260,10 @@ async def _call_internal(name: str, arguments: dict, shown: str = "") -> types.C
             if result is _PAUSED:
                 out = _error("paused_by_user", PAUSED.format(app=app))
                 return out
+            if isinstance(result, dict) and "_ask_user" in result:   # user-only (approvals.py)
+                from .popup import ask_user
+                result = await ask_user(result, session_obj, client)
+                deadline = time.monotonic() + call_timeout()
         except asyncio.TimeoutError:
             receipts.timed_out(conn_key, change, shown or name)
             out = _error("flowstate_timeout", f"FlowState took longer than {call_timeout():g}s. "
@@ -502,7 +507,8 @@ def _start_here(args: dict, client: str, meta: Optional[dict] = None) -> str:
     db_path, tracker = backend.db_path, backend.tracker
     res = resolve_project(db_path, args.get("project"), args.get("folder"))
     if "project" not in res:
-        return candidates_text(res)
+        gone = _safe_call(_deleted_projects, db_path)
+        return candidates_text(res) + (f"\n{gone}" if gone else "")
     project = res["project"]
     if meta is not None:
         meta["project_id"] = project["id"]
@@ -526,6 +532,14 @@ def _start_here(args: dict, client: str, meta: Optional[dict] = None) -> str:
         log.warning("could not record start_here time: %s", e)
     warning = "\n".join(w for w in (backend.health, _relay_warning()) if w)
     return f"{warning}\n\n{text}" if warning else text
+
+
+def _deleted_projects(db_path) -> Optional[str]:
+    conn = deletes.connect(db_path)
+    try:
+        return deletes.recent_line(conn, None)
+    finally:
+        conn.close()
 
 
 def _relay_warning() -> Optional[str]:
@@ -734,6 +748,12 @@ def _review_mode(args: dict, client: str) -> Any:
     if args.get("action") == "set":
         who, _scopes = _caller()
         try:
+            if approvals.is_on(backend.db_path, pid):   # turning review off waits for the user
+                item = review_mode.queue_if_off(backend.db_path, args.get("mode"), args.get("kinds"),
+                                                pid, args.get("user_request") or "", client,
+                                                bool(args.get("clear")))
+                if item:
+                    return _user_only({"setting_requested": item}, item, client)
             return review_mode.set_mode(backend.db_path, args.get("mode"), args.get("kinds"), pid,
                                         args.get("user_request") or "", client, who,
                                         clear=bool(args.get("clear")))
@@ -1003,9 +1023,21 @@ def _delete_request(pid: int, name: str, args: dict, client: str) -> Any:
     else:
         return {"error": "bad_action", "message": "action must be project, component or record."}
     try:
-        return deletes.request(backend.db_path, pid, rtype, rid, client)
-    except deletes.DeleteError as e:
+        if not approvals.is_on(backend.db_path, pid):   # the default: at once, undoable
+            return deletes.delete_now(backend.db_path, pid, rtype, rid, client)
+        out = deletes.request(backend.db_path, pid, rtype, rid, client, {"user_only": True})
+    except (deletes.DeleteError, safety.SafetyError) as e:
         return e.payload
+    return _user_only(out, out["delete_requested"], client)
+
+
+def _user_only(out: dict, item_id: int, client: str) -> dict:
+    """A queued user-only item's answer: popup next (in _call_internal), else one line."""
+    ask = approvals.ask_payload(backend.db_path, item_id, client)
+    out.pop("note", None)
+    out["status"] = "waiting for the user"
+    out["_ask_user"] = ask
+    return out
 
 
 def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
@@ -1019,8 +1051,12 @@ def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
     done: dict = {}
     try:
         item = review.get_item(backend.db_path, int(args["item_id"]))
-        own = review.own_item_refusal(item, identity.current(), user_request, backend.db_path)
-        if own:   # (identity.current() is None on the review page and the command line)
+        agent = identity.current() is not None   # None: command line, review page, popup, phone
+        locked = approvals.user_only(item) and item["status"] == "pending"
+        if locked and agent and name == "review_approve":   # only the user's own click or key
+            return _user_only({"item_id": item["id"], "kind": item["kind"]}, item["id"], client)
+        own = review.own_item_refusal(item, identity.current(), user_request)
+        if own:
             return own
         if name == "review_approve":
             if item and item["kind"] == "delete":   # checked before anything is claimed
@@ -1031,6 +1067,9 @@ def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
         if name == "review_reject":
             out = review.reject(backend.db_path, int(args["item_id"]), args.get("reason") or "",
                                 user_request, client)
+            if locked:
+                _safe_call(approvals.log_decision, backend.db_path, item,
+                           "agent" if agent else approvals.path_of(client), client, "rejected")
             if out.get("kind") == "conflict":   # the user says the two decisions fit together
                 out.update(conflicts.dismiss(backend.db_path, int(args["item_id"]), client))
             return out
@@ -1071,12 +1110,19 @@ def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
             done.update(deletes.execute(backend.db_path, item, client, args.get("confirm_name")))
             return deletes.TYPES[done["deleted"]["record_type"]][0], done["deleted"]["id"]
 
+        def apply_setting(item: dict, _edits: dict):
+            return review_mode.apply_queued(backend.db_path, item, client)
+
         edits = {k: args.get(k) for k in ("summary", "details", "priority", "category", "component")}
         if safety.needs_copy(item):   # a verified copy first, or no change at all
             done["safety_copy"] = safety.copy_before(backend.db_path).name
         out = review.approve(backend.db_path, int(args["item_id"]), user_request, client, apply, edits,
                              others={"cleanup": apply_cleanup, "edit": apply_edit,
-                                     "delete": apply_delete, "conflict": apply_conflict})
+                                     "delete": apply_delete, "conflict": apply_conflict,
+                                     "setting": apply_setting})
+        if locked:
+            _safe_call(approvals.log_decision, backend.db_path, item, approvals.path_of(client),
+                       client, "approved")
         return {**out, **done}
     except (review.ReviewError, deletes.DeleteError, safety.SafetyError) as e:
         return e.payload

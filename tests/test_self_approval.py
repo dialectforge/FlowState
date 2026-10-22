@@ -1,7 +1,7 @@
-"""2.4.0: an agent can't approve or reject its own review items, enforced in code. With
-review mode on, the app (on the same machine) that queued an item can't decide it through
-MCP at all; the user does (`flowstate approve`, the review page; test_user_approval.py).
-With review off, only with the user's own words (not one word, not the item's own text)."""
+"""2.4.0: an agent can't approve or reject its own review items on reflex, enforced in code:
+the app (on the same machine) that queued an item decides it only with the user's own words
+(not one word, not the item's own text). With approvals on, an agent's delete and turning
+review off are decided only by the user's own click or key (test_approvals.py)."""
 
 import asyncio
 import json
@@ -60,13 +60,13 @@ def test_agent_cannot_reject_its_own_item_either(backend):
     assert _j(r)["error"] == "own_item" and _status(S, item) == "pending"
 
 
-def test_own_item_with_review_on_is_refused_even_with_the_users_words(backend):
+def test_own_item_with_the_users_words_is_approved_as_before(backend):
     S = backend
     item = _suggest(S)
     r = call(S, "manage_review", {"action": "approve", "project": "Alpha", "item_id": item,
                                   "user_request": "User: yes, approve the trunk-based one"})
-    assert _j(r)["error"] == "own_item" and "flowstate approve" in _j(r)["message"]
-    assert _status(S, item) == "pending"
+    assert not r.isError, r.content[0].text
+    assert _status(S, item) == "approved"
 
 
 def test_another_app_relaying_the_user_is_unchanged(backend):
