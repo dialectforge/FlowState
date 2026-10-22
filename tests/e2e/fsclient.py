@@ -103,11 +103,14 @@ class StdioClient:
     """One app connection = one server process (that's how stdio MCP works)."""
 
     def __init__(self, env: dict, app: str, version: str = "1.0", log_path: Path = None, args=(),
-                 elicit=None):
+                 elicit=None, think: float = 1.2):
         """`elicit(params) -> result dict` makes this app declare form elicitation and answer
-        FlowState's popups (an MCP server-to-client request), like Claude Code or Cursor."""
+        FlowState's popups (an MCP server-to-client request), like Claude Code or Cursor.
+        Each answer comes `think` seconds after the box, like a person (FlowState treats an
+        answer within popup.HUMAN_SECONDS as a box no person saw); think=0 answers at once."""
         self.app = app
         self.elicit = elicit
+        self.think = think
         self.popups = []
         self._ids = itertools.count(1)
         self._pending = {}
@@ -139,6 +142,7 @@ class StdioClient:
     def _answer(self, msg):
         if msg["method"] == "elicitation/create" and self.elicit:
             self.popups.append(msg["params"])
+            time.sleep(self.think)
             result = self.elicit(msg["params"])
             if result is None:                       # never answers (the user walked away)
                 return
@@ -194,15 +198,19 @@ class StdioClient:
 class HttpClient:
     """One MCP session on the streamable-HTTP transport."""
 
-    def __init__(self, url: str, token: str, app: str, version: str = "1.0", headers=None):
+    def __init__(self, url: str, token: str, app: str, version: str = "1.0", headers=None,
+                 capabilities=None):
+        """`capabilities` (e.g. {"elicitation": {}}) is what this app declares; requests the
+        server sends it on a response stream are kept in `server_requests` (never answered)."""
         import httpx
         self.app, self.url = app, url
+        self.server_requests = []
         self._ids = itertools.count(1)
         self._h = {"Authorization": f"Bearer {token}", "Accept": "application/json, text/event-stream",
                    "Content-Type": "application/json", **(headers or {})}
         self._c = httpx.Client(timeout=60)
         self.init = self.request("initialize", {
-            "protocolVersion": "2025-06-18", "capabilities": {},
+            "protocolVersion": "2025-06-18", "capabilities": capabilities or {},
             "clientInfo": {"name": app, "version": version}})
         self.notify("notifications/initialized", {})
 
@@ -229,7 +237,9 @@ class HttpClient:
             for line in body.splitlines():
                 if line.startswith("data:"):
                     m = json.loads(line[5:].strip())
-                    if m.get("id") == i:
+                    if "method" in m and "id" in m:
+                        self.server_requests.append(m)
+                    elif m.get("id") == i:
                         msg = m
         else:
             msg = json.loads(body)

@@ -11,8 +11,11 @@ project ("Lakeside Bakery ordering app") the way AI apps do, only through MCP to
   and "since your last visit", undo, deletes / backups / safety copies / health check, run
   ledger, upgrade from v2.3.0, bad input, concurrency and the real-data guard, tool
   descriptions, approvals on: the popup, the phone page and the terminal, only the user turns a
-  guess into user_stated, and what's waiting without a terminal: the chat walk, the local
-  review link and the phone list), each pass/fail with evidence;
+  guess into user_stated, and what's waiting without a terminal: the chat walk, an app that
+  answers boxes at once, a relay connection calling itself Cursor (no boxes, nothing logged),
+  the local review link, and the bookmarkable phone link through `/review/start`; the relay
+  listener is `relay_listener.py`, FlowState's app built as the relay agent builds it, on
+  loopback), each pass/fail with evidence;
 - every tool and every action it offers is called at least once (the report says how many).
 
 ```bash

@@ -1835,7 +1835,7 @@ def s15_without_terminal(W):
     # ---- the brief links the local page; it answers on 127.0.0.1 only
     b = brief_text(cc1.call("start_here", project=Q))
     line = next((ln for ln in b.splitlines() if ln.startswith("Review queue:")), "")
-    m = re.search(r"on this computer at (http://127\.0\.0\.1:(\d+)/)", line)
+    m = re.search(r"on the computer where FlowState runs at (http://127\.0\.0\.1:(\d+)/)", line)
     R.check(15, "the brief's waiting line has the local link and the chat walk, and no phone link without relay",
             m and 'manage_review action="walk"' in line and "flowstatemcp.com" not in line, line)
     R.word(f"Brief line: {line}")
@@ -1881,6 +1881,7 @@ def s15_without_terminal(W):
     R.check(15, "an app without the boxes (grok): the plain list and the local link; nothing decided",
             r.get("waiting") == 3 and len(r.get("items", [])) == 3 and r.get("review_page") == link
             and "walked" not in r and "phone" not in r
+            and r.get("note") == "No boxes were shown here; nothing was decided."
             and W.count("review_items", f"status = 'pending' AND id IN ({','.join(map(str, ids[:3]))})") == 3, r)
     R.word(f"Walk, no boxes: {r.get('how_to_decide')}")
     answers, shown = [{"action": "accept", "content": {"approve": True}},
@@ -1906,7 +1907,23 @@ def s15_without_terminal(W):
     R.check(15, "each answer is logged (approval_log, path chat)",
             [(x["item_id"], x["path"], x["decision"]) for x in logged]
             == [(ids[0], "chat", "approved"), (ids[1], "chat", "rejected"), (ids[2], "chat", "declined")], logged)
+    R.check(15, "the walk's note gives the counts and says only those answers were logged",
+            r.get("note") == "In the boxes the user approved 1, rejected 1 and skipped 1; only those "
+                             "answers were logged.", r.get("note"))
     wc.close()
+    # ---- an app that "answers" a box at once (no person saw it): stop, log nothing, plain list
+    rows = W.count("approval_log")
+    fast = StdioClient(W.env, "claude-code", log_path=W.logs / "walk-fast.log", think=0,
+                       elicit=lambda p: {"action": "decline"})
+    W.started.append(fast.proc)
+    r = Agent("cc-fast", fast).call("manage_review", action="walk", project=Q)
+    R.check(15, "a box answered faster than a person could: the walk stops, nothing logged, honest plain list",
+            len(fast.popups) == 1 and "walked" not in r and r.get("items")
+            and r.get("note") == "No boxes were shown here; nothing was decided."
+            and "faster than a person" in r.get("how_to_decide", "") and W.count("approval_log") == rows
+            and W.count("review_items", "id = ? AND status = 'pending'", (ids[2],)) == 1, r)
+    R.word(f"Walk, too fast: {r.get('how_to_decide')}")
+    fast.close()
 
     # ---- relay enrolled: the phone link in the brief and the walk; the phone list works
     relay = Path(W.env["FLOWSTATE_RELAY_DIR"])
@@ -1923,14 +1940,17 @@ def s15_without_terminal(W):
         sk.bind(("127.0.0.1", 0))
         hport = sk.getsockname()[1]
     plog = open(W.logs / "s15-phone-http.log", "ab")
-    srv = subprocess.Popen([PY, "-m", "flowstate", "--transport", "http", "--host", "127.0.0.1", "--port", str(hport)],
-                           env=penv, cwd=str(REPO), stdin=subprocess.DEVNULL, stdout=plog, stderr=plog)
+    # FlowState's HTTP app as the relay agent builds it (relay=True), on loopback, sandbox token
+    srv = subprocess.Popen([PY, str(Path(__file__).resolve().parent / "relay_listener.py"), str(hport)],
+                           env=dict(penv, FS_E2E_TOKEN=W.shared_token), cwd=str(REPO),
+                           stdin=subprocess.DEVNULL, stdout=plog, stderr=plog)
     W.started.append(srv)
     try:
         b = brief_text(phone.call("start_here", project=Q))
         line = next((ln for ln in b.splitlines() if ln.startswith("Review queue:")), "")
-        pm = re.search(r"on their phone: (https://flowstatemcp\.com/review/e2e-bakery\?n=([A-Za-z0-9_-]{43}))", line)
-        R.check(15, "relay enrolled: the brief also has the phone link to the whole list", pm and link in line, line)
+        pm = re.search(r"on their phone: (https://flowstatemcp\.com/review/e2e-bakery)(?![?\w-])", line)
+        R.check(15, "relay enrolled: the brief also has the bookmarkable phone link (no code in the chat)",
+                pm and link in line and "?n=" not in line, line)
         R.word(f"Brief line, relay: {line}")
         r = phone.call("manage_review", action="walk", project=Q)
         R.check(15, "relay enrolled: the walk's plain answer has the phone link too",
@@ -1938,8 +1958,30 @@ def s15_without_terminal(W):
         wait_port("127.0.0.1", hport, 40)
         base = f"http://127.0.0.1:{hport}"
         hdr = {"content-type": "application/json", "origin": base, "sec-fetch-site": "same-origin"}
-        nonce = pm.group(2) if pm else "x" * 43
+        # the live bug: a relay connection calling itself "Cursor" that declares elicitation
+        rows = W.count("approval_log")
+        rc = HttpClient(f"{base}/mcp", W.shared_token, "Cursor", capabilities={"elicitation": {}})
+        try:
+            r = rc.call("manage_review", action="walk", project=Q)
+        finally:
+            rc.close()
+        R.check(15, "through the relay, an app calling itself Cursor (elicitation declared): no boxes sent, "
+                    "nothing logged, the honest plain list with the links",
+                rc.server_requests == [] and "walked" not in r and r.get("items")
+                and r.get("note") == "No boxes were shown here; nothing was decided."
+                and "relay" in r.get("how_to_decide", "") and r.get("phone") == (pm.group(1) if pm else "?")
+                and W.count("approval_log") == rows, (rc.server_requests, r))
+        R.word(f"Walk through the relay: {r.get('how_to_decide')}")
         with httpx.Client(timeout=30) as hc:
+            # the bookmark link: the site (signed-in owner) sends the browser to /review/start
+            st = hc.get(f"{base}/review/start", params={"handle": "evil"}, headers={"X-Forwarded-Host": "evil.example"},
+                        follow_redirects=False)
+            sm = re.fullmatch(r"https://flowstatemcp\.com/review/e2e-bakery\?n=([A-Za-z0-9_-]{43})",
+                              st.headers.get("location", ""))
+            R.check(15, "/review/start: 303 back to the site with a fresh one-use code and this device's handle",
+                    st.status_code == 303 and sm and st.headers.get("cache-control") == "no-store"
+                    and st.headers.get("referrer-policy") == "no-referrer", (st.status_code, dict(st.headers)))
+            nonce = sm.group(1) if sm else "x" * 43
             shell = hc.get(f"{base}/review")
             R.check(15, "the phone page: strict CSP, no framing, no caching, no data before the grant",
                     shell.status_code == 200 and "frame-ancestors 'none'" in shell.headers.get("content-security-policy", "")
@@ -1981,9 +2023,13 @@ def s15_without_terminal(W):
         code, out = W.cli("approvals", "phone", "off")
         b = brief_text(phone.call("start_here", project=Q))
         r = phone.call("manage_review", action="walk", project=Q)
-        R.check(15, "`flowstate approvals phone off`: no phone link in the brief or the walk, the local link stays",
+        with httpx.Client(timeout=30) as hc:
+            off = hc.get(f"{base}/review/start", follow_redirects=False)
+        R.check(15, "`flowstate approvals phone off`: no phone link in the brief or the walk, the local link stays, "
+                    "and /review/start only says phone review is off",
                 code == 0 and "flowstatemcp.com" not in b and link in b and "phone" not in r
-                and r.get("review_page") == link, (out, r))
+                and r.get("review_page") == link and off.status_code == 200
+                and "Phone review is off" in off.text and "location" not in off.headers, (out, r, off.status_code))
         W.cli("approvals", "phone", "on")
     finally:
         pa.close()
