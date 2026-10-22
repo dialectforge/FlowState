@@ -57,7 +57,7 @@ server = Server("flowstate", version="2.4.0", instructions=guide.INSTRUCTIONS)
 
 
 from .tooldefs import ALL_TOOLS  # noqa: E402 - the public tools (surface.py maps their calls)
-from . import surface, tool_labels, waiting  # noqa: E402
+from . import __version__, surface, tool_labels, updates, waiting  # noqa: E402
 from .routing import route_tool  # noqa: E402
 
 
@@ -540,7 +540,7 @@ def _start_here(args: dict, client: str, meta: Optional[dict] = None) -> str:
         links.mark_looked(db_path, project["id"], client)
     except Exception as e:  # noqa: BLE001
         log.warning("could not record start_here time: %s", e)
-    warning = "\n".join(w for w in (backend.health, _relay_warning()) if w)
+    warning = "\n".join(w for w in (backend.health, _relay_warning(), updates.brief_lines(__version__)) if w)
     return f"{warning}\n\n{text}" if warning else text
 
 

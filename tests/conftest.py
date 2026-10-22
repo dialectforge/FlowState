@@ -48,6 +48,7 @@ _SESSION_ENV = {
     "FLOWSTATE_TOKEN_STORE_FILE": SESSION / "config" / "http-token",
     "FLOWSTATE_GUARD_DIRS": os.pathsep.join(LIVE_DIRS), "FLOWSTATE_GUARD_LOG": GUARD_LOG,
     "FLOWSTATE_REVIEW_PORT": "0",   # the in-process review page (waiting.py): any free port
+    "FLOWSTATE_UPDATE_CHECK": "0",  # the daily update check (updates.py): never asks GitHub
     "GIT_AUTHOR_NAME": "FlowState Tests", "GIT_AUTHOR_EMAIL": "tests@example.invalid",
     "GIT_COMMITTER_NAME": "FlowState Tests", "GIT_COMMITTER_EMAIL": "tests@example.invalid",
 }

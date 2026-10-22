@@ -52,6 +52,7 @@ def sandbox_env(root: Path, extra: dict = None) -> dict:
         "FLOWSTATE_TOKEN_STORE_FILE": str(root / "config" / "http-token"),
         "FLOWSTATE_WORKSPACE": "e2e-box",
         "FLOWSTATE_REVIEW_PORT": "0",               # the review page (waiting.py): never 8770 here
+        "FLOWSTATE_UPDATE_CHECK": "0",              # the daily update check: never asks GitHub
         "FLOWSTATE_GUARD_DIRS": os.pathsep.join(real_dirs()),
         "FLOWSTATE_GUARD_LOG": str(guard_log(root)),
         "PYTHONPATH": os.pathsep.join([str(GUARD_SITE), str(REPO / "mcp-server")]),

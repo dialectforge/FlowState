@@ -8,6 +8,7 @@
     flowstate import-md      --project P FILE            (to the review queue)
     flowstate import-memory  --project P FILE [--source Claude|ChatGPT] [--kind learning]
     flowstate git-capture    enable --project P --repo PATH | disable --project P | status | run [--project P]
+    flowstate update         check [on|off|now]   (the daily update check: updates.py)
 """
 
 from pathlib import Path
@@ -180,8 +181,17 @@ def cmd_git_capture(a) -> int:
     return 0
 
 
+def cmd_update(a) -> int:
+    from . import updates
+    if a.action == "check":
+        return updates.cli_check(a.sub, say)
+    say("Installing a new version: " + updates.MANUAL_STEPS + ". Then quit and reopen your AI apps. "
+        "`flowstate update check` shows whether a newer release is out.")
+    return 1
+
+
 COMMANDS = ("cleanup", "apps", "meaning", "review-page", "export-md", "import-md", "import-memory",
-            "git-capture")
+            "git-capture", "update")
 
 
 def register(sub) -> None:
@@ -239,3 +249,8 @@ def register(sub) -> None:
     p.add_argument("--repo")
     p.add_argument("--db")
     p.set_defaults(fn=cmd_git_capture)
+
+    p = sub.add_parser("update", help="the daily update check: flowstate update check [on|off|now]")
+    p.add_argument("action", nargs="?", choices=["check"])
+    p.add_argument("sub", nargs="?", choices=["on", "off", "now"])
+    p.set_defaults(fn=cmd_update)

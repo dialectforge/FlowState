@@ -2,8 +2,8 @@
 
 Any Python process that has this folder on PYTHONPATH and FLOWSTATE_GUARD_DIRS set refuses
 to open, create, rename, delete or connect to anything inside those folders (the user's
-real FlowState data, config and token locations), and refuses to run the macOS Keychain
-tool. Each refusal raises PermissionError and is appended to FLOWSTATE_GUARD_LOG, so a
+real FlowState data, config and token locations), refuses to run the macOS Keychain
+tool, and refuses to look up api.github.com (the update check's host). Each refusal raises PermissionError and is appended to FLOWSTATE_GUARD_LOG, so a
 refusal that the code under test swallows still fails the run. Standard library only.
 """
 import os
@@ -13,6 +13,7 @@ import threading
 _DIRS = tuple(os.path.realpath(d) for d in os.environ.get("FLOWSTATE_GUARD_DIRS", "").split(os.pathsep) if d)
 _LOG = os.environ.get("FLOWSTATE_GUARD_LOG")
 _busy = threading.local()
+_NO_NET_HOSTS = ("api.github.com",)   # the update check's host (updates.py)
 
 _PATH_EVENTS = {"open": 1, "os.mkdir": 1, "os.remove": 1, "os.rmdir": 1, "os.rename": 2,
                 "os.replace": 2, "os.symlink": 2, "os.link": 2, "os.truncate": 1, "os.chmod": 1,
@@ -48,6 +49,8 @@ def _refuse(event, what):
 def _hook(event, args):
     if getattr(_busy, "on", False):
         return
+    if event == "socket.getaddrinfo" and str(args[0]).lower().rstrip(".") in _NO_NET_HOSTS:
+        _refuse(event, f"network lookup of {args[0]} (tests never call GitHub)")
     n = _PATH_EVENTS.get(event)
     if n is None and event != "subprocess.Popen":
         return
