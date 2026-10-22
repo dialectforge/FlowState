@@ -6,11 +6,12 @@ project ("Lakeside Bakery ordering app") the way AI apps do, only through MCP to
 - claude-code in two windows (two stdio server processes), cursor (stdio), grok (streamable
   HTTP with its own app key), plus a slow-timeout window, two HTTP claude-code sessions and
   a v2.3.0 server for the upgrade check;
-- 12 scenarios (fresh install, a normal day with claims, conflicting decisions, review mode,
-  self-approval and the user-only `flowstate approve` step, receipts and timed-out writes,
-  two windows and "since your last visit", undo, backups / safety copies / health check, run
+- 13 scenarios (fresh install, a normal day with claims, conflicting decisions, review mode,
+  self-approval and the `flowstate approve` step, receipts and timed-out writes, two windows
+  and "since your last visit", undo, deletes / backups / safety copies / health check, run
   ledger, upgrade from v2.3.0, bad input, concurrency and the real-data guard, tool
-  descriptions), each pass/fail with evidence;
+  descriptions, and approvals on: the popup, the phone page and the terminal), each pass/fail
+  with evidence;
 - every tool and every action it offers is called at least once (the report says how many).
 
 ```bash
@@ -25,7 +26,10 @@ folder, deleted at the end unless `--keep`. Every server process loads
 `tests/guard_site/sitecustomize.py`, which refuses (and records in `guard.log`) any touch of
 the real FlowState folders; scenario 11 fails if anything was refused. `flowstate approve` /
 `reject` run either in a new session with no terminal (to prove a piped "y" is refused) or
-in a pseudo-terminal of their own, never on the terminal you run this from. The HTTP token is generated per run and never printed. The upgrade step uses
+in a pseudo-terminal of their own, never on the terminal you run this from. Scenario 13's
+phone check uses a fake relay enrollment and a key pair made in memory for the run; the server
+processes get its public key (and a 4-second popup limit) only through `FS_TEST_PATCH`, which
+`tests/guard_site` applies; FlowState itself has no such switch. The HTTP token is generated per run and never printed. The upgrade step uses
 `git worktree add /tmp/fs-230 v2.3.0` and removes it again. Only servers the script started
 are stopped, by their own process. The report's last line checks that the real FlowState
 folders were not touched.

@@ -75,3 +75,35 @@ def _hook(event, args):
 
 if _DIRS:
     sys.addaudithook(_hook)
+
+
+# ---------------------------------------------------------------- test-only module settings
+# FS_TEST_PATCH (JSON {"module": {"NAME": value}}), set only by the e2e harness: once that
+# module is imported in a server it starts, set those names (e.g. approvals.FSA_PUBLIC_KEYS
+# to a throwaway test key, approvals.POPUP_SECONDS to a few seconds). FlowState itself has no
+# such switch; this file is loaded only from tests/guard_site.
+_PATCH = os.environ.get("FS_TEST_PATCH")
+if _PATCH:
+    import importlib.abc
+    import json as _json
+
+    _WANT = _json.loads(_PATCH)
+
+    class _Patcher(importlib.abc.MetaPathFinder):
+        def find_spec(self, name, path=None, target=None):
+            if name not in _WANT:
+                return None
+            from importlib.machinery import PathFinder
+            spec = PathFinder.find_spec(name, path)
+            if spec is None or spec.loader is None:
+                return spec
+            run = spec.loader.exec_module
+
+            def exec_module(module, _run=run, _vals=_WANT[name]):
+                _run(module)
+                for k, v in _vals.items():
+                    setattr(module, k, v)
+            spec.loader.exec_module = exec_module
+            return spec
+
+    sys.meta_path.insert(0, _Patcher())

@@ -4,7 +4,7 @@
 Starts the real FlowState server from this checkout (one stdio process per app window, plus
 the streamable-HTTP transport) on a brand-new throwaway folder under /tmp, and drives it only
 with real MCP tool calls, the way Claude Code, Cursor and Grok do. Four agents work at once:
-claude-code (two windows), cursor (stdio) and grok (HTTP, its own app key). Twelve scenarios,
+claude-code (two windows), cursor (stdio) and grok (HTTP, its own app key). Thirteen scenarios,
 each pass/fail with evidence; every tool and every action it offers is called at least once.
 
     .venv/bin/python tests/e2e/run_e2e.py              # everything (about 4 minutes)
@@ -36,6 +36,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # tests/: fsa_test_keys
 from fsclient import (PY, REPO, HttpClient, StdioClient, ToolError, guard_log, real_dirs,  # noqa: E402
                       sandbox_env, wait_port)
 
@@ -81,7 +82,8 @@ class Report:
         6: "Two windows of one app; 'since your last visit'", 7: "Undo",
         8: "Backups, safety copies, health check", 9: "Run ledger keeps no text",
         10: "Upgrade from a v2.3.0 database", 11: "Bad input, edge cases, real-data guard",
-        12: "Tool descriptions: size and truthfulness"}
+        12: "Tool descriptions: size and truthfulness",
+        13: "Approvals on: popup, phone link, terminal"}
 
     def __init__(self):
         self.checks = {n: [] for n in self.TITLES}
@@ -209,10 +211,10 @@ class World:
     def http_agent(self, label, app, token):
         return Agent(label, HttpClient(self.url, token, app))
 
-    def cli_no_terminal(self, *args, stdin=None):
+    def cli_no_terminal(self, *args, stdin=None, env=None):
         """`flowstate ...` the way an agent's shell runs it: a new session with no controlling
         terminal (so it can never prompt on the terminal this script runs in), stdin piped."""
-        r = subprocess.run([PY, "-m", "flowstate", *args], env=self.env, cwd=str(REPO), input=stdin,
+        r = subprocess.run([PY, "-m", "flowstate", *args], env=env or self.env, cwd=str(REPO), input=stdin,
                            capture_output=True, text=True, timeout=120, start_new_session=True)
         return r.returncode, r.stdout + r.stderr
 
@@ -670,7 +672,8 @@ def s4_review(W):
     for who, kind, s in ((cursor, "todo", "Add gift card support"),
                          (cursor, "decision", "Use Postmark for transactional email"),
                          (grok, "learning", "Square sandbox rejects test cards after 5pm UTC"),
-                         (cc2, "change", "Moved menu images to the CDN")):
+                         (cc2, "change", "Moved menu images to the CDN"),
+                         (grok, "problem", "Oven timer drifts two minutes a day")):
         r = who.call("log_work", project=P, kind=kind, summary=s)
         items[s] = r.get("queued_for_review")
         R.check(4, f"{who.label}'s {kind} is queued, not saved, and still has a receipt",
@@ -678,51 +681,37 @@ def s4_review(W):
     b = cc1.call("start_here", project=P)
     R.check(4, "brief shows review mode 'everything' and the waiting count",
             "everything" in b and "Review queue:" in b, [l for l in b.splitlines() if "Review" in l])
-    gift, postmark, square, cdn = items.values()
-    # self-approval attempts
+    gift, postmark, square, cdn, oven = items.values()
+    # self-approval: the app that queued it needs the user's own words (as before task 25)
     r = cursor.call("manage_review", action="approve", project=P, item_id=gift)
     R.check(4, "own item, no user_request: refused", r.get("error") == "user_request_required", r)
     r = cursor.call("manage_review", action="approve", project=P, item_id=gift, user_request="Add gift card support")
     R.check(4, "own item, user_request = the item's own text: refused (own_item)", r.get("error") == "own_item", r)
     r = cursor.call("manage_review", action="approve", project=P, item_id=gift, user_request="approve")
-    R.check(4, "own item, one-word 'approve': refused", r.get("error") == "own_item", r)
-    r = cursor.call("manage_review", action="approve", project=P, item_id=postmark,
-                    user_request="The user said this looks good, approve it")
-    fake_ok = r.get("error") == "own_item"
-    R.check(4, "own item, invented 'user words' that aren't the user's: refused", fake_ok, r)
-    if not fake_ok:
-        R.finding("medium", "An agent can approve its own review item by inventing 'user words'",
-                  "Review mode everything; cursor logs a decision (queued). Cursor calls manage_review "
-                  "approve item_id=<it> user_request=\"The user said this looks good, approve it\" -> approved, "
-                  "the record is saved as user-approved. Any 2+ words not copied from the item pass "
-                  "(review.own_item_refusal); the other Claude Code window approved its own queued change with just "
-                  "'ok fine'. Documented as a limit in task 23, but a user reading "
-                  "'approved' would wrongly trust the user saw it.")
-    r = cc2.call("manage_review", action="approve", project=P, item_id=cdn, user_request="ok fine")
-    R.check(4, "own item, 'ok fine' (two generic words): refused", r.get("error") == "own_item", r)
+    msg = r.get("message", "")
+    R.check(4, "own item, one-word 'approve': refused, in one short line",
+            r.get("error") == "own_item" and "\n" not in msg and len(msg) < 200, r)
     r = cursor.call("manage_review", action="approve", project=P, item_id=postmark,
                     user_request="User: yes, approve the Postmark decision, I checked it")
-    msg = r.get("message", "")
-    R.check(4, "own item, the user's real-looking words: still refused, one line naming the user's step",
-            r.get("error") == "own_item" and f"flowstate approve {postmark}" in msg and "\n" not in msg
-            and len(msg) < 200, r)
-    # the user-only step: flowstate review / approve / reject in the user's own terminal
+    R.check(4, "own suggestion with the user's words: approved again, as before task 25 (approvals are off)",
+            not err(r) and r.get("approved") == postmark and "receipt" in r, r)
+    # the user's own terminal step works for any item
     code, out = W.cli_no_terminal("review", "--project", P)
     R.check(4, "`flowstate review` lists what waits (read-only, no terminal needed)",
-            code == 0 and f"#{postmark}" in out and "Postmark" in out, short(out, 200))
-    code, out = W.cli_no_terminal("approve", str(postmark), stdin="y\n")
-    still = W.q("SELECT status FROM review_items WHERE id = ?", (postmark,))[0]["status"]
+            code == 0 and f"#{square}" in out and "Square" in out, short(out, 200))
+    code, out = W.cli_no_terminal("approve", str(square), stdin="y\n")
+    still = W.q("SELECT status FROM review_items WHERE id = ?", (square,))[0]["status"]
     R.check(4, "`flowstate approve` with a piped 'y' and no terminal: refused, nothing changes",
             code == 2 and "Refused" in out and still == "pending", f"exit {code}: {short(out, 160)}; {still}")
     code, out = W.cli_no_terminal("reject", str(cdn), stdin="yes\n")
     R.check(4, "`flowstate reject` with a piped 'yes' and no terminal: refused too",
             code == 2 and W.q("SELECT status FROM review_items WHERE id = ?", (cdn,))[0]["status"] == "pending",
             f"exit {code}: {short(out, 160)}")
-    code, out = W.cli_in_terminal(["approve", str(postmark)], ["y"])
-    row = W.q("SELECT status, decided_by, result_id FROM review_items WHERE id = ?", (postmark,))[0]
-    R.check(4, "`flowstate approve` in a terminal, the user types y: approved and the decision saved",
+    code, out = W.cli_in_terminal(["approve", str(square)], ["y"])
+    row = W.q("SELECT status, decided_by, result_id FROM review_items WHERE id = ?", (square,))[0]
+    R.check(4, "`flowstate approve` in a terminal, the user types y: approved and the record saved",
             code == 0 and row["status"] == "approved" and row["decided_by"] == "command-line"
-            and row["result_id"] and "Postmark" in out, f"exit {code}: {short(out, 200)}; {row}")
+            and row["result_id"] and "Square" in out, f"exit {code}: {short(out, 200)}; {row}")
     code, out = W.cli_in_terminal(["reject", str(cdn), "--reason", "Images stay on the server"], ["n"])
     R.check(4, "answering n in the terminal changes nothing",
             code == 1 and W.q("SELECT status FROM review_items WHERE id = ?", (cdn,))[0]["status"] == "pending",
@@ -735,8 +724,8 @@ def s4_review(W):
                  user_request="Yes approve the gift card todo, we need it before Christmas", priority="urgent")
     R.check(4, "another agent relays the user's approval: the todo is created",
             not err(r) and "receipt" in r and any(s.startswith("todo") for s in r["receipt"]["saved"]), r)
-    r = cc1.call("manage_review", action="reject", project=P, item_id=square,
-                 user_request="No, that Square note is wrong, reject it", reason="Not reproducible")
+    r = cc1.call("manage_review", action="reject", project=P, item_id=oven,
+                 user_request="No, that oven note is wrong, reject it", reason="Not reproducible")
     R.check(4, "reject with the user's words and reason", not err(r) and "receipt" in r, r)
     r = cursor.call("manage_review", action="list", project=P, status="all", limit=100)
     R.check(4, "manage_review list status=all shows approved and rejected items",
@@ -1016,47 +1005,63 @@ def s8_backups(W):
             not [n for n in before if "pre-" not in n], before)
     sched = list((W.root / "home").rglob("*.plist")) + list((W.root / "home").rglob("*flowstate*.timer"))
     R.check(8, "no scheduler entry was created", not sched, sched)
-    # delete requests -> approval -> pre-bulk copy
+    # approvals off (the default): an agent's delete goes through at once, after a pre-bulk copy
     r = cursor.call("manage_memory", action="delete", project=P, record_type="learning", record_id=W.learning)
-    item = r.get("delete_requested") or r.get("queued_for_review") or r.get("item_id")
-    R.check(8, "manage_memory delete only queues a request (with a receipt)", bool(item) and "receipt" in r
-            and W.count("learnings", "id=?", (W.learning,)) == 1, r)
-    r = cc1.call("manage_review", action="approve", project=P, item_id=item,
-                 user_request="yes delete that timestamptz learning, it's outdated")
     copies = sorted(p.name for p in W.backups.glob("*pre-bulk*"))
-    R.check(8, "approving the delete took a pre-bulk safety copy first",
-            not err(r) and copies and W.count("learnings", "id=?", (W.learning,)) == 0, f"{short(r, 150)} copies={copies}")
+    note = r.get("note", "")
+    R.check(8, "manage_memory delete goes through at once, never asks, receipt and one-line undo",
+            not err(r) and "receipt" in r and r.get("deleted", {}).get("id") == W.learning
+            and "next" not in r and W.count("learnings", "id=?", (W.learning,)) == 0
+            and "\n" not in note and 'Undo: manage_history(action="undo"' in note, r)
+    R.word(f"Delete answer (approvals off): {note}")
+    R.check(8, "the delete took a pre-bulk safety copy first", bool(copies) and r.get("safety_copy") in copies,
+            f"{copies} {r.get('safety_copy')}")
     if copies:
         cp = W.backups / copies[-1]
         R.check(8, "the safety copy still holds the deleted record",
                 W.count("learnings", "id=?", (W.learning,), db=cp) == 1, cp.name)
+    b = cc2.call("start_here", project=P)
+    line = next((l for l in brief_text(b).splitlines() if l.startswith("Deleted in the last 7 days")), "")
+    R.check(8, "the brief says what was deleted and how to undo it, in one line",
+            f"learning #{W.learning}" in line and "manage_history(action=\"undo\"" in line, line or short(b, 200))
     r = cc1.call("manage_history", action="undo", project=P, record_type="learning", record_id=W.learning)
-    R.check(8, "undo of the approved delete restores it", W.count("learnings", "id=?", (W.learning,)) == 1, r)
+    R.check(8, "undo of the delete restores it (any app may undo a delete)",
+            not err(r) and W.count("learnings", "id=?", (W.learning,)) == 1, r)
+    b = cc2.call("start_here", project=P)
+    R.check(8, "after undo the brief no longer lists it", f"learning #{W.learning}" not in b, "")
     r = grok.call("manage_variables", action="delete", project=P, variable_id=W.var)
-    R.check(8, "an HTTP app key can't ask for a delete (as AGENTS.md says)", r.get("error") == "not_allowed_remotely", r)
-    for kind, rid in (("variable", W.var), ("method", W.method)):
-        r = cursor.call(f"manage_{kind}s", action="delete", project=P, **{f"{kind}_id": rid})
-        R.check(8, f"manage_{kind}s delete queues a request", not err(r) and "receipt" in r, r)
+    R.check(8, "an HTTP app key can't delete (as AGENTS.md says)", r.get("error") == "not_allowed_remotely", r)
+    for kind, rid, rtype in (("variables", W.var, "variable"), ("methods", W.method, "method")):
+        r = cursor.call(f"manage_{kind}", action="delete", project=P, **{f"{rtype}_id": rid})
+        u = cursor.call("manage_history", action="undo", project=P, record_type=rtype, record_id=rid)
+        R.check(8, f"manage_{kind} delete goes through, and undo brings it back",
+                not err(r) and "receipt" in r and not err(u) and W.count(f"project_{kind}", "id=?", (rid,)) == 1, (r, u))
     r = cc1.call("manage_files", action="remove", project=P, attachment_id=W.attach)
-    R.check(8, "manage_files remove queues a request", not err(r) and "receipt" in r, r)
+    u = cc1.call("manage_history", action="undo", project=P, record_type="attachment", record_id=W.attach)
+    R.check(8, "manage_files remove goes through, and undo brings it back",
+            not err(r) and "receipt" in r and not err(u) and W.count("attachments", "id=?", (W.attach,)) == 1, (r, u))
     r = cc1.call("manage_projects", action="add_component", project=P, name="legacy-kiosk", description="Old in-store kiosk")
     kid = r.get("id")
     r = cc1.call("manage_projects", action="update_component", project=P, component_id=kid, status="deprecated")
     R.check(8, "manage_projects update_component (deprecate)", not err(r) and "receipt" in r, r)
     r = cc1.call("manage_projects", action="delete_component", project=P, component_id=kid)
-    R.check(8, "manage_projects delete_component queues a request", not err(r) and "receipt" in r, r)
-    # project delete needs the exact name
+    R.check(8, "manage_projects delete_component goes through at once",
+            not err(r) and "receipt" in r and W.count("components", "id=?", (kid,)) == 0, r)
+    # a whole project: gone at once, listed with its undo, and back exactly
     tmp = cc1.call("manage_projects", action="create", name="Scratch Pad", description="throwaway")
     cc1.call("manage_projects", action="update", project="Scratch Pad", status="paused", description="still throwaway")
+    cc1.call("log_work", project="Scratch Pad", kind="todo", summary="Throw this away")
     r = cc1.call("manage_projects", action="delete", project="Scratch Pad")
-    pitem = r.get("delete_requested") or r.get("queued_for_review") or r.get("item_id")
-    R.check(8, "manage_projects delete queues a request with child counts", bool(pitem), r)
-    r = cursor.call("manage_review", action="approve", project="Scratch Pad", item_id=pitem,
-                    user_request="delete the Scratch Pad project please")
-    R.check(8, "project delete without confirm_name is refused", err(r), r)
-    r = cursor.call("manage_review", action="approve", project="Scratch Pad", item_id=pitem, confirm_name="Scratch Pad",
-                    user_request="delete the Scratch Pad project please")
-    R.check(8, "project delete with confirm_name goes through", not err(r), r)
+    R.check(8, "manage_projects delete goes through at once with its child counts",
+            not err(r) and r.get("deleted", {}).get("with", {}).get("todos") == 1
+            and W.count("projects", "name='Scratch Pad'") == 0, r)
+    lst = cc1.call("start_here")
+    R.check(8, "start_here's project list shows the deleted project and its undo",
+            'project #' in lst and '"Scratch Pad"' in lst and 'project="Scratch Pad"' in lst, short(lst, 300))
+    r = cc1.call("manage_history", action="undo", project="Scratch Pad", record_type="project",
+                 record_id=(tmp.get("id") or tmp.get("project_id") or (tmp.get("project") or {}).get("id")))
+    R.check(8, "undo brings the whole project back with its todo",
+            not err(r) and W.count("todos", "title='Throw this away'") == 1, r)
     # clean-up suggestions -> approve one (safety copy reused within a minute)
     for i in range(2):
         cursor.call("log_work", project=P, kind="learning", summary="Sourdough starter needs feeding twice a day")
@@ -1195,7 +1200,9 @@ def s10_upgrade(W, skip):
             all(x in b for x in ("kitchen copy", "ticket layout", "Print order tickets", "Printer jams", "Stripe Checkout")),
             short(b, 300))
     tables = {r["name"] for r in W.q("SELECT name FROM sqlite_master WHERE type='table'", db=db)}
-    R.check(10, "migrations added run_writes, run_views, session_runs", {"run_writes", "run_views", "session_runs"} <= tables, "")
+    R.check(10, "migrations added run_writes, run_views, session_runs and the approval tables",
+            {"run_writes", "run_views", "session_runs", "approval_settings", "approval_requests",
+             "approval_grants", "approval_log"} <= tables, "")
     pre = list((root / "backups").glob("*pre-migration*"))
     R.check(10, "a pre-migration safety copy was taken", bool(pre), [p.name for p in pre])
     r = a.call("search", query="Zitronen", project="Old Bakery")
@@ -1213,10 +1220,9 @@ def s10_upgrade(W, skip):
     item = next((i["id"] for i in rv.get("items", []) if "v2.3.0" in i["summary"]), None)
     r = a.call("manage_review", action="approve", project="Old Bakery", item_id=item, user_request="fine")
     R.check(10, "a v2.3.0 review item keeps its app: the same app can't approve it with one word", r.get("error") == "own_item", r)
-    r = a.call("manage_review", action="approve", project="Old Bakery", item_id=item,
-               user_request="Yes, keep the change v2.3.0 queued about order tickets")
-    R.check(10, "the same app can't approve it with the user's words either (review is on)",
-            r.get("error") == "own_item" and "flowstate approve" in r.get("message", ""), r)
+    code, out = W.cli_no_terminal("approvals", "--db", str(db), env=env24)
+    R.check(10, "an upgraded install has approvals off (FlowState asks the user nothing)",
+            code == 0 and "Approvals are off" in out, short(out, 200))
     code, out = W.cli_in_terminal(["approve", str(item)], ["y"], env=env24)
     st = W.q("SELECT status FROM review_items WHERE id = ?", (item,), db=db)[0]["status"]
     R.check(10, "the user approves the v2.3.0 review item with `flowstate approve` after the upgrade",
@@ -1465,6 +1471,248 @@ def s12_descriptions(W):
     R.check(12, "every successful write answered with a receipt (data-git excepted, by design)", not miss, miss[:6])
 
 
+def s13_approvals(W):
+    """Approvals on (`flowstate approvals on`): an agent's delete and turning review off wait for
+    the user's own click or key. Popup in an allowlisted app that declared elicitation; else the
+    phone link (relay enrolled, test keys pinned through tests/guard_site); else the terminal."""
+    import httpx
+    from fsa_test_keys import claims, make_key, sign
+    print("\n== S13 approvals", flush=True)
+    cc1, cursor = W.agents["cc1"], W.agents["cursor"]
+    todo = lambda s: cc1.call("log_work", project=P, kind="todo", summary=s).get("record", {}).get("id")  # noqa: E731
+    pending = lambda i: W.q("SELECT status FROM review_items WHERE id = ?", (i,))[0]["status"] == "pending"  # noqa: E731
+    code, out = W.cli_no_terminal("approvals", "on")
+    R.check(13, "`flowstate approvals on` needs no confirmation", code == 0 and "now on" in out, short(out, 160))
+
+    # ---- the popup (claude-code declares elicitation; FlowState waits 4 s here, 120 s for real)
+    answers = {"next": None}
+    extra = []
+
+    def elicit(params):
+        a = answers["next"]
+        return a(params) if callable(a) else a
+    env = dict(W.env, FS_TEST_PATCH=json.dumps({"flowstate.approvals": {"POPUP_SECONDS": 4}}))
+    pc = StdioClient(env, "claude-code", log_path=W.logs / "popup.log", elicit=elicit)
+    W.started.append(pc.proc)
+    pop = Agent("cc-popup", pc)
+    tid = todo("Print the old spring flyer")
+    answers["next"] = {"action": "accept", "content": {"approve": True}}
+    r = pop.call("manage_memory", action="delete", project=P, record_type="todo", record_id=tid)
+    shown = pc.popups[-1] if pc.popups else {}
+    R.check(13, "popup: the user ticks approve, the delete is done",
+            r.get("approved_in") == "popup" and "receipt" in r and W.count("todos", "id=?", (tid,)) == 0, r)
+    R.check(13, "popup: one required boolean `approve`, plain message",
+            shown.get("requestedSchema", {}).get("required") == ["approve"]
+            and shown["requestedSchema"]["properties"]["approve"]["type"] == "boolean"
+            and shown.get("message") == f'claude-code wants to delete the todo "Print the old spring flyer" from {P}.',
+            shown)
+    R.word(f"Popup message: {shown.get('message')}")
+    for label, ans, why in (("declines", {"action": "decline"}, "the user said no"),
+                            ("cancels", {"action": "cancel"}, "the user closed it"),
+                            ("submits without ticking (required field)", {"action": "accept", "content": {"note": "hm"}},
+                             "the user said no"),
+                            ("ticks false", {"action": "accept", "content": {"approve": False}}, "the user said no")):
+        tid = todo(f"Flyer to keep ({label})")
+        answers["next"] = ans
+        r = pop.call("manage_memory", action="delete", project=P, record_type="todo", record_id=tid)
+        item = r.get("delete_requested")
+        R.check(13, f"popup: the user {label}: not approved, nothing deleted, item stays queued",
+                item and pending(item) and W.count("todos", "id=?", (tid,)) == 1
+                and r.get("next") == f"Not approved in the popup ({why}); nothing changed and item #{item} stays queued.", r)
+    R.word(f"Popup declined answer: {r.get('next')}")
+    tid = todo("Flyer for the timeout")
+
+    def walk_away(_params):
+        t0 = time.monotonic()
+        extra.append((cursor.call("log_work", project=P, kind="change", summary="Saved while a popup waited"),
+                      time.monotonic() - t0))
+        return None                                   # never answers
+    answers["next"] = walk_away
+    t0 = time.monotonic()
+    r = pop.call("manage_memory", action="delete", project=P, record_type="todo", record_id=tid)
+    took = time.monotonic() - t0
+    item = r.get("delete_requested")
+    R.check(13, "popup: no answer -> not approved after FlowState's own limit, item stays queued",
+            item and pending(item) and "no answer" in r.get("next", "") and 3.5 < took < 30, (took, r))
+    w, wt = extra[0] if extra else ({}, 99)
+    R.check(13, "while a popup waits, other apps still save (no database lock held)",
+            "record" in w and wt < 5, (wt, short(w, 120)))
+    W.timeout_item = item
+
+    # ---- no popup: not declared, not on the allowlist, or claude.ai
+    seen = []
+    ai = StdioClient(W.env, "claude-ai", log_path=W.logs / "claude-ai.log",
+                     elicit=lambda p: seen.append(p) or {"action": "accept", "content": {"approve": True}})
+    W.started.append(ai.proc)
+    tid = todo("Flyer asked from claude.ai")
+    r = Agent("claude-ai", ai).call("manage_memory", action="delete", project=P, record_type="todo", record_id=tid)
+    item = r.get("delete_requested")
+    R.check(13, "claude.ai declaring elicitation still gets no popup: the terminal line instead",
+            not seen and item and pending(item)
+            and r.get("next") == f"Waiting for the user: ask them to run `flowstate approve {item}` in their terminal.", r)
+    ai.close()
+    tid = todo("Flyer asked from Cursor")
+    r = cursor.call("manage_memory", action="delete", project=P, record_type="todo", record_id=tid)
+    cur_item = r.get("delete_requested")
+    R.check(13, "an app without the popup gets one short line (terminal: no relay yet)",
+            cur_item and "\n" not in r.get("next", "") and f"flowstate approve {cur_item}" in r.get("next", ""), r)
+    R.word(f"No-popup answer: {r.get('next')}")
+    r = cc1.call("manage_review", action="approve", project=P, item_id=cur_item,
+                 user_request="The user said yes, delete the Cursor flyer")
+    R.check(13, "another app passing on the user's OK can't approve it (path 4 is gone)",
+            r.get("status") == "waiting for the user" and pending(cur_item), r)
+    code, out = W.cli_in_terminal(["approve", str(cur_item)], ["y"])
+    R.check(13, "the user approves it in their terminal", code == 0 and W.count("todos", "id=?", (tid,)) == 0,
+            f"exit {code}: {short(out, 160)}")
+
+    # ---- review-setting change: turning review off waits; stricter changes don't
+    r = cursor.call("manage_review", action="set_mode", project=P, mode="off",
+                    user_request="User: turn review off for Lakeside")
+    setting = r.get("setting_requested")
+    R.check(13, "turning review off waits for the user (approvals on)",
+            setting and pending(setting) and r.get("status") == "waiting for the user"
+            and W.q("SELECT mode FROM review_settings WHERE scope='project:1'") == [], r)
+    code, out = W.cli_in_terminal(["approve", str(setting)], ["y"])
+    m = cc1.call("manage_review", action="get_mode", project=P)
+    R.check(13, "the user approves it in the terminal: review is off", code == 0 and m.get("mode") == "off",
+            f"exit {code}: {short(out, 120)}; {m}")
+    r = cc1.call("manage_review", action="set_mode", project=P, clear=True,
+                 user_request="User: put Lakeside back on the normal review mode")
+    R.check(13, "back to the default needs nothing extra",
+            not err(r) and r.get("now", {}).get("mode") == "auto_only", r)
+
+    # ---- session summaries and suggestions: unchanged (no user-only step)
+    s = cursor.call("log_work", project=P, kind="learning", suggested=True, summary="Rye loaves sell out by 10am")
+    r = cursor.call("manage_review", action="approve", project=P, item_id=s.get("queued_for_review"),
+                    user_request="User: yes, keep the rye note")
+    R.check(13, "a suggestion is decided as before (the user's words), not user-only", r.get("approved"), r)
+    ss = W.q("SELECT id FROM review_items WHERE kind='session_summary' AND status='pending' ORDER BY id LIMIT 1")
+    if ss:
+        r = cc1.call("manage_review", action="approve", project=P, item_id=ss[0]["id"],
+                     user_request="User: approve that session summary")
+        R.check(13, "a session summary is decided as before, not user-only", r.get("approved") == ss[0]["id"], r)
+
+    # ---- the phone link: relay enrolled (fake), test keys pinned in these processes only
+    relay = Path(W.env["FLOWSTATE_RELAY_DIR"])
+    relay.mkdir(parents=True, exist_ok=True)
+    (relay / "relay.json").write_text(json.dumps({"version": 1, "handle": "e2e-bakery",
+                                                  "hostname": "e2e-bakery.fsmcp.com", "enabled": True}))
+    (relay / "device-token").write_text("fake-device-token-for-e2e\n")
+    tid = todo("Flyer while the keys are placeholders")
+    r = cursor.call("manage_memory", action="delete", project=P, record_type="todo", record_id=tid)
+    R.check(13, "relay enrolled but the release keys are still placeholders: no link, the terminal line",
+            "flowstatemcp.com" not in r.get("next", "") and "flowstate approve" in r.get("next", ""), r)
+    placeholder_item = r.get("delete_requested")
+    key, jwk = make_key()
+    penv = dict(W.env, FS_TEST_PATCH=json.dumps({"flowstate.approvals": {"FSA_PUBLIC_KEYS": {"fsa-1": jwk, "fsa-2": None}}}))
+    ph = StdioClient(penv, "Cursor", log_path=W.logs / "phone-agent.log")
+    W.started.append(ph.proc)
+    phone = Agent("phone-agent", ph)
+    with socket.socket() as sk:
+        sk.bind(("127.0.0.1", 0))
+        port = sk.getsockname()[1]
+    plog = open(W.logs / "phone-http.log", "ab")
+    srv = subprocess.Popen([PY, "-m", "flowstate", "--transport", "http", "--host", "127.0.0.1", "--port", str(port)],
+                           env=penv, cwd=str(REPO), stdin=subprocess.DEVNULL, stdout=plog, stderr=plog)
+    W.started.append(srv)
+    try:
+        wait_port("127.0.0.1", port, 40)
+        base = f"http://127.0.0.1:{port}"
+        hdr = {"content-type": "application/json", "origin": base, "sec-fetch-site": "same-origin"}
+        hc = httpx.Client(timeout=30)
+
+        def ask(summary):
+            t = todo(summary)
+            r = phone.call("manage_memory", action="delete", project=P, record_type="todo", record_id=t)
+            m = re.search(r"https://flowstatemcp\.com/approve/([a-z0-9-]+)/(\d+)\?n=([A-Za-z0-9_-]+)", r.get("next", ""))
+            return t, r, m
+
+        t1, r, m = ask("Flyer to approve on the phone")
+        R.check(13, "relay enrolled: the answer is one line with the flowstatemcp.com link",
+                m and m.group(1) == "e2e-bakery" and int(m.group(2)) == r.get("delete_requested")
+                and r["next"].startswith("Waiting for the user: ask them to approve it on their phone: "), r)
+        R.word(f"Phone answer: {r.get('next')}")
+        item, nonce = int(m.group(2)), m.group(3)
+        page = hc.get(f"{base}/approve/{item}")
+        csp = page.headers.get("content-security-policy", "")
+        R.check(13, "the page: strict CSP, no framing, no caching, no data before the grant",
+                page.status_code == 200 and "frame-ancestors 'none'" in csp and "unsafe-inline" not in csp
+                and page.headers.get("x-frame-options") == "DENY" and page.headers.get("cache-control") == "no-store"
+                and "Flyer" not in page.text, dict(page.headers))
+        opn = lambda g, i=item: hc.post(f"{base}/approve/{i}/open", headers=hdr, content=json.dumps({"grant": g}))  # noqa: E731
+        r0 = hc.post(f"http://127.0.0.1:{W.port}/approve/{item}/open", headers={**hdr, "origin": f"http://127.0.0.1:{W.port}"},
+                     content=json.dumps({"grant": sign(key, claims(item, nonce, handle="e2e-bakery"))}))
+        R.check(13, "a FlowState with the placeholder keys refuses every grant",
+                r0.status_code == 403 and r0.json().get("error") == "phone_approvals_unavailable", r0.text)
+        t = int(time.time())
+        for label, grant, code_ in (
+                ("expired", sign(key, claims(item, nonce, handle="e2e-bakery", iat=t - 400, exp=t - 100)), "grant_expired"),
+                ("for another handle", sign(key, claims(item, nonce, handle="someone-else")), "wrong_device"),
+                ("for another item", sign(key, claims(placeholder_item, nonce, handle="e2e-bakery")), "wrong_item"),
+                ("with a bad signature", sign(make_key()[0], claims(item, nonce, handle="e2e-bakery")), "bad_signature")):
+            rr = opn(grant)
+            R.check(13, f"a grant {label} is refused", rr.status_code == 403 and rr.json().get("error") == code_, rr.text)
+        grant = sign(key, claims(item, nonce, handle="e2e-bakery"))
+        o = opn(grant)
+        body = o.json() if o.status_code == 200 else {}
+        ck = o.headers.get("set-cookie", "").lower()
+        R.check(13, "a good grant opens the page with the item from the local database",
+                o.status_code == 200 and body.get("item", {}).get("question", "").endswith(
+                    '"Flyer to approve on the phone" from Lakeside Bakery.')
+                and "httponly" in ck and "samesite=strict" in ck and "secure" in ck, o.text)
+        R.check(13, "the same grant can't open the page twice", opn(grant).json().get("error") == "grant_used", "")
+        dec = lambda d, cookie=True: hc.post(  # noqa: E731
+            f"{base}/approve/{item}/decide", content=json.dumps({"grant": grant, "token": body.get("token"), "decision": d}),
+            headers={**hdr, **({"cookie": f"fsa_page={body.get('token')}"} if cookie else {})})
+        rr = dec("approve", cookie=False)
+        R.check(13, "Approve without the page's cookie (CSRF) is refused", rr.status_code == 403 and pending(item), rr.text)
+        rr = dec("approve")
+        R.check(13, "the tap on Approve deletes it", rr.status_code == 200 and W.count("todos", "id=?", (t1,)) == 0, rr.text)
+        R.check(13, "the grant can't be used again", dec("approve").status_code == 403, "")
+        t2, r, m = ask("Flyer to reject on the phone")
+        item2, nonce2 = int(m.group(2)), m.group(3)
+        g2 = sign(key, claims(item2, nonce2, handle="e2e-bakery"))
+        o2 = opn(g2, item2).json()
+        rr = hc.post(f"{base}/approve/{item2}/decide", headers={**hdr, "cookie": f"fsa_page={o2.get('token')}"},
+                     content=json.dumps({"grant": g2, "token": o2.get("token"), "decision": "reject"}))
+        used = W.q("SELECT used_at FROM approval_requests WHERE item_id = ?", (item2,))
+        R.check(13, "the tap on Reject keeps it and uses up the link's code",
+                rr.status_code == 200 and W.count("todos", "id=?", (t2,)) == 1
+                and W.q("SELECT status FROM review_items WHERE id = ?", (item2,))[0]["status"] == "rejected"
+                and used and used[0]["used_at"], rr.text)
+        hc.close()
+    finally:
+        srv.terminate()                               # our own PID only
+        try:
+            srv.wait(15)
+        except subprocess.TimeoutExpired:
+            srv.kill()
+        ph.close()
+        pc.close()
+        plog.close()
+        for f in ("relay.json", "device-token"):
+            (relay / f).unlink(missing_ok=True)
+    h = cc1.call("manage_history", action="list", project=P, limit=50)
+    paths = {(a["path"], a["decision"]) for a in h.get("approvals", [])}
+    R.check(13, "manage_history lists every user-only decision with its path and app",
+            {("popup", "approved"), ("popup", "declined"), ("popup", "cancelled"), ("popup", "timed_out"),
+             ("terminal", "approved"), ("phone", "approved"), ("phone", "rejected")} <= paths, sorted(paths))
+    R.check(13, "the unanswered popup request is still waiting, never approved on its own",
+            pending(W.timeout_item), W.timeout_item)
+
+    # ---- turning approvals off is the user's own step
+    code, out = W.cli_no_terminal("approvals", "off", stdin="y\n")
+    R.check(13, "`flowstate approvals off` with a piped y and no terminal: refused", code == 2 and "Refused" in out,
+            short(out, 160))
+    code, out = W.cli_in_terminal(["approvals", "off"], ["y"])
+    R.check(13, "`flowstate approvals off` in the user's terminal: off again", code == 0 and "now off" in out,
+            short(out, 160))
+    tid = todo("Flyer deleted after approvals are off")
+    r = cursor.call("manage_memory", action="delete", project=P, record_type="todo", record_id=tid)
+    R.check(13, "with approvals off again, a delete goes straight through",
+            r.get("deleted", {}).get("id") == tid and W.count("todos", "id=?", (tid,)) == 0, r)
+
+
 def deferred_window(W):
     """Same content after the 2-minute window does write (checked at the end of the run)."""
     t0, s = W.window_probe
@@ -1531,7 +1779,7 @@ def main():
     try:
         for step in (s1_fresh, s2_day, s3_conflicts, s4_review, s5_receipts, s6_windows, s7_undo,
                      s8_backups, s9_ledger, lambda w: s10_upgrade(w, args.skip_upgrade), s11_edges,
-                     deferred_window, s12_descriptions):
+                     s13_approvals, deferred_window, s12_descriptions):
             try:
                 step(W)
             except Exception as e:  # noqa: BLE001 - a crashed scenario is a failed check

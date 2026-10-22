@@ -91,8 +91,13 @@ def _parse_result(res: dict):
 class StdioClient:
     """One app connection = one server process (that's how stdio MCP works)."""
 
-    def __init__(self, env: dict, app: str, version: str = "1.0", log_path: Path = None, args=()):
+    def __init__(self, env: dict, app: str, version: str = "1.0", log_path: Path = None, args=(),
+                 elicit=None):
+        """`elicit(params) -> result dict` makes this app declare form elicitation and answer
+        FlowState's popups (an MCP server-to-client request), like Claude Code or Cursor."""
         self.app = app
+        self.elicit = elicit
+        self.popups = []
         self._ids = itertools.count(1)
         self._pending = {}
         self._lock = threading.Lock()
@@ -104,7 +109,8 @@ class StdioClient:
         self._reader = threading.Thread(target=self._read, daemon=True)
         self._reader.start()
         self.init = self.request("initialize", {
-            "protocolVersion": "2025-06-18", "capabilities": {},
+            "protocolVersion": "2025-06-18",
+            "capabilities": {"elicitation": {}} if elicit else {},
             "clientInfo": {"name": app, "version": version}})
         self.notify("notifications/initialized", {})
 
@@ -114,8 +120,21 @@ class StdioClient:
                 msg = json.loads(line)
             except ValueError:
                 continue
-            if "id" in msg and msg["id"] in self._pending:
+            if "method" in msg and "id" in msg:      # a request from the server (a popup)
+                threading.Thread(target=self._answer, args=(msg,), daemon=True).start()
+            elif "id" in msg and msg["id"] in self._pending:
                 self._pending[msg["id"]].put(msg)
+
+    def _answer(self, msg):
+        if msg["method"] == "elicitation/create" and self.elicit:
+            self.popups.append(msg["params"])
+            result = self.elicit(msg["params"])
+            if result is None:                       # never answers (the user walked away)
+                return
+            self._send({"jsonrpc": "2.0", "id": msg["id"], "result": result})
+        else:
+            self._send({"jsonrpc": "2.0", "id": msg["id"],
+                        "error": {"code": -32601, "message": "not supported"}})
 
     def _send(self, msg):
         data = (json.dumps(msg) + "\n").encode()
