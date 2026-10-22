@@ -17,6 +17,10 @@ def _run_git_command(args: list[str], cwd: Optional[Path] = None) -> tuple[bool,
             capture_output=True,
             text=True,
             timeout=60,
+            # Never hand git the server's stdin: in a stdio server that is the MCP pipe, and on
+            # Windows a child touching a pipe another thread is reading blocks until the next
+            # message arrives (every data-git call then timed out).
+            stdin=subprocess.DEVNULL,
             # never wait on a password prompt nobody can see: fail instead
             env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}
         )

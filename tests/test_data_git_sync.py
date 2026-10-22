@@ -71,3 +71,38 @@ def test_a_real_conflict_is_labelled_and_left_clean(data, tmp_path):
     assert r["success"] is False and r["conflict"] is True and r["pushed"] is False, r
     assert not (data / ".git" / "rebase-merge").exists() and not (data / ".git" / "rebase-apply").exists()
     assert (data / "projects" / "note.md").read_text() == "mine"
+
+
+CHILD = r'''
+import sys, threading, time
+from pathlib import Path
+from flowstate.tools import git_ops
+d = Path(sys.argv[1])
+git_ops.utils.data_dir = lambda: d
+# a stdio MCP server: another thread is always reading stdin (the MCP pipe)
+threading.Thread(target=sys.stdin.buffer.readline, daemon=True).start()
+time.sleep(0.3)
+t = time.monotonic()
+ok = git_ops.git_init().get("initialized") and git_ops.git_sync("from a server")["success"]
+print("ok" if ok else "failed", round(time.monotonic() - t, 1), flush=True)
+import os; os._exit(0)   # the reader thread still holds stdin
+'''
+
+
+def test_git_never_waits_on_the_servers_stdin(tmp_path):
+    """Windows: a child that inherits a pipe another thread is reading blocks until the next MCP
+    message arrives, so every data-git call in the stdio server timed out. git gets no stdin."""
+    import sys
+    from conftest import SERVER_DIR, server_env
+    d = tmp_path / "data"
+    d.mkdir()
+    p = subprocess.Popen([sys.executable, "-c", CHILD, str(d)], stdin=subprocess.PIPE,
+                         stdout=subprocess.PIPE, text=True, cwd=str(SERVER_DIR),
+                         env=server_env(tmp_path / "fs.db"))
+    try:
+        line = p.stdout.readline()     # stdin stays open (and unwritten) until it answers
+    finally:
+        p.stdin.close()
+        p.wait(30)
+    assert line.startswith("ok"), line
+    assert float(line.split()[1]) < 20, line

@@ -47,8 +47,10 @@ def check_repo_name(repo: str) -> str:
 
 def _run(cmd: list, cwd: Optional[Path] = None, input: Optional[str] = None,
          timeout: int = 120) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, cwd=str(cwd) if cwd else None, input=input, text=True,
-                          capture_output=True, timeout=timeout)
+    # no input: stdin is closed, never inherited (it may be a pipe; on Windows git then blocks)
+    extra = {"input": input} if input is not None else {"stdin": subprocess.DEVNULL}
+    return subprocess.run(cmd, cwd=str(cwd) if cwd else None, text=True,
+                          capture_output=True, timeout=timeout, **extra)
 
 
 # ---------------------------------------------------------------- visibility

@@ -53,7 +53,8 @@ def _git(repo: str, *args: str) -> str:
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_PAGER": "cat", "LC_ALL": "C"}
     try:
         p = subprocess.run([exe, "-C", repo, *args], capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=TIMEOUT, env=env)
+                           encoding="utf-8", errors="replace", timeout=TIMEOUT, env=env,
+                           stdin=subprocess.DEVNULL)   # not the MCP pipe (blocks on Windows)
     except subprocess.TimeoutExpired:
         raise CaptureError("git took too long")
     if p.returncode != 0:
