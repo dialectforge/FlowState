@@ -33,7 +33,9 @@ Whatever the approvals setting, the user can see and decide the whole review que
     were shown here; nothing was decided.", `waiting` (the total), `items` (one page: 20,
     oldest first: id, project, kind, one-line summary), `showing` (which part), `next_page`
     (`manage_review(action="walk", after=<last id>)`), `how_to_decide` and the links.
-    `manage_review(action="list")` pages the same way (`limit`, `after`, `next_page`). After a
+    `manage_review(action="list")` pages the same way (`limit`, `after`, `next_page`), also one
+    line per item (with its status when `status` isn't pending); `list` with `item_id=<id>`
+    gives one item with every field. After a
     real walk the note gives the counts: approved, rejected, skipped, and that only those
     answers were logged.
 - **Local link:** `http://127.0.0.1:<port>/`, the review page (`review_page.py`) started inside

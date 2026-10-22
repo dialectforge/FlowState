@@ -97,6 +97,8 @@ never guess or invent one. `manage_history(action="who", ...)` shows who did wha
   approve in the same breath as creating them. (An item your own app queued needs the user's
   own words, `own_item` otherwise; or they run `flowstate approve <id>` in their terminal.
   Don't run it for them.)
+- `manage_review(action="list")` gives one line per item (`next_page` for more);
+  `item_id=<id>` gives one item in full. Read it before approving with edits.
 - **When the user asks what's waiting for them**, call `manage_review(action="walk")`. In
   apps that show FlowState's Approve / Reject boxes, the user decides each item there
   themselves. Otherwise (other apps, the relay) the answer says no boxes were shown and

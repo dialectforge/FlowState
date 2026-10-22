@@ -343,8 +343,10 @@ don't show server instructions:
    repeat it: the next FlowState answer says whether it saved. The same write repeated within
    2 minutes returns the first receipt (`already_saved`) instead of a copy.
 6. Auto-captured session summaries, and anything logged with `suggested=true`, wait in the
-   review queue (`manage_review(action="list")`). Only call `manage_review` with
-   `action="approve"` / `"reject"` when the user explicitly asks in the chat, quoting their
+   review queue (`manage_review(action="list")`: one line per item, 20 at a time, `next_page`
+   for more; `item_id=<id>` gives one item in full, read it before approving with edits). Only
+   call `manage_review` with `action="approve"` / `"reject"` when the user explicitly asks in
+   the chat, quoting their
    words in `user_request`. An item your own app queued needs the user's own words (not one
    word, not the item's text), or the user decides it with `flowstate approve <id>` in their
    terminal. Don't run that for them: it asks for their `y` on the terminal and refuses piped

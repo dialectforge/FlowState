@@ -406,7 +406,7 @@ the venv active). Add `-h` to any command for its options.
 | `search` | Find records by words (and by meaning, if set up); `answer=true` answers a plain question from your records with their ids; no query lists the newest records (`since_hours`) |
 | `manage_todos` | list, next, update (done / cancelled), block / unblock; add for subtasks, blockers and due dates; claim / renew / release / handoff so several agents don't do the same todo |
 | `manage_problems` | list, tree, add_attempt, end_attempt, solve |
-| `manage_review` | The review queue and review mode: list, get_mode; walk (when you ask to see what's waiting: you decide each item in a box, or you get the links); approve, reject, set_mode only when you ask |
+| `manage_review` | The review queue and review mode: list (one line per item; `item_id` for one in full), get_mode; walk (when you ask to see what's waiting: you decide each item in a box, or you get the links); approve, reject, set_mode only when you ask |
 | `manage_handoffs` | Leave / list / pick up "where I was, next step" notes |
 | `manage_rules` | A project's hard rules |
 | `manage_links` | Link projects, shared components, records and URLs |

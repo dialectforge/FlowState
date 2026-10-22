@@ -158,6 +158,13 @@
 - **Paging.** `manage_review` `list` and `walk` show 20 at a time, oldest first, with the total,
   which part is shown and the call for the next part (new `after` parameter: the page after
   that item id).
+- **`manage_review` `list` is compact.** One line per item, like the walk's ("#id (project,
+  kind): summary", cut to fit; with `status` other than pending the line also says approved /
+  rejected / pending), plus the total, `showing` and `next_page`. A full page of 100 long items
+  stays well under 16,000 characters, so it fits in one reply (before, every item came with its
+  details and payload, and 100 of them didn't). `list` with `item_id=<id>` gives that one item
+  with every field, any status; agents that approve with edits read it first. The review page,
+  the phone list and `flowstate review` are unchanged.
 - **A link to the review page:** when something waits, the brief and the walk's answer include
   `http://127.0.0.1:<port>/`. FlowState starts the review page inside its own process the first
   time a link is needed (stdio or HTTP), one per computer and database (another FlowState
