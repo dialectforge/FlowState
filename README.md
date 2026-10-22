@@ -399,6 +399,7 @@ the venv active). Add `-h` to any command for its options.
 | `schedule-backups [--time HH:MM] [--offsite]` / `schedule-backups --remove` | Nightly backup on / off |
 | `offsite setup --repo OWNER/NAME` / `offsite status` / `offsite push --dry-run` / `offsite disable` | Private GitHub off-site copy |
 | `migrate [--dry-run]` | Apply new database migrations (backup first) |
+| `update check` / `update check on\|off\|now` | The daily update check: show the last result, turn it on or off, or check now |
 | `cleanup --project NAME [--queue]` | Clean-up suggestions (printed; `--queue` sends them to the review queue) |
 | `export-md --project NAME --out FILE` / `import-md --project NAME FILE` | Readable markdown copy; edits come back through the review queue |
 | `import-memory --project NAME FILE --source Claude` | A Claude / ChatGPT memory export into the review queue |
@@ -454,8 +455,10 @@ your machine. Get a code at [flowstatemcp.com/account](https://flowstatemcp.com/
 run `flowstate relay enroll --code <code>`. The relay is in a 10-spot beta. Step-by-step guide:
 [flowstatemcp.com/setup](https://flowstatemcp.com/setup).
 
-**Local FlowState stays free and MIT-licensed. It needs no account, and it makes no network
-calls.** The relay is off by default. Nothing in it runs until you enroll.
+**Local FlowState stays free and MIT-licensed. It needs no account.** Local FlowState makes one
+network call: once a day it asks GitHub whether there is a newer release. It sends nothing about
+you or your projects (only what any web request reveals: your IP address). Turn it off with
+`flowstate update check off`. The relay is off by default. Nothing in it runs until you enroll.
 
 ### How the relay works
 

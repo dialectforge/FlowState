@@ -56,6 +56,12 @@ TOML_CLIENTS = ("codex", "grok")
 ALL_CLIENTS = JSON_CLIENTS + TOML_CLIENTS
 
 
+UPDATE_CHECK_NOTE = (
+    "Local FlowState makes one network call: once a day it asks GitHub whether there is a newer "
+    "release. It sends nothing about you or your projects (only what any web request reveals: "
+    "your IP address). Turn it off with `flowstate update check off`.")
+
+
 def say(msg: str) -> None:
     print(msg, flush=True)
 
@@ -644,6 +650,7 @@ def main(argv=None) -> int:
         say(f"[verify] {'OK' if ok else 'FAILED'}: {detail}")
         failures += not ok
 
+    say("[updates] " + UPDATE_CHECK_NOTE)
     say("Done. Restart each app you registered (fully quit it, then reopen) so it loads FlowState."
         if not failures else "Finished with problems; see the lines marked refused/FAILED above.")
     return 1 if failures else 0

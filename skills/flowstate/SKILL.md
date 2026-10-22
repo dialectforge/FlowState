@@ -37,7 +37,8 @@ todos (priority critical / urgent / normal / low), problems, recent changes and 
 facts that need re-checking, and a "Linked projects" section. Lines starting with "CHANGED
 since you last looked" mean a shared component changed in another project: tell the user,
 and look at the update todo. `start_here(..., size="quick")` for a short check-in,
-`size="deep"` after a long break.
+`size="deep"` after a long break. A line on top saying a newer FlowState is out comes from the
+daily update check: tell the user once; never update FlowState unless they ask.
 
 When the user states a hard rule for a project ("never push to main"), add it:
 `manage_rules(action="add", project=..., rule="...")`. Remove one only when the user asks, quoting

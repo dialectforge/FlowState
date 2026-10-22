@@ -13,6 +13,8 @@ Repository: https://github.com/dialectforge/FlowState
 
 ## Using it
 
+- Local FlowState makes one network call: once a day it asks GitHub whether there is a newer release. It sends nothing about you or your projects (only what any web request reveals: your IP address). Turn it off with `flowstate update check off`. A newer release shows as one line on top of the brief; agents tell the user once and never update FlowState unless asked.
+
 - [AGENTS.md#how-agents-should-use-flowstate-once-its-connected](AGENTS.md#how-agents-should-use-flowstate-once-its-connected): the rules the server sends every client
 - [skills/flowstate/SKILL.md](skills/flowstate/SKILL.md): the Agent Skill (the FlowState routine for any AI)
 - [skills/flowstate/references/record-types.md](skills/flowstate/references/record-types.md): examples of each record type

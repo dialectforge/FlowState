@@ -2,8 +2,8 @@
 at https://<handle>.fsmcp.com without the relay being able to read the traffic.
 
 OFF by default. Nothing in here runs, imports `cryptography` or touches the network until
-the user runs `flowstate relay ...`. Local FlowState needs no account and makes no network
-calls.
+the user runs `flowstate relay ...`. Local FlowState needs no account; its only network call
+is the daily update check (updates.py, `flowstate update check off`).
 
     store.py   relay state on disk (owner-only files in the FlowState data folder)
     crypto.py  ECDSA P-256 keys, CSR, JWS signatures, certificate parsing (lazy `cryptography`)

@@ -1,5 +1,28 @@
 # Changelog
 
+## 2.4.1 - unreleased
+
+### Added
+- **A quiet daily update check.** Once a day, the first `start_here` starts one background
+  check that asks GitHub for the newest FlowState release (`GET
+  api.github.com/repos/dialectforge/FlowState/releases/latest`, 5 s timeout, no login, no
+  `Authorization` header, `User-Agent: FlowState-update-check` without a version). The answer
+  is saved in `update.json` in the FlowState data folder; the brief only reads that file, so it
+  never waits for the network. When a newer release is out, one line goes on top of the brief:
+  `FlowState 2.5.0 is out (this computer has 2.4.1). Tell the user once; ...`. Offline, a
+  `403` / `429` or an odd answer is stored as the last error and tried again after 6 hours.
+  Only exact `vX.Y.Z` tags of published, non-pre-release releases of this repository count.
+- `flowstate update check` (show the last result), `flowstate update check on|off|now`.
+
+### Changed
+- Local FlowState makes one network call: once a day it asks GitHub whether there is a newer
+  release. It sends nothing about you or your projects (only what any web request reveals:
+  your IP address). Turn it off with `flowstate update check off`, or with the environment
+  `FLOWSTATE_UPDATE_CHECK=0` (CI, air-gapped machines). Off means no request at all.
+  The README, AGENTS.md, llms.txt, the skill and setup's closing output say so.
+- Tests: the check is off in every test run and in the e2e harness, and the test guard refuses
+  any lookup of `api.github.com`.
+
 ## 2.4.0 - 2026-10-21
 
 ### In short
