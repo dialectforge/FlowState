@@ -45,12 +45,20 @@ Closed: the "user-gated hard delete" follow-on. Deletes ship as user-approved re
   with a window; an agent that starts a console of its own (hidden window) and types into it,
   as tests/conin_typist.py does, gets through, just as one that opens a pseudo-terminal does
   on macOS / Linux. Documented in cli_review.py; the popup and phone paths don't have it.
-- **Save latency on Windows (decision needed).** `tests/test_write_latency.py` fails on
-  Windows (example-host, 2026-10-21): median save 58 ms against the 40 ms bound, bookkeeping
-  8.9 ms against 6 ms; stable over 3 runs. v2.3.0 on the same machine and benchmark: 47.8 ms
-  (also over the bound), so 2.4 adds ~9 ms (+19%, as on macOS: +16%). Cause: about 6 SQLite
-  commits per write in the default rollback-journal mode, each paying Windows' slow
-  FlushFileBuffers (~6.5 ms; macOS fsync is cheap). Options: WAL + synchronous=NORMAL (check
-  data-git, which commits the .db file without its -wal), fewer commits per write (fold the
-  receipt / history / ledger rows into the record's transaction), or a per-OS bound. The
-  bounds were left as they are.
+
+## From one commit per save (task 29, branch `release/2.4-trust`)
+
+Closed: "Save latency on Windows" (task 28). A save now commits once (`saves.py`,
+`dbconn.py`); median save on the host PC 58.5 ms -> about 15 ms, the 40 ms bound unchanged.
+
+- **Reads still commit their bookkeeping one by one.** A read that names a project
+  (`start_here` most of all) writes the session touch, the "looked at" time, its run-ledger
+  row and its activity row, each with its own commit (about 4 disk flushes on Windows). Not
+  in task 29's scope (saves only). `saves.run` could wrap reads the same way; `start_here`'s
+  git capture (runs git) would have to stay outside it.
+
+Tradeoffs (decided, not debt): deletes, approvals (`review_approve`), data-git and undo
+still commit step by step. Deletes and approvals take a safety copy first and git is slow,
+and neither may hold the write lock; undo restores rows with foreign-key checks off and
+finds orphans itself, while a save's connection has them on. Session tracking that fails
+inside a save is still skipped without failing the write (its own rows are undone).

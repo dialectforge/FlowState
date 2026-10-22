@@ -443,7 +443,8 @@ The same guidance is available as the MCP prompt `flowstate-start`.
 - Never point tests or experiments at a real database or a real app config.
 - Server code: `mcp-server/flowstate/` (`server.py` tools and transports, `tooldefs.py` tool
   definitions, `surface.py` public and older tool names -> internal operations,
-  `agent_guide.py` the wording sent to apps, `brief.py`, `autosession.py`,
+  `agent_guide.py` the wording sent to apps, `saves.py` and `dbconn.py` (a write is one save:
+  one commit, or nothing), `brief.py`, `autosession.py`,
   `guard.py`, `review.py`, `review_mode.py`, `links.py`, `tasks.py`, `history.py`,
   `rules.py`, `handoffs.py`, `provenance.py`, `ask.py`, `meaning.py`, `cleanup.py`,
   `activity.py`, `review_page.py`, `markdown_io.py`, `memory_import.py`, `git_capture.py`, `deletes.py`,

@@ -2,7 +2,9 @@
 fast. On a temp database with ~2,000 records, saves through the real MCP call path stay
 well inside a generous bound (measured on a 2026 Mac: about 8.3 ms median in v2.3.0 and
 9.7 ms in 2.4.0; after the end-to-end fixes 10.3 ms against 8.9 ms for v2.3.0 on a slower
-day; the bound leaves room for slower CI machines)."""
+day; the bound leaves room for slower CI machines). On Windows (example-host, 2026-10-21) each
+commit waits for the disk: 58.5 ms with about six commits per save, about 15 ms once a save
+commits once (saves.py, dbconn.py)."""
 
 import asyncio
 import sqlite3

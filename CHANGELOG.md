@@ -73,6 +73,13 @@
   reading it, so `flowstate relay disable` could leave the status at "connected"; it now
   waits a moment and writes. Relay keys, certificates and the device token were written in
   text mode (every newline byte became CR LF); they are now written byte for byte.
+- **Saves now commit once.** A save wrote to the disk five or six times (the record, its
+  search entry, its history and receipt, the session, the activity log), and on Windows each
+  of those waits for the disk: a save took about 58 ms. Now everything one save writes goes
+  to the disk together, in one go, or not at all: if any part fails, nothing of that save is
+  kept and the answer says it failed. A save now takes about 15 ms on the same Windows PC.
+  Deletes, approvals, undo and data-git still save step by step (a safety copy first, git, or
+  undo's own checks). The database settings are unchanged.
 - **Wording.** To-do priorities are shown as critical / urgent / normal / low in every answer
   (high and medium are still accepted). An empty database says "no projects yet".
   `manage_history who` shows each row's session. The variables and methods tools say delete is
