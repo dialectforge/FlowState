@@ -223,6 +223,12 @@
   terminal)."; an app that came in through your tunnel names the tunnel page first. Apps on
   another computer are told "on the computer where FlowState runs (the FlowState review
   shortcut, or `flowstate review-page`), or on its tunnel review page if it has one".
+- **The review page's buttons work in browsers.** The page (`flowstate review-page` and the
+  127.0.0.1 link) sent `Referrer-Policy: no-referrer`, under which browsers send `Origin: null`
+  on the page's own form posts, and the page refuses that, so every button was refused as
+  cross-site (seen in Edge; the tests sent a proper Origin by hand). It now sends
+  `Referrer-Policy: same-origin`, which still sends no referrer to other sites. The phone
+  pages post with `fetch()` and were not affected.
 - Decisions in the chat walk, on the phone list and on the tunnel page go through the same
   user-only path as the popup and are all logged with how they were made (`chat` / `phone` /
   `tunnel page`).

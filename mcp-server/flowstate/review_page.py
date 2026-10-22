@@ -334,7 +334,10 @@ def create_app(page: Page):
 
     headers = {"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; "
                                           "form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
-               "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
+               # same-origin, not no-referrer: under no-referrer browsers send "Origin: null" on
+               # the page's own form posts (checked in Edge), which the Origin check refuses;
+               # same-origin still sends no referrer to any other site
+               "X-Content-Type-Options": "nosniff", "Referrer-Policy": "same-origin",
                "Cache-Control": "no-store", "X-Frame-Options": "DENY"}
     allowed_hosts = {f"{HOST}:{page.port}", f"localhost:{page.port}"}
 

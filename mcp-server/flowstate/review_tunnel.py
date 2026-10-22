@@ -25,7 +25,8 @@ kept here in memory as a hash with its CSRF token; it ends after IDLE_SECONDS wi
 MAX_SECONDS in all, on sign-out, and when FlowState restarts. Every POST needs the form's CSRF
 token and an Origin equal to the public URL's (a missing or "null" Origin is refused). Strict
 headers: CSP without inline script or style, frame-ancestors 'none', X-Frame-Options DENY,
-no-store, no referrer.
+no-store, and Referrer-Policy same-origin (no referrer to other sites; no-referrer would make
+browsers send "Origin: null" on these form posts).
 
 No agent token opens it: the owner token, per-client tokens, OAuth access tokens and LAN app
 keys are all ignored here (remote_auth.Gate checks bearer tokens on the MCP path only and sets
@@ -66,7 +67,10 @@ PUBLIC_URL: Optional[str] = None
 HEADERS = {
     "Content-Security-Policy": "default-src 'none'; style-src 'self'; img-src 'self'; "
                                "form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
-    "X-Frame-Options": "DENY", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+    # same-origin, not no-referrer: under no-referrer browsers send "Origin: null" on the page's
+    # own form posts (checked in Edge), which the same-origin check must refuse; this still
+    # sends no referrer to any other site
+    "X-Frame-Options": "DENY", "Cache-Control": "no-store", "Referrer-Policy": "same-origin",
     "X-Content-Type-Options": "nosniff",
 }
 
@@ -169,7 +173,7 @@ def _note(title: str, text: str, form: str = "") -> str:
     e = review_page._e
     return (f"<!doctype html><html lang='en'><head><meta charset='utf-8'>"
             f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
-            f"<meta name='referrer' content='no-referrer'><title>FlowState: {e(title)}</title>"
+            f"<title>FlowState: {e(title)}</title>"
             f"<link rel='stylesheet' href='{PATH}/page.css'></head><body><h1>{e(title)}</h1>"
             f"<p>{text}</p>{form}</body></html>")
 

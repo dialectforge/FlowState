@@ -193,7 +193,7 @@ any browser, your phone included:
   when FlowState restarts. Every button sends a CSRF token, and FlowState refuses a form whose
   `Origin` isn't your tunnel's own address (a missing or `null` Origin too). The page has the
   phone pages' strict headers (no scripts, no inline styles, no framing, no caching, no
-  referrer) and the review page's look, sized for a phone.
+  referrer sent to other sites) and the review page's look, sized for a phone.
 - **Why your AI apps' tokens don't open it:** the page is for you deciding, so only the
   passphrase opens it. The LAN token, per-app tokens (`remote add-client`), OAuth tokens
   (claude.ai, ChatGPT) and LAN app keys are all ignored there: a request carrying one is

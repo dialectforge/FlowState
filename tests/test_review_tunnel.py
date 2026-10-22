@@ -170,7 +170,9 @@ def test_page_headers_and_phone_css(tunnel):
         assert "default-src 'none'" in csp and "frame-ancestors 'none'" in csp
         assert "form-action 'self'" in csp and "unsafe-inline" not in csp and "script-src" not in csp
         assert r.headers["x-frame-options"] == "DENY" and r.headers["cache-control"] == "no-store"
-        assert r.headers["referrer-policy"] == "no-referrer"
+        # no referrer to other sites; not no-referrer, under which browsers send "Origin: null"
+        # on the page's own form posts (seen in Edge), which the same-origin check refuses
+        assert r.headers["referrer-policy"] == "same-origin" and "no-referrer" not in r.text
         assert "<style" not in r.text and "<script" not in r.text and " style=" not in r.text
         assert "width=device-width" in r.text and "/review/tunnel/page.css" in r.text
     css = c.get("/review/tunnel/page.css")

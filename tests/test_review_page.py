@@ -51,6 +51,9 @@ def test_needs_key_once_and_right_host(page):
     r = c.get("/")
     assert "default-src 'none'" in r.headers["content-security-policy"]
     assert r.headers["cache-control"] == "no-store" and "<script" not in r.text
+    # (task 38) not no-referrer: under it browsers send "Origin: null" on the page's own form
+    # posts (seen in Edge), and the Origin check below refuses that, so no button worked
+    assert r.headers["referrer-policy"] == "same-origin"
 
 
 def test_csrf_and_origin_required(page):
@@ -60,6 +63,8 @@ def test_csrf_and_origin_required(page):
     assert c.post("/approve", data={"item_id": item}).status_code == 403
     assert c.post("/approve", data={"item_id": item, "csrf": csrf},
                   headers={"origin": "http://evil.example"}).status_code == 403
+    assert c.post("/approve", data={"item_id": item, "csrf": csrf},
+                  headers={"origin": "null"}).status_code == 403          # an opaque origin
     assert _q(db, "SELECT status FROM review_items WHERE id = ?", item) == [("pending",)]
 
 
