@@ -63,6 +63,23 @@ Closed in task 31: "Docs say the phone keys are placeholders". CHANGELOG 2.4.0, 
 honest limits and docs/APPROVALS.md section 3 now say what `approvals.py` does: it pins
 `fsa-1` and `fsa-2`.
 
+## From plain clean-up questions (task 37, branch `dev/2.4-review-fixes`)
+
+Closed in task 37: on Oct 22, 2026 John approved 50 "Misfiled?" items he couldn't judge (27
+"unsure"); all were undone. A move is now only suggested when it is "likely" and the record
+names the target project or one of its components (and not its own project); unsure leftovers
+are withdrawn at startup and on each clean-up run; every item is one plain question.
+
+Tradeoffs (decided, not debt):
+- **Withdraw rule.** TASK.md said "unsure (or no `reason`)" but also that an old-shape
+  "likely" item (which has no `reason`) stays pending. Implemented: withdraw when confidence
+  is "unsure", or when it is neither "likely" nor has a `reason`. An old "likely" item waiting
+  from before 2.4 is still asked as it was (none were pending on Oct 22, 2026).
+- **Titles cut to 40 characters**, not about 50, so the move ("from A to B") still shows in a
+  `list limit=100` line (120 characters, quotes cost 2 each in JSON).
+- **Duplicate learnings/problems are not suggested at all** (approving them only noted it). A
+  real merge for them would be a new feature; not planned.
+
 ## From the compact review list (task 35, branch `dev/2.4-review-fixes`)
 
 Closed in task 35: `manage_review list limit=100` on the live install (102 items, Oct 22, 2026)
