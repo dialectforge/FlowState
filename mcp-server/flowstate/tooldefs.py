@@ -132,12 +132,12 @@ MANAGE_REVIEW = _tool("manage_review", guide.REVIEW_DESCRIPTION, {
     "action": _action(_REVIEW_ACTIONS),
     "project": _p("approve / reject: required. Else omit for all.",
                   ["string", "integer"]),
-    "status": _p("list: which items. Default pending.",
+    "status": _p("list: which ones. Default pending.",
                  enum=["pending", "approved", "rejected", "all"]),
-    "limit": _p("list: max items (20; max 100).", "integer"),
-    "after": _p("list / walk: the page after this id.", "integer"),
-    "item_id": _p("approve / reject: the item's id.", "integer"),
-    "user_request": {**USER_REQUEST, "description": "approve / reject / set_mode: the user's "
+    "limit": _p("list: how many (20; max 100).", "integer"),
+    "after": _p("list, walk: the page after this id.", "integer"),
+    "item_id": _p("list: one in full. approve / reject: its id.", "integer"),
+    "user_request": {**USER_REQUEST, "description": "approve, reject, set_mode: the user's "
                                                     "words (required)."},
     "reason": _p("reject: the user's reason (required)."),
     "summary": _p("approve: new summary."),
@@ -150,7 +150,7 @@ MANAGE_REVIEW = _tool("manage_review", guide.REVIEW_DESCRIPTION, {
                enum=list(review_mode.MODES)),
     "kinds": {"type": "array", "items": {"type": "string", "enum": list(review_mode.KINDS)},
               "description": "set_mode, mode=types: kinds that wait."},
-    "clear": _p("set_mode: remove this project's override.", "boolean"),
+    "clear": _p("set_mode: drop this project's override.", "boolean"),
     "confirm_name": _p("approve, project delete: its name from the user."),
     "model": MODEL,
 }, ["action"])

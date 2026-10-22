@@ -89,7 +89,7 @@ def test_suggested_record_waits_then_edit_and_approve(backend, seeded_db):
         return item, before, listed, no_words, ok, again
     item, before, listed, no_words, ok, again = run(_with(backend, decide, "Claude Code"))
     assert before[0][0] == 0                                   # not saved as a record yet
-    assert [i["id"] for i in _j(listed)["items"]] == [item]
+    assert [i.split(" ")[0] for i in _j(listed)["items"]] == [f"#{item}"]
     assert no_words.isError and _j(no_words)["error"] == "user_request_required"
     assert not ok.isError, ok.content[0].text
     body = _j(ok)
@@ -121,7 +121,7 @@ def test_reject_keeps_item_with_reason(backend, seeded_db):
     row = _q(seeded_db, "SELECT status, reject_reason, summary FROM review_items WHERE id=?", item)[0]
     assert row[0] == "rejected" and row[1] == "wrong project" and row[2].startswith("[auto-captured")
     assert "rejected: wrong project" in _q(seeded_db, "SELECT summary FROM sessions WHERE id=?", sid)[0][0]
-    assert [i["id"] for i in _j(listed)["items"]] == [item]
+    assert [i.split(" ")[0] for i in _j(listed)["items"]] == [f"#{item}"]
 
 
 def test_approve_session_summary_and_project_checks(backend, seeded_db):

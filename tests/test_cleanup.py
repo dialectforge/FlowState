@@ -103,7 +103,7 @@ def test_suggest_tool_only_queues(messy):
     again = _j(call(S, "cleanup_suggest", {"project": "FlowState"}))
     assert again["queued"] == 0 and again["already_suggested"] == r["queued"]    # no repeats
     items = _j(call(S, "review_list", {"project": "FlowState"}))["items"]
-    assert all(i["kind"] == "cleanup" for i in items)
+    assert items and all(", clean-up idea): " in i for i in items)   # one line per item
 
 
 def _item(db, kind_sql):

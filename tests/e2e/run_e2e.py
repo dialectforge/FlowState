@@ -79,6 +79,15 @@ def err(r):
     return isinstance(r, dict) and ("error" in r or r.get("_is_error"))
 
 
+def review_lines(r):
+    """manage_review list answers one line per item: "#id (project, kind[, status]): summary"."""
+    return list(r.get("items") or []) if isinstance(r, dict) else []
+
+
+def line_id(line):
+    return int(line.split(" ")[0][1:])
+
+
 # ----------------------------------------------------------------------------- bookkeeping
 class Report:
     TITLES = {
@@ -672,7 +681,7 @@ def s3_conflicts(W):
                 [l for l in b.splitlines() if "conflict" in l.lower()] or "no conflict line")
     if W.conf_item:
         r = cc1.call("manage_review", action="list", status="all")
-        st = [i["status"] for i in r.get("items", []) if i["id"] == W.conf_item]
+        st = [x.partition("): ")[0].rsplit(", ", 1)[-1] for x in review_lines(r) if line_id(x) == W.conf_item]
         R.check(3, "the conflict item for the replaced pair is no longer pending", st and st[0] != "pending",
                 f"item {W.conf_item} status {st}")
 
@@ -748,7 +757,8 @@ def s4_review(W):
     R.check(4, "reject with the user's words and reason", not err(r) and "receipt" in r, r)
     r = cursor.call("manage_review", action="list", project=P, status="all", limit=100)
     R.check(4, "manage_review list status=all shows approved and rejected items",
-            '"approved"' in json.dumps(r) and '"rejected"' in json.dumps(r), short(r, 200))
+            any(", approved): " in x for x in review_lines(r))
+            and any(", rejected): " in x for x in review_lines(r)), short(r, 200))
     # suggested=true and types mode
     r = cc1.call("manage_review", action="set_mode", project=P, mode="types", kinds=["decision"],
                  user_request="Only decisions should wait for me from now on")
@@ -1088,10 +1098,10 @@ def s8_backups(W):
     r = cc1.call("manage_memory", action="cleanup", project=P)
     R.check(8, "manage_memory cleanup queues suggestions (and changes nothing)", not err(r), r)
     lst = cc1.call("manage_review", action="list", project=P, limit=100)
-    cl = [i for i in lst.get("items", []) if i["kind"] == "cleanup"]
+    cl = [line_id(x) for x in review_lines(lst) if "clean-up idea" in x]
     if cl:
         n0 = len(list(W.backups.glob("*")))
-        r = cursor.call("manage_review", action="approve", project=P, item_id=cl[0]["id"],
+        r = cursor.call("manage_review", action="approve", project=P, item_id=cl[0],
                         user_request="yes merge those duplicate sourdough notes")
         R.check(8, "approving a clean-up idea works (shares the recent safety copy)",
                 not err(r) and len(list(W.backups.glob("*"))) == n0, short(r, 200))
@@ -1236,7 +1246,7 @@ def s10_upgrade(W, skip):
             err(u) and W.count("todos", "id=1", db=db) == 1, u)
     rv = a.call("manage_review", action="list", project="Old Bakery")
     R.check(10, "the v2.3.0 review item is still listed", "Queued by v2.3.0" in json.dumps(rv), short(rv, 200))
-    item = next((i["id"] for i in rv.get("items", []) if "v2.3.0" in i["summary"]), None)
+    item = next((line_id(x) for x in review_lines(rv) if "v2.3.0" in x), None)
     r = a.call("manage_review", action="approve", project="Old Bakery", item_id=item, user_request="fine")
     R.check(10, "a v2.3.0 review item keeps its app: the same app can't approve it with one word", r.get("error") == "own_item", r)
     code, out = W.cli_no_terminal("approvals", "--db", str(db), env=env24)
@@ -1352,8 +1362,7 @@ def s11_edges(W):
     cursor.c.close()
     rv = cc1.call("manage_review", action="list", project=P, limit=100)
     R.check(11, "cursor quits: its session is closed and the auto summary waits for review",
-            any("auto-captured" in (i.get("summary") or "") + (i.get("details") or "") or i["kind"] == "session"
-                for i in rv.get("items", [])), short(rv, 200))
+            any("auto-captured" in x or "session summary" in x for x in review_lines(rv)), short(rv, 200))
     cursor = W.agents["cursor"] = W.stdio("cursor2", "cursor")
     b = cursor.call("start_here", project=P)
     R.check(11, "restarted cursor gets a fresh session and a working brief", isinstance(b, str) and "Session #" in b, short(b, 160))

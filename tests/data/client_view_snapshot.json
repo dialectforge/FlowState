@@ -506,7 +506,7 @@
     "readOnlyHint": false,
     "title": "Review queue (user decides)"
    },
-   "description": "The user's review queue and mode. Session summaries, suggestions, imports, clean-ups, delete requests and conflicts wait here. list, get_mode: read-only. walk: when the user asks what's waiting: boxes for them, or a list and links to pass on. approve: make it a record (edit fields or move_to first), do a delete (project: confirm_name) or confirm a conflict. reject: mark it rejected. set_mode: which new records wait. approve, reject, set_mode: ONLY call this when the user has explicitly told you, in this chat; quote them in user_request; never approve your own suggestions or change the mode to get your own writes saved. Returns {items, total}, the mode, or the result.",
+   "description": "The user's review queue and mode. Summaries, suggestions, imports, clean-ups, deletes and conflicts wait. list (a line each; item_id: one in full), get_mode: read-only. walk: when the user asks what's waiting (boxes, or a list and links to share). approve: make it a record (edit or move_to first), do a delete (project: confirm_name) or confirm a conflict. reject: mark it rejected. set_mode: which new records wait. approve, reject, set_mode: ONLY call this when the user has explicitly told you, in this chat; quote them in user_request; never approve your own suggestions or change the mode to get your own writes saved. Returns {items, total}, the mode, or the result.",
    "inputSchema": {
     "properties": {
      "action": {
@@ -522,7 +522,7 @@
       "type": "string"
      },
      "after": {
-      "description": "list / walk: the page after this id.",
+      "description": "list, walk: the page after this id.",
       "type": "integer"
      },
      "category": {
@@ -540,7 +540,7 @@
       "type": "string"
      },
      "clear": {
-      "description": "set_mode: remove this project's override.",
+      "description": "set_mode: drop this project's override.",
       "type": "boolean"
      },
      "component": {
@@ -556,7 +556,7 @@
       "type": "string"
      },
      "item_id": {
-      "description": "approve / reject: the item's id.",
+      "description": "list: one in full. approve / reject: its id.",
       "type": "integer"
      },
      "kinds": {
@@ -574,7 +574,7 @@
       "type": "array"
      },
      "limit": {
-      "description": "list: max items (20; max 100).",
+      "description": "list: how many (20; max 100).",
       "type": "integer"
      },
      "mode": {
@@ -622,7 +622,7 @@
       "type": "string"
      },
      "status": {
-      "description": "list: which items. Default pending.",
+      "description": "list: which ones. Default pending.",
       "enum": [
        "pending",
        "approved",
@@ -636,7 +636,7 @@
       "type": "string"
      },
      "user_request": {
-      "description": "approve / reject / set_mode: the user's words (required).",
+      "description": "approve, reject, set_mode: the user's words (required).",
       "type": "string"
      }
     },

@@ -206,10 +206,36 @@ _KIND = {"session_summary": "session summary", "cleanup": "clean-up idea", "edit
          "delete": "delete request"}
 
 
-def _plain(it: dict) -> str:
-    summary = " ".join(str(it.get("summary") or "").split())
-    summary = summary if len(summary) <= 160 else summary[:157] + "..."
-    return f"#{it['id']} ({it['project']}, {_KIND.get(it['kind'], it['kind'])}): {summary}"
+LINE_MAX = 160          # one item's line, as the app reads it in the JSON answer
+LIST_BUDGET = 12_000    # all lines of one page (limit 100: 120 each; the answer stays < 16,000)
+FULL_ITEM = ('One item in full (details, payload; needed before approving with edits): '
+             'manage_review(action="list", item_id=<id>).')
+
+
+def _fit(text: str, room: int) -> str:
+    """`text` on one line, cut so its JSON form (non-ASCII escaped) takes at most `room`."""
+    text = " ".join(str(text or "").split())
+    if len(json.dumps(text)) - 2 <= room:
+        return text
+    used, cut = 3, 0                    # 3 for the "..."
+    for ch in text:
+        used += len(json.dumps(ch)) - 2
+        if used > room:
+            break
+        cut += 1
+    return text[:cut].rstrip() + "..."
+
+
+def _plain(it: dict, room: int = LINE_MAX, status: bool = False) -> str:
+    """#id (project, kind[, status]): summary, at most `room` characters in the JSON answer."""
+    kind = _KIND.get(it["kind"], it["kind"]) + (f", {it['status']}" if status else "")
+    head = f"#{it['id']} ({_fit(it['project'], 40)}, {kind}): "
+    return head + _fit(it.get("summary"), max(20, room - (len(json.dumps(head)) - 2)))
+
+
+def _lines(items: list, status: bool = False) -> list:
+    room = min(LINE_MAX, LIST_BUDGET // max(1, len(items)))
+    return [_plain(it, room, status) for it in items]
 
 
 def _page(listing: dict, after: Optional[int], action: str) -> dict:
@@ -239,6 +265,8 @@ def review_list(args: dict, walk: bool, scopes) -> dict:
             return {"error": "project_not_found", "message": f"No single project matches {named!r}.",
                     "candidates": res.get("candidates", [])}
         pid = res["project"]["id"]
+    if not walk and args.get("item_id") is not None:
+        return _one_item(S.backend.db_path, args["item_id"], pid, named)
     after = args.get("after")
     after = after if isinstance(after, int) and not isinstance(after, bool) and after > 0 else None
     try:
@@ -249,9 +277,26 @@ def review_list(args: dict, walk: bool, scopes) -> dict:
         return e.payload
     if walk:
         return prepare(out, S.backend.db_path, scopes, pid, after)
-    out.update(_page(out, after, "list"))
-    out.pop("more", None)
-    return out
+    page = _page(out, after, "list")   # one line per item; item_id= for one in full
+    return {"total": out["total"], "status": out["status"], **page,
+            "items": _lines(out["items"], out["status"] != "pending"),
+            **({"full_item": FULL_ITEM} if out["items"] else {}), "note": out["note"]}
+
+
+def _one_item(db_path: Path, item_id, pid: Optional[int], named) -> dict:
+    """manage_review list item_id=<id>: that one item with every field (any status)."""
+    try:
+        item_id = int(item_id)
+        it = _item_view(db_path, item_id) if item_id > 0 else None
+    except (TypeError, ValueError):
+        return {"error": "invalid_item_id", "message": f"item_id must be a number, not {item_id!r}."}
+    except Exception as e:  # noqa: BLE001 - e.g. no review queue in this database
+        return getattr(e, "payload", None) or {"error": "review_queue_unavailable", "message": str(e)}
+    if not it or (pid is not None and it["project_id"] != pid):
+        where = f" in project {named!r}" if pid is not None else ""
+        return {"error": "record_not_found", "message": f"No review item #{item_id}{where}. "
+                'manage_review(action="list", status="all") lists the ids.'}
+    return {"item": it, "note": "Only approve or reject when the user explicitly asks you to."}
 
 
 def prepare(listing: dict, db_path: Path, scopes, project_id: Optional[int] = None,
@@ -262,7 +307,7 @@ def prepare(listing: dict, db_path: Path, scopes, project_id: Optional[int] = No
         return listing   # an error (no queue, unknown project)
     items = listing["items"][:WALK_MAX]
     out = {"waiting": listing["total"], **_page(listing, after, "walk"),
-           "items": [_plain(it) for it in items]}
+           "items": _lines(items)}
     if not items:
         out["note"] = (f"Nothing more is waiting after #{after}." if after
                        else "Nothing is waiting for the user.")

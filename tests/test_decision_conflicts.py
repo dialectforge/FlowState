@@ -255,8 +255,8 @@ def test_brief_shows_open_pairs_newest_first_capped(backend):
 # ---------------------------------------------------------------- review queue
 def _conflict_item(S):
     items = ok(call(S, "manage_review", {"action": "list", "project": "Alpha"}))["items"]
-    [it] = [i for i in items if i["kind"] == "conflict"]
-    return it
+    [line] = [i for i in items if ", possible conflict): " in i]   # one line per item
+    return ok(call(S, "manage_review", {"action": "list", "item_id": int(line.split(" ")[0][1:])}))["item"]
 
 
 def test_reject_in_the_review_queue_dismisses_the_pair(backend):

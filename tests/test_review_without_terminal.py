@@ -609,7 +609,7 @@ def test_walk_and_list_page_through_102_items(backend, relay_dir):
     assert out["total"] == 102 and len(out["items"]) == 20 and "more" not in out
     assert out["next_page"] == f'manage_review(action="list", after={ids[19]})'
     out = call(S, "manage_review", {"action": "list", "after": ids[99], "limit": 50})
-    assert [i["id"] for i in out["items"]] == ids[100:] and "next_page" not in out
+    assert [int(x.split(" ")[0][1:]) for x in out["items"]] == ids[100:] and "next_page" not in out
     assert out["total"] == 102
 
 
@@ -813,7 +813,7 @@ def test_lan_from_another_computer_gets_no_local_link(backend, relay_dir, no_pag
                          'where FlowState runs (`flowstate review-page` there).'), line
     assert "review_page" not in walk and "phone" not in walk and walk["note"] == waiting.NOT_SHOWN
     assert "`flowstate review-page` there" in walk["how_to_decide"]
-    assert [i["id"] for i in listing["items"]] == items
+    assert [int(i.split(" ")[0][1:]) for i in listing["items"]] == items   # one line per item
     assert no_page == []                                                 # the page wasn't started
     assert log(db) == []
 

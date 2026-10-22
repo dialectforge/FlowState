@@ -63,10 +63,10 @@ _USER_ONLY = (
 )
 
 REVIEW_DESCRIPTION = (
-    "The user's review queue and mode. Session summaries, suggestions, imports, clean-ups, "
-    "delete requests and conflicts wait here. list, get_mode: read-only. walk: when the user "
-    "asks what's waiting: boxes for them, or a list and links to pass on. "
-    "approve: make it a record (edit fields or move_to first), do a delete (project: "
+    "The user's review queue and mode. Summaries, suggestions, imports, clean-ups, deletes "
+    "and conflicts wait. list (a line each; item_id: one in full), get_mode: read-only. "
+    "walk: when the user asks what's waiting (boxes, or a list and links to share). "
+    "approve: make it a record (edit or move_to first), do a delete (project: "
     "confirm_name) or confirm a conflict. reject: mark it rejected. set_mode: which new "
     "records wait." + _USER_ONLY +
     " Returns {items, total}, the mode, or the result."
