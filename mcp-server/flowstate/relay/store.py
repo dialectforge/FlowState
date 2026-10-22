@@ -46,13 +46,14 @@ def relay_dir() -> Path:
 def _write_private(p: Path, data: bytes) -> None:
     """Write `data` to `p` as an owner-only file, atomically."""
     tmp = p.with_name(p.name + ".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # O_BINARY: Windows would otherwise write every b"\n" in keys and certificates as \r\n
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0), 0o600)
     try:
         os.write(fd, data)
     finally:
         os.close(fd)
     os.chmod(tmp, 0o600)
-    os.replace(tmp, p)
+    paths.replace_file(tmp, p)
 
 
 class RelayStore:

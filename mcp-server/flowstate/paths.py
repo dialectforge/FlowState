@@ -65,12 +65,28 @@ def load_config() -> dict:
         return {}
 
 
+def replace_file(tmp: Path, p: Path, wait: float = 2.0) -> None:
+    """os.replace(tmp, p), the last step of an atomic write. On Windows the replace is refused
+    (access denied) while another process has `p` open, e.g. `flowstate relay status` reading
+    the file the relay agent rewrites; readers hold it for moments, so try again briefly."""
+    import time
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            os.replace(tmp, p)
+            return
+        except PermissionError:
+            if os.name != "nt" or time.monotonic() > deadline:
+                raise
+            time.sleep(0.02)
+
+
 def save_config(data: dict) -> Path:
     p = config_file()
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_name(p.name + ".tmp")
     tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    os.replace(tmp, p)
+    replace_file(tmp, p)
     return p
 
 

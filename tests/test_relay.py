@@ -607,3 +607,24 @@ def test_relay_modules_not_imported_by_plain_server():
     out = subprocess.run([sys.executable, "-c", code], cwd=str(SERVER_DIR), capture_output=True,
                          text=True, timeout=60)
     assert out.stdout.strip() == "False", out.stderr
+
+
+def test_status_write_waits_out_a_reader_holding_the_file(tmp_path):
+    """Windows refuses to replace a file another process has open (`flowstate relay status`
+    reading status.json while the agent rewrites it): the write waits a moment instead of
+    losing the new state."""
+    import threading
+    from flowstate.relay.store import _write_private
+    p = tmp_path / "status.json"
+    _write_private(p, b'{"tunnel": "connected"}\n')
+    reader = open(p, "rb")
+    threading.Timer(0.3, reader.close).start()
+    _write_private(p, b'{"tunnel": "stopped"}\n')
+    assert p.read_bytes() == b'{"tunnel": "stopped"}\n'
+
+
+def test_secret_files_keep_their_bytes(tmp_path):
+    from flowstate.relay.store import _write_private
+    data = bytes(range(256)) * 4             # every byte, \n and \r included
+    _write_private(tmp_path / "account-key", data)
+    assert (tmp_path / "account-key").read_bytes() == data
