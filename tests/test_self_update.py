@@ -217,7 +217,9 @@ def world(tmp_path, monkeypatch):
     d.create_project("Alpha", "first")
     w.state = tmp_path / "data" / "update.json"
     w.out = []
-    return w
+    yield w
+    shutil.rmtree(w.key.parent, ignore_errors=True)      # the throwaway signing keys go with the test
+    assert not w.key.exists()
 
 
 TASK_HTTP = "cmd /c {f}\\scripts\\windows\\start-flowstate-http.cmd --host 127.0.0.1 --port 8766"

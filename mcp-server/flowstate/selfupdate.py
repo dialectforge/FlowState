@@ -490,7 +490,7 @@ class Updater:
         tmp = Path(tempfile.mkdtemp(prefix="fs-signers-"))
         try:
             allowed = tmp / "allowed_signers"
-            allowed.write_text(signers, encoding="utf-8")
+            allowed.write_text(signers, encoding="utf-8", newline="\n")
             v = self.git.run("-c", "gpg.format=ssh", "-c", f"gpg.ssh.allowedSignersFile={allowed.as_posix()}",
                              "-c", f"gpg.ssh.program={Path(self.ssh_keygen).as_posix()}",
                              "-c", "gpg.ssh.revocationFile=", "verify-tag", ref)
