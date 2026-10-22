@@ -99,7 +99,8 @@ class Report:
         12: "Tool descriptions: size and truthfulness",
         13: "Approvals on: popup, phone link, terminal",
         14: "Only the user turns a guess into user_stated",
-        15: "What's waiting, without a terminal: chat walk, local link, phone list"}
+        15: "What's waiting, without a terminal: chat walk, local link, phone list",
+        16: "Own tunnel: the owner review page behind the passphrase"}
 
     def __init__(self):
         self.checks = {n: [] for n in self.TITLES}
@@ -1578,7 +1579,8 @@ def s13_approvals(W):
     item = r.get("delete_requested")
     R.check(13, "claude.ai declaring elicitation still gets no popup: the terminal line instead",
             not seen and item and pending(item)
-            and r.get("next") == f"Waiting for the user: ask them to run `flowstate approve {item}` in their terminal.", r)
+            and r.get("next") == (f"Waiting for the user: ask them to open the FlowState review shortcut on their "
+                                  f"desktop and approve it there (or run `flowstate approve {item}` in a terminal)."), r)
     ai.close()
     tid = todo("Flyer asked from Cursor")
     r = cursor.call("manage_memory", action="delete", project=P, record_type="todo", record_id=tid)
@@ -1833,7 +1835,8 @@ SPOOF_LOCAL = {"X-Forwarded-For": "127.0.0.1", "X-Real-IP": "127.0.0.1", "Forwar
 def _test_listener(W, env, mode, name):
     """tests/e2e/relay_listener.py on a free loopback port: FlowState's HTTP app as the relay
     agent builds it (mode "relay") or the LAN listener with every request from 192.0.2.51
-    ("lan-remote"). Returns (process, base url, log file)."""
+    ("lan-remote") or the public (tunnel) listener ("public"). Returns (process, base url, log
+    file)."""
     with socket.socket() as sk:
         sk.bind(("127.0.0.1", 0))
         port = sk.getsockname()[1]
@@ -1868,6 +1871,9 @@ def _from_elsewhere(W, base, Q, boxes=False):
     finally:
         rc.close()
     return next((ln for ln in b.splitlines() if ln.startswith("Review queue:")), ""), b, r, rc
+
+
+SHORTCUT_LINE = "(the FlowState review shortcut, or `flowstate review-page`), or on its tunnel review page"
 
 
 def s15_without_terminal(W):
@@ -1992,9 +1998,9 @@ def s15_without_terminal(W):
                 "walk, no phone link without relay, the plain note to ask in the chat or use the computer "
                 "where FlowState runs",
             line and "127.0.0.1" not in b and "127.0.0.1" not in json.dumps(r) and "flowstatemcp.com" not in b
-            and "`flowstate review-page` there" in line and 'manage_review action="walk"' in line
+            and SHORTCUT_LINE in line and 'manage_review action="walk"' in line
             and "review_page" not in r and "phone" not in r and r.get("items")
-            and "`flowstate review-page` there" in r.get("how_to_decide", ""), (line, r))
+            and SHORTCUT_LINE in r.get("how_to_decide", ""), (line, r))
     R.word(f"Brief line, another computer on the LAN: {line}")
 
     # ---- relay enrolled: the phone link in the brief and the walk; the phone list works
@@ -2057,9 +2063,26 @@ def s15_without_terminal(W):
                 and f"on their phone: {pm.group(1)}," in lline and lr.get("phone") == pm.group(1)
                 and "review_page" not in lr and lr.get("items") and "walked" not in lr, (lline, lr))
         with httpx.Client(timeout=30) as hc:
-            # the bookmark link: the site (signed-in owner) sends the browser to /review/start
-            st = hc.get(f"{base}/review/start", params={"handle": "evil"}, headers={"X-Forwarded-Host": "evil.example"},
+            # the bookmark link: the site (signed-in owner) sends the browser to /review/start with
+            # its signed start ticket (task 38); without one, or with a used one: a plain page
+            def ticket(sub="e2e-site-user"):
+                return sign(key, claims(0, secrets.token_urlsafe(16), handle="e2e-bakery", sub=sub,
+                                        action="start_review"))
+            codes = lambda: W.count("review_open_nonces")  # noqa: E731
+            before = codes()
+            bare = hc.get(f"{base}/review/start", follow_redirects=False)
+            forged = hc.get(f"{base}/review/start", params={"t": sign(make_key()[0], claims(
+                0, secrets.token_urlsafe(16), handle="e2e-bakery", action="start_review"))}, follow_redirects=False)
+            R.check(15, "/review/start without the site's ticket, or with a forged one: a plain page, no code made",
+                    bare.status_code == 403 and forged.status_code == 403 and "location" not in bare.headers
+                    and "Waiting for you" in bare.text and codes() == before, (bare.status_code, forged.status_code))
+            R.word(f"/review/start without a ticket: {re.sub(r'<[^>]+>', ' ', bare.text).split('FlowState', 2)[-1].strip()[:200]}")
+            tk = ticket()
+            st = hc.get(f"{base}/review/start", params={"handle": "evil", "t": tk}, headers={"X-Forwarded-Host": "evil.example"},
                         follow_redirects=False)
+            replay = hc.get(f"{base}/review/start", params={"t": tk}, follow_redirects=False)
+            R.check(15, "a start ticket makes one code only: the same ticket again gets the plain page",
+                    replay.status_code == 403 and "already used" in replay.text and tk not in replay.text, replay.status_code)
             sm = re.fullmatch(r"https://flowstatemcp\.com/review/e2e-bakery\?n=([A-Za-z0-9_-]{43})",
                               st.headers.get("location", ""))
             R.check(15, "/review/start: 303 back to the site with a fresh one-use code and this device's handle",
@@ -2130,6 +2153,102 @@ def s15_without_terminal(W):
             W.count("review_items", f"id IN ({','.join(map(str, ids))}) AND status = 'approved' "
                                     "AND decided_by NOT LIKE 'chat (%' AND decided_by NOT LIKE 'phone (%' "
                                     "AND decided_by != 'review-page'") == 0)
+
+
+def s16_tunnel_page(W):
+    """A user with their own tunnel and no relay: FlowState's public listener (as run behind
+    cloudflared, here on loopback with a made-up public URL) serves /review/tunnel. Only the
+    owner passphrase opens it (an agent's token doesn't); there the user decides a delete that
+    waits for them (approvals on for this project) and a suggestion."""
+    import httpx
+    print("\n== S16 the tunnel review page", flush=True)
+    cursor = W.agents["cursor"]
+    Q = "Harbour Kiosk e2e-16"
+    cursor.call("manage_projects", action="create", name=Q, description="S16: tunnel review page")
+    code, out = W.cli_no_terminal("approvals", "on", "--project", Q)
+    R.check(16, "`flowstate approvals on --project` for this project only", code == 0, short(out, 160))
+    tid = cursor.call("log_work", project=Q, kind="todo", summary="Old harbour flyer").get("record", {}).get("id")
+    r = cursor.call("manage_memory", action="delete", project=Q, record_type="todo", record_id=tid)
+    item = r.get("delete_requested")
+    sug = cursor.call("log_work", project=Q, kind="decision", summary="Open the kiosk at seven",
+                      suggested=True).get("queued_for_review")
+
+    def status(i):
+        rows = W.q("SELECT status, decided_by FROM review_items WHERE id = ?", (i,))
+        return {"status": rows[0]["status"], "decided_by": rows[0]["decided_by"]} if rows else {}
+    R.check(16, "an agent's delete waits for the user; a suggestion waits in the queue",
+            item and sug and status(item).get("status") == "pending" and W.count("todos", "id=?", (tid,)) == 1
+            and "flowstate approve" in r.get("next", ""), r)
+    R.word(f"Delete waiting (agent on this computer): {r.get('next')}")
+    passphrase = secrets.token_urlsafe(18)          # the sandbox's own; never the user's
+    public = "https://tunnel.e2e.example"
+    env = dict(W.env, FS_E2E_PASSPHRASE=passphrase, FS_E2E_PUBLIC_URL=public)
+    srv, base, plog = _test_listener(W, env, "public", "s16-public")
+    try:
+        wait_port("127.0.0.1", int(base.rsplit(":", 1)[1]), 40)
+        page = f"{base}/review/tunnel"
+        with httpx.Client(timeout=30) as hc:
+            def form(html):
+                m = re.search(r"""name=["']csrf["'] value=["']([^"']+)["']""", html)
+                return m.group(1) if m else ""
+            first = hc.get(page)
+            R.check(16, "the page asks for the owner passphrase and shows nothing before it",
+                    first.status_code == 200 and "Owner passphrase" in first.text
+                    and "harbour" not in first.text.lower()
+                    and "frame-ancestors 'none'" in first.headers.get("content-security-policy", "")
+                    and first.headers.get("cache-control") == "no-store", first.status_code)
+            agent = hc.get(page, headers={"Authorization": f"Bearer {W.shared_token}"})
+            R.check(16, "an agent's bearer token opens nothing (the same sign-in page)",
+                    agent.status_code == 200 and "Owner passphrase" in agent.text
+                    and "harbour" not in agent.text.lower(), agent.status_code)
+            org = {"origin": public}
+            wrong = hc.post(f"{page}/sign-in", headers=org,
+                            data={"csrf": form(hc.get(page).text), "passphrase": "not it at all"})
+            R.check(16, "a wrong passphrase is refused", wrong.status_code == 403 and "Wrong passphrase" in wrong.text
+                    and "set-cookie" not in wrong.headers, wrong.status_code)
+            ok = hc.post(f"{page}/sign-in", headers=org, follow_redirects=False,
+                         data={"csrf": form(hc.get(page).text), "passphrase": passphrase})
+            ck = ok.headers.get("set-cookie", "")
+            R.check(16, "the passphrase signs in: cookie __Host-, Secure, HttpOnly, SameSite=Strict, Path=/",
+                    ok.status_code == 303 and ck.startswith("__Host-fs_review_tunnel=")
+                    and all(f in ck.lower() for f in ("secure", "httponly", "samesite=strict", "path=/")),
+                    ok.status_code)
+            # the cookie is Secure (https through the tunnel); send it by hand over this test's plain http
+            m = re.match(r"__Host-fs_review_tunnel=([^;]+)", ck)
+            cookie = {"cookie": f"__Host-fs_review_tunnel={m.group(1) if m else ''}"}
+            shown = hc.get(page + "/", headers=cookie)
+            csrf = form(shown.text)
+            R.check(16, "signed in: the delete and the suggestion are on the page, with Sign out",
+                    shown.status_code == 200 and "Approve: delete it" in shown.text
+                    and "Open the kiosk at seven" in shown.text and "Sign out" in shown.text and csrf,
+                    shown.status_code)
+            evil = hc.post(f"{page}/approve", data={"csrf": csrf, "item_id": str(item)},
+                           headers={**cookie, "origin": "https://evil.example"})
+            nocsrf = hc.post(f"{page}/approve", data={"item_id": str(item)}, headers={**cookie, **org})
+            R.check(16, "another site's form, or one without the CSRF token: refused, still waiting",
+                    evil.status_code == 403 and nocsrf.status_code == 403
+                    and status(item).get("status") == "pending", (evil.status_code, nocsrf.status_code))
+            a = hc.post(f"{page}/approve", data={"csrf": csrf, "item_id": str(item)},
+                        headers={**cookie, **org}, follow_redirects=False)
+            b = hc.post(f"{page}/approve", data={"csrf": csrf, "item_id": str(sug)},
+                        headers={**cookie, **org}, follow_redirects=False)
+            logged = [(x["path"], x["decision"]) for x in
+                      W.q("SELECT path, decision FROM approval_log WHERE item_id IN (?, ?) ORDER BY id",
+                          (item, sug))]
+            R.check(16, "the user approves the delete (user-only) and the suggestion there; logged as the tunnel page",
+                    a.status_code == 303 and b.status_code == 303 and W.count("todos", "id=?", (tid,)) == 0
+                    and status(item) == {"status": "approved", "decided_by": "tunnel page"}
+                    and status(sug).get("decided_by") == "tunnel page"
+                    and logged == [("tunnel page", "approved"), ("tunnel page", "approved")],
+                    (logged, status(item)))
+            gone = hc.post(f"{page}/sign-out", data={"csrf": csrf}, headers={**cookie, **org},
+                           follow_redirects=False)
+            after = hc.get(page + "/", headers=cookie)
+            R.check(16, "Sign out ends the session (the old cookie shows the sign-in page again)",
+                    gone.status_code == 303 and "Owner passphrase" in after.text,
+                    (gone.status_code, after.status_code))
+    finally:
+        _stop(srv, plog)
 
 
 def deferred_window(W):
@@ -2210,7 +2329,8 @@ def main():
     try:
         for step in (s1_fresh, s2_day, s3_conflicts, s4_review, s5_receipts, s6_windows, s7_undo,
                      s8_backups, s9_ledger, lambda w: s10_upgrade(w, args.skip_upgrade), s11_edges,
-                     s13_approvals, s14_user_stated, s15_without_terminal, deferred_window,
+                     s13_approvals, s14_user_stated, s15_without_terminal, s16_tunnel_page,
+                     deferred_window,
                      s12_descriptions):
             try:
                 step(W)
