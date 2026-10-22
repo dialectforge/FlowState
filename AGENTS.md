@@ -125,7 +125,7 @@ All commands run with the venv Python: `<venv python> -m flowstate <command>`.
 | approvals (user) | `flowstate approvals` shows them; `approvals on [--project P]`: an AI's deletes and turning review off wait for the user (popup, phone link, terminal); `approvals off` asks for `y` on the terminal; `approvals phone on\|off`; `approvals popup add\|remove NAME` |
 | review queue (user) | `flowstate review` lists it; `flowstate approve <id> [<id> ...]` / `flowstate reject <id> [--reason ...]` ask for `y` on the terminal (never piped input; no terminal = refused) |
 | review page (user) | `flowstate review-page` (127.0.0.1:8770 only; opens the browser with a one-time link; includes "Who did what"). Without a command: the `http://127.0.0.1:<port>/` link in the brief and in `manage_review(action="walk")`'s answer (FlowState starts the page on first need, 127.0.0.1 only; `FLOWSTATE_REVIEW_PORT`) |
-| phone review list (user, relay) | `https://flowstatemcp.com/review/<handle>?n=<code>` in the brief and the walk's answer when the relay is enrolled and phone links are on (`approvals phone on\|off`); see `docs/APPROVALS.md` |
+| phone review list (user, relay) | the bookmarkable `https://flowstatemcp.com/review/<handle>` in the brief and the walk's answer when the relay is enrolled and phone links are on (`approvals phone on\|off`); see `docs/APPROVALS.md` section 5 |
 | per-app keys for the local/LAN HTTP server (user) | `flowstate keys add --name NAME [--read-only] [--workspace W]` (shows the key once) / `keys list` / `keys revoke --id ID` (or `--name NAME`) |
 | pause an app (user) | `flowstate apps list` / `apps pause --app NAME` / `apps resume --app NAME` |
 
@@ -349,11 +349,13 @@ don't show server instructions:
    word, not the item's text), or the user decides it with `flowstate approve <id>` in their
    terminal. Don't run that for them: it asks for their `y` on the terminal and refuses piped
    input. When the user asks to see what's waiting, call `manage_review(action="walk")`: in
-   apps that show MCP form dialogs (Claude Code, Cursor, VS Code) FlowState asks the user about
-   each item itself and acts only on their answer in that box; elsewhere you get the list and
-   the links (`review_page` on this computer, `phone` with the relay) to show the user. Never
-   approve or reject them yourself afterwards. The brief's review-queue line carries the same
-   links.
+   apps that show MCP form dialogs (Claude Code, Cursor, VS Code) connected directly (stdio or LAN),
+   FlowState asks the user about each item itself and acts only on their answer in that box;
+   elsewhere (other apps, the relay, read-only) you get one page of the list (20, oldest
+   first; `next_page` gives the call for more) and the links (`review_page` on the computer
+   where FlowState runs, `phone` with the relay) to show the user, and nothing was decided.
+   Never approve or reject them yourself afterwards. The brief's review-queue line carries the
+   same links.
 7. The **review mode** (`off`, `auto_only` default, `types`, `everything`; shown in the brief)
    decides what else waits for review. Only call `manage_review(action="set_mode")` when the
    user asks for that change in the chat, quoting their words in `user_request`; every change

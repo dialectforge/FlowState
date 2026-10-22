@@ -308,30 +308,53 @@ you have turned approvals on.
    as a box: tick **Approve** and submit to approve, submit it unticked to reject (the optional
    note is the reason), decline to skip it, close the box to stop. FlowState acts only on your
    answer in that box; your AI can't answer for you. This works with approvals off too, because
-   you asked. In other apps the AI gets the list in plain words and the links below to show you.
-2. **A link to the review page on this computer (everyone).** When something waits, the brief
+   you asked. In other apps, and in any app that reaches FlowState through the relay or over
+   the internet, there are no boxes: the AI gets a plain list (20 at a time, oldest first, and
+   how to ask for the next 20) with the links below to show you, and FlowState says plainly
+   that nothing was decided. If an app "answers" a box faster than a person could (under a
+   second), FlowState takes it that you never saw the box: it stops, decides nothing and shows
+   the plain list instead.
+2. **A link to the review page on the computer where FlowState runs (everyone).** When something waits, the brief
    your AI reads, and the walk's answer, include a link like `http://127.0.0.1:8770/`. Click it
    and the review page opens; no command needed. FlowState starts the page itself the first
    time a link is needed, one per computer (another FlowState on the same computer reuses it),
    on 127.0.0.1 only; if 8770 is taken it picks a free port. `FLOWSTATE_REVIEW_PORT` sets the
    port (`0` any free one, `off` no page or link). `flowstate review-page` still works as before.
 3. **On your phone (relay users).** If the relay agent is set up, the brief and the walk's
-   answer also have `https://flowstatemcp.com/review/<handle>?n=<code>`. The site signs you in,
-   checks the computer is yours, and sends your phone to your own FlowState
-   (`https://<handle>.fsmcp.com/review`) with a 5-minute signed pass. Your FlowState checks it
-   with the site's pinned public key, uses up the one-time code, and shows the whole list with
-   Approve / Reject on each item (a 15-minute session). The site never sees what's in it.
-   `flowstate approvals phone off` turns phone links off.
+   answer also have your own phone link, `https://flowstatemcp.com/review/<handle>` (your
+   handle is your computer's relay name). It never changes, so you can bookmark it or add it
+   to your home screen. When you tap it:
+   - flowstatemcp.com asks you to sign in, if you aren't already, and checks the computer is
+     yours;
+   - it asks your own FlowState for a fresh one-time code, then shows a **Continue** button;
+   - tap Continue: your phone goes to your own FlowState (`https://<handle>.fsmcp.com/review`)
+     with a 5-minute signed pass. Your FlowState checks it with the site's public key (pinned
+     in this release), uses up the one-time code, and shows the waiting list with Approve /
+     Reject on each item (a 15-minute session; the oldest 50 at a time). The site never sees
+     what's in it.
+
+   `flowstate approvals phone off` turns every phone link off.
 
 Who gets which: without the relay, 1 and 2; with the relay, 1, 2 and 3. Every decision made in
 the chat walk or on the phone list is logged with how it was made (`chat` or `phone`); see
 `manage_history(action="list")`.
 
-Honest limit: the review page answers only on 127.0.0.1 and only to same-origin form posts
-carrying the page's CSRF token, so other websites can't use it. But a program on your own
-computer (an AI that runs commands or drives your browser) can open
-`http://127.0.0.1:<port>/` too, just as it could run `flowstate approve`. And the chat walk's
-boxes are only as trustworthy as the app that shows them.
+Honest limits:
+- The review page answers only on 127.0.0.1 and only to same-origin form posts carrying the
+  page's CSRF token, so other websites can't use it. But a program on your own computer (an AI
+  that runs commands or drives your browser) can open `http://127.0.0.1:<port>/` too, just as
+  it could run `flowstate approve`.
+- The chat walk's boxes are only as trustworthy as the app that shows them. FlowState only
+  shows them to apps it knows show a real dialog, connected directly (on this computer or your
+  own network, not through the relay or the internet), and treats an answer
+  under a second as "not seen".
+- The phone link is protected by flowstatemcp.com's sign-in and its signing key: anyone can
+  get your FlowState to make a one-time code, but only the site can turn it into a pass, and
+  only for you. If the site's signing key ever leaked, someone could open your list on a
+  reachable computer (approving a single item from its own link still needs that item's code
+  from your computer). `flowstate approvals phone off` turns the phone list off.
+- If your computer is off or the relay agent isn't running, the phone link can't open the
+  list.
 
 ## Commands for you (not the AI)
 

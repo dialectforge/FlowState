@@ -99,8 +99,10 @@ never guess or invent one. `manage_history(action="who", ...)` shows who did wha
   Don't run it for them.)
 - **When the user asks what's waiting for them**, call `manage_review(action="walk")`. In
   apps that show FlowState's Approve / Reject boxes, the user decides each item there
-  themselves. Otherwise show them the list and the links in the answer (`review_page` on their
-  computer, `phone` if they use the relay) and let them decide there.
+  themselves. Otherwise (other apps, the relay) the answer says no boxes were shown and
+  nothing was decided: show them the list (20 at a time; `next_page` for more) and the links
+  (`review_page` on the computer where FlowState runs, `phone` if they use the relay) and let
+  them decide there.
 - **Writes come with a receipt** (`receipt.saved`). If a write times out, don't repeat it:
   the next FlowState answer says whether it saved.
 - **Delete only when the user wants something gone**: `manage_projects(action="delete" |

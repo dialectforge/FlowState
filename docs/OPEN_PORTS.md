@@ -63,13 +63,44 @@ Closed in task 31: "Docs say the phone keys are placeholders". CHANGELOG 2.4.0, 
 honest limits and docs/APPROVALS.md section 3 now say what `approvals.py` does: it pins
 `fsa-1` and `fsa-2`.
 
+## From the honest walk and the bookmark link (task 33, branch `dev/2.4-review-fixes`)
+
+Closed in task 33:
+- **The walk said "The user decided these" when no box was shown** (live, Oct 22, 2026: a
+  relay connection named "Cursor" got 20 boxes, each declined in milliseconds). Relay and
+  public-listener requests get no boxes (walk or popup); an answer under 1 s counts as not
+  shown and is not logged; the note says what happened. The 20 `declined` rows already in the
+  live approval_log are the user's to report; nothing was approved or rejected.
+- **The walk showed at most 20 items with no way to the rest** (was a tradeoff). `list` and
+  `walk` page with `after=<id>` and `next_page`.
+- **"Docs say the phone keys are placeholders"**: re-checked every doc; APPROVALS.md's "at
+  least one real key" hedges and the 302 in section 2 (the site uses 303 and a Continue page)
+  are fixed. The pinned `fsa-1` / `fsa-2` match the published file (checked Oct 22, 2026).
+
+Open:
+- **The site's side of the bookmark link.** `GET https://flowstatemcp.com/review/<handle>`
+  (bare: sign-in, device check, 303 to `/review/start`) and `/review/<handle>?n=` (Continue
+  page, grant) are built in the web repo at the same time; on Oct 22, 2026 13:07 UTC the live
+  site answered 404 for both. FlowState's side follows docs/APPROVALS.md section 5 and is
+  tested with test keys only (unit tests and e2e S15); check it end to end against the live
+  site once that ships.
+- **The 1-second "too fast" rule is a heuristic.** An app that waits a second and then
+  auto-declines still looks like a person to FlowState (it decides nothing: a decline only
+  skips; an auto-approve after a pause would count, which is why boxes stay limited to the
+  allowlisted apps connected directly, never through the relay). A signed or app-level "a person answered" signal would
+  be the real fix; MCP has none today.
+- **Phone list shows the oldest 50.** The phone page says how many wait in total and that
+  deciding some shows more; it has no "next page" button yet.
+- **Rate limits on `/review/start` are per database, counted in the database.** 30 an hour
+  for everyone together, so someone hammering the bare link (they can, without signing in:
+  the site's sign-in protects the next step) can make the owner's own tap wait up to an hour.
+  The relay's per-IP limit (60 a minute) applies first. A per-IP budget on this route would
+  soften it.
+
 ## From "see what's waiting without a terminal" (task 31, branch `release/2.4-trust`)
 
-- **The site's side of the phone review list.** `https://flowstatemcp.com/review/<handle>?n=`
-  (sign-in, device check, 303 to `https://<handle>.fsmcp.com/review#g=<grant>` with action
-  `open_review`, item 0) is built in the web repo, not here. FlowState's side follows
-  docs/APPROVALS.md section 5 and is tested with test keys only; check it end to end against
-  the live site once that ships.
+- (Moved to task 33's list: the site's side of the phone review list, now the bookmark
+  link.)
 - **A link outlives the process that serves it.** The local page runs inside one FlowState
   process (the first that needed a link). When that app quits, a link shown earlier stops
   answering until the next brief or walk starts the page again in another process (on 8770
@@ -79,10 +110,10 @@ honest limits and docs/APPROVALS.md section 3 now say what `approvals.py` does: 
   ends them; the user opens a new link from the chat. Persist them (hashed, like
   `approval_grants`) if that turns out to be annoying.
 
-Tradeoffs (decided, not debt): the walk shows at most 20 items per call (`waiting.WALK_MAX`;
-asking again shows the rest); the brief's 127.0.0.1 link is also shown to apps on other
-machines (it says "on this computer"); the local page has no key, by design (the link is
-meant to be clicked), and its limit is documented.
+Tradeoffs (decided, not debt): the brief's 127.0.0.1 link is also shown to apps on other
+machines (it now says "on the computer where FlowState runs"); the local page has no key, by
+design (the link is meant to be clicked), and its limit is documented. (The 20-per-walk limit
+now pages: task 33.)
 
 ## From one commit per save (task 29, branch `release/2.4-trust`)
 

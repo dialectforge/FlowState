@@ -17,8 +17,25 @@ Whatever the approvals setting, the user can see and decide the whole review que
   boolean `approve` (ticked = approve, unticked = reject), an optional note (the reject reason)
   and, for a project delete, the project's name. Decline skips the item; cancel, no answer
   within 120 s or a failure stops the walk. Each decision goes through `popup.as_user` with the
-  label `chat (<app>)`. Read-only apps and other apps get the list in plain words and the
-  links. Nothing the calling app passes (`user_request`, extra arguments) is an answer.
+  label `chat (<app>)`. Nothing the calling app passes (`user_request`, extra arguments) is an
+  answer.
+  - **No boxes from outside this computer.** Requests that came through the relay listener or
+    the public (tunnel) listener never get a box, here or as the approvals popup
+    (`popup.no_box`): there the app's name is only its own say-so. `remote_auth.Gate` marks
+    every request with its listener (`lan` / `public` / `relay`; the relay agent builds its
+    app with `relay=True`), in the server, never from a header.
+  - **Too fast = not shown.** A box answered in under 1 second (`popup.HUMAN_SECONDS`) was not
+    seen by a person (an app that auto-declines, for example): the walk stops at once, nothing
+    is logged for it, and the answer is the plain list. The approvals popup does the same and
+    passes on its one-line fallback. Declines and closes are logged in `approval_log` only when
+    the box was plausibly shown; approve / reject are logged as always.
+  - **The plain answer** (read-only apps, other apps, the relay, too fast): `note` "No boxes
+    were shown here; nothing was decided.", `waiting` (the total), `items` (one page: 20,
+    oldest first: id, project, kind, one-line summary), `showing` (which part), `next_page`
+    (`manage_review(action="walk", after=<last id>)`), `how_to_decide` and the links.
+    `manage_review(action="list")` pages the same way (`limit`, `after`, `next_page`). After a
+    real walk the note gives the counts: approved, rejected, skipped, and that only those
+    answers were logged.
 - **Local link:** `http://127.0.0.1:<port>/`, the review page (`review_page.py`) started inside
   the FlowState process the first time a link is needed: one per computer and database (a
   state file under the data folder names the port; another process pings `/ping` and reuses
@@ -27,7 +44,8 @@ Whatever the approvals setting, the user can see and decide the whole review que
   Every change needs that session's cookie (HttpOnly, SameSite=Strict), its CSRF token, the
   Host 127.0.0.1/localhost and a same-origin `Origin` header. `flowstate review-page` keeps its
   one-time key.
-- **Phone list (relay users):** section 5.
+- **Phone list (relay users):** the bookmarkable `https://flowstatemcp.com/review/<handle>`;
+  section 5.
 
 Decisions in the chat walk and on the phone list are all logged in `approval_log` (path `chat`
 or `phone`), user-only items or not. Honest limit: a program on the user's computer (an agent
@@ -64,8 +82,8 @@ quoting the user); FlowState stores and shows which app did it, and can't check 
 `https://flowstatemcp.com/approve/<handle>/<item>?n=<nonce>`
 
 - `handle`: this device's relay handle (`relay.json`); only shown when the relay agent is
-  enrolled and on, phone links are on (`flowstate approvals phone on|off`), and the release
-  pins at least one real key (below).
+  enrolled and on and phone links are on (`flowstate approvals phone on|off`). This release
+  pins the site's published keys (section 3), so that condition is met.
 - `item`: the review item id (integer).
 - `nonce`: 43 url-safe characters (`secrets.token_urlsafe(32)`), made on this computer, one
   per item, bound to the item, the action `approve_review` and an expiry (7 days; a fresh one
@@ -73,10 +91,12 @@ quoting the user); FlowState stores and shows which app did it, and can't check 
 
 ## 2. What the site does
 
-1. Require the user signed in (email code / Google), check `<handle>` belongs to that account.
-   The site never sees the item's contents.
-2. Sign a grant and redirect the browser (302) to
-   `https://<handle>.fsmcp.com/approve/<item>#g=<grant>` (fragment: not sent to any server or log).
+1. Require the user signed in (email code / Google; not signed in: `303` to
+   `/signin?next=...`), check `<handle>` is an active device of that account. The site never
+   sees the item's contents.
+2. Show a Continue page. Only its Continue POST signs a grant and redirects the browser (`303`)
+   to `https://<handle>.fsmcp.com/approve/<item>#g=<grant>` (fragment: not sent to any server
+   or log).
 
 ## 3. The grant
 
@@ -101,9 +121,10 @@ Payload:
 Keys: private key only as the Worker secret `FSA_SIGNING_KEY` (JWK). Public JWKs
 (`{"kty": "EC", "crv": "P-256", "x": ..., "y": ...}`, kid `fsa-1` active, `fsa-2` backup)
 published at `https://flowstatemcp.com/.well-known/flowstate-approval-keys.json` and pinned in
-`mcp-server/flowstate/approvals.py` as `FSA_PUBLIC_KEYS` (this release pins both). A kid that
-maps to `None` is refused; if both were `None`, no phone link would be shown and every grant
-refused. Rotation: sign with `fsa-2` once a release pinning it is out.
+`mcp-server/flowstate/approvals.py` as `FSA_PUBLIC_KEYS`. This release pins both real
+published keys, `fsa-1` and `fsa-2`; they match the published file (checked October 22, 2026).
+A grant signed with any other key, or naming another kid, is refused. Rotation: the site can
+switch to `fsa-2`, which this release already trusts.
 
 ## 4. What FlowState does with it
 
@@ -129,44 +150,79 @@ Limit: a leaked site key still can't approve without the one-use code on the use
 and a tap on their own FlowState's page; an agent that controls the user's own logged-in browser
 could.
 
-## 5. The review list (everything waiting, one link)
+## 5. The review list (everything waiting, one bookmarkable link)
+
+### 5a. The bookmark link and `/review/start`
 
 The link FlowState gives (in the brief's review-queue line and in the walk's plain answer):
 
-`https://flowstatemcp.com/review/<handle>?n=<nonce>`
+`https://flowstatemcp.com/review/<handle>`
 
+- No code in it, so nothing secret lands in chat history, and the user can bookmark it.
 - Shown only when the relay agent is enrolled and on, phone links are on (`flowstate approvals
-  phone on|off`) and the release pins at least one key: the same conditions as section 1.
-- `nonce`: 43 url-safe characters, made on this computer (`review_open_nonces`, migration 021),
-  bound to the action `open_review` and an expiry (7 days). The open one is reused until it is
-  used; it is used up when a grant carrying it opens the list, and a fresh one is made the
-  next time a link is shown.
+  phone on|off`) and the release pins the site's keys (this release pins `fsa-1` and `fsa-2`):
+  the same conditions as section 1.
 
-What the site does: require sign-in, check `<handle>` is on the account, then `303` to
-`https://<handle>.fsmcp.com/review#g=<grant>`.
+1. **The site, bare link** `GET /review/<handle>` (no query): validate the handle; not signed
+   in: `303` to `/signin?next=/review/<handle>`; the handle not an active device of the
+   account: the existing refusal page; else `303` to `https://<handle>.fsmcp.com/review/start`
+   (`Cache-Control: no-store`, `Referrer-Policy: no-referrer`). The site sees nothing about
+   the contents.
+2. **FlowState** `GET /review/start` (`review_phone.py`, on the HTTP app, so the relay reaches
+   it; GET only, `HEAD` and `POST` get 405). No sign-in here: a code is useless without a grant
+   that only the site signs, for the signed-in owner.
+   - Phone review available (relay enrolled, keys pinned, phone links not off): a FRESH one-use
+     code for the action `open_review` (43 url-safe characters, `secrets.token_urlsafe(32)`, in
+     `review_open_nonces`, valid 15 minutes), then `303` to
+     `https://flowstatemcp.com/review/<handle>?n=<code>`. The handle comes from this device's
+     `relay.json`, never from the request (no open redirect).
+   - Limits (`approvals.start_nonce`): at most 10 codes made here open at once (making one more
+     expires the oldest), and at most 30 made per hour; then a plain `429` page
+     (`Retry-After: 3600`).
+   - Phone review off or unavailable: a plain small page saying phone review is off on this
+     computer and how to turn it on (`flowstate approvals phone on`). No code is made.
+   - Headers: the `/review` page's (CSP `default-src 'none'; script-src 'self'; style-src
+     'self'; connect-src 'self'; frame-ancestors 'none'`, `X-Frame-Options: DENY`), plus
+     `Cache-Control: no-store` and `Referrer-Policy: no-referrer`.
+3. **The site, with the code** `GET /review/<handle>?n=<code>`: its normal flow: sign-in check,
+   device check, a Continue page. Only the Continue POST signs the grant and `303`s to
+   `https://<handle>.fsmcp.com/review#g=<grant>`.
 
-The grant: exactly as section 3 (header, ES256, keys, `iss`, `aud`, `sub`, `handle`, `nonce`
-format, `iat` / `exp` with `exp = iat + 300`), except `"action": "open_review"` and
-`"item": 0` (a JSON integer). FlowState checks every claim the same way, then uses up the nonce
-(one UPDATE that only succeeds while it is unused and unexpired).
+Codes made by older 2.4 builds for chat links (`?n=` in the link itself, valid 7 days) keep
+working until they expire; they don't count against the limits above.
 
-What FlowState does (`review_phone.py`, on the HTTP app, so the relay reaches it):
+### 5b. The grant and the list (unchanged)
 
-- `GET /review`: an empty page, the same headers as `/approve` (CSP `default-src 'none';
-  script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'`,
-  `X-Frame-Options: DENY`, `Cache-Control: no-store`, no referrer). Its script reads `#g=`,
-  removes it from the address bar (`history.replaceState`) and posts it.
-- `POST /review/open` `{"grant"}` (JSON, same origin): checks the grant and uses up the nonce;
+The grant: exactly as section 3 (header `{"alg": "ES256", "kid": "fsa-1" | "fsa-2", "typ":
+"fsa+jwt"}`, ES256, keys, `iss`, `aud`, `sub`, `handle`, `nonce` format, `iat` / `exp` with
+`exp = iat + 300`), except `"action": "open_review"` and `"item": 0` (a JSON integer).
+FlowState checks every claim the same way, then uses up the code (one conditional UPDATE that
+only succeeds while it is unused and unexpired), whichever way the code was made.
+
+What FlowState does (`review_phone.py`):
+
+- `GET /review`: an empty page with the headers above. Its script reads `#g=`, removes it from
+  the address bar (`history.replaceState`) and posts it.
+- `POST /review/open` `{"grant"}` (JSON, same origin): checks the grant and uses up the code;
   starts a session: cookie `fs_review_phone` (HttpOnly, Secure, SameSite=Strict, Max-Age 900,
   Path `/review`) plus a page token in the answer; answers with the waiting items (all
-  projects, oldest first, up to 50) from the local database.
+  projects, oldest first, up to 50) and the total waiting, from the local database.
 - `POST /review/decide` `{"token", "item_id", "decision": "approve" | "reject",
   "confirm_name"?, "reason"?}` (JSON, same origin): the cookie and the page token must match a
   live session. Approve or Reject goes through the same user-only path as the approve page
   (`popup.as_user`, label `phone (<handle>)`) and is logged (`approval_log`, path `phone`).
-  Answers with the updated list.
+  Answers with the updated list and total.
 
 Errors are JSON `{"error", "message"}` with status 403 (`phone_approvals_unavailable`,
 `relay_not_enrolled`, `bad_grant`, `unknown_key`, `bad_signature`, `grant_expired`,
 `wrong_device`, `wrong_item`, `grant_used`, `bad_token`, `bad_request`); a decision FlowState
 refuses (for example a project delete without its exact name) is 409.
+
+### 5c. Honest limits of the bookmark link
+
+- Anyone can make `/review/start` issue a code (within the limits above). The list's
+  protection is the site's sign-in plus its signing key: a leaked site signing key alone could
+  open the list on a reachable device. Per-item `/approve` links still need the one-use code
+  made on this computer for that item.
+- `flowstate approvals phone off` turns every phone link and `/review/start` off.
+- If the computer is off or the relay agent is down, the bare link can't open the list.

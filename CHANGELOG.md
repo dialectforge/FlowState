@@ -144,6 +144,20 @@
   box, holding no database lock. Approvals off too, because you asked. Other apps, and
   read-only apps, get the list in plain words with the links below. Only your answer in the box
   decides; nothing the app passes counts.
+- **No boxes through the relay or over the internet, and none that "answer" themselves.** On
+  connections that came through the relay or the public listener the app's name is only its own
+  say-so, so neither the walk nor the approvals popup shows a box there (FlowState marks every
+  request with the listener it came in on). A box answered in under a second was not seen by a
+  person: the walk stops, logs nothing for it and gives the plain list; the popup passes on its
+  one-line fallback. (Before this, an app reaching FlowState through the relay with the name
+  "Cursor" got 20 boxes, each declined at once, and the answer wrongly said you had decided
+  them; nothing had been approved or rejected.)
+- **The walk says what happened.** The plain answer says "No boxes were shown here; nothing was
+  decided." After a real walk it gives the counts approved / rejected / skipped and says only
+  those answers were logged.
+- **Paging.** `manage_review` `list` and `walk` show 20 at a time, oldest first, with the total,
+  which part is shown and the call for the next part (new `after` parameter: the page after
+  that item id).
 - **A link to the review page:** when something waits, the brief and the walk's answer include
   `http://127.0.0.1:<port>/`. FlowState starts the review page inside its own process the first
   time a link is needed (stdio or HTTP), one per computer and database (another FlowState
@@ -151,16 +165,23 @@
   (`FLOWSTATE_REVIEW_PORT`; `off` turns it off). Clicking the link opens it at once; every
   change still needs the page's cookie, its CSRF token, a 127.0.0.1 Host and a same-origin
   Origin. `flowstate review-page` keeps its one-time key.
-- **Your phone (relay users):** `https://flowstatemcp.com/review/<handle>?n=<code>` in the brief
-  and the walk's answer (relay enrolled, keys pinned, phone links on). The site signs you in and
-  sends your phone to your own FlowState at `/review` with a 5-minute signed grant (`action`
-  `open_review`, `item` 0; same keys and checks as the approve page); the one-time code is used
-  up, and you get the whole list with Approve / Reject for 15 minutes (cookie HttpOnly, Secure,
-  SameSite=Strict, path `/review`). Contract: `docs/APPROVALS.md` section 5.
+- **Your phone (relay users):** a link you can bookmark, `https://flowstatemcp.com/review/<handle>`,
+  in the brief and the walk's answer (relay enrolled, phone links on; this release pins the
+  site's keys). No code in the chat: the site signs you in and sends your phone to your own
+  FlowState's new `/review/start`, which makes a fresh one-use code (15 minutes; at most 10 open
+  and 30 an hour) and sends it back to the site; you tap Continue and the site sends your phone
+  to `/review` with a 5-minute signed grant (`action` `open_review`, `item` 0; same keys and
+  checks as the approve page). The code is used up, and you get the list with Approve / Reject
+  for 15 minutes (cookie HttpOnly, Secure, SameSite=Strict, path `/review`). Phone review off:
+  `/review/start` shows a short page saying so. Contract: `docs/APPROVALS.md` section 5.
 - Decisions in the chat walk and on the phone list go through the same user-only path as the
   popup and are all logged with how they were made (`chat` / `phone`).
-- Honest limit: a program on your own computer (an AI that runs commands or drives your browser)
-  can open the 127.0.0.1 page too, as it could run `flowstate approve`.
+- Honest limits: a program on your own computer (an AI that runs commands or drives your browser)
+  can open the 127.0.0.1 page too, as it could run `flowstate approve`. The phone list is
+  protected by the site's sign-in and signing key: a leaked site signing key alone could open
+  the list on a reachable computer (approving one item from its own link still needs that
+  item's code from your computer). With your computer off or the relay agent down, the phone
+  link can't open the list.
 
 ### Only you can turn an AI guess into "the user said so"
 - A record's source tag (`user_stated`, `ai_inferred`, `from_code`) now stores who set it and
@@ -221,7 +242,7 @@
   grants seen) and `approval_log` (every user-only decision). No row = approvals off.
   020 adds three nullable columns to `record_meta` (`source_set_by`, `source_set_model`,
   `source_set_at`: who set a source tag); older rows keep NULL. 021 adds `review_open_nonces`
-  (the phone review list's one-use codes).
+  (the phone review list's one-use codes; `/review/start` makes them).
 - Edit history rows for created records use the tool names `create/<type>` and
   `approve/<type>`. "Who did what" still lists each creation once.
 
