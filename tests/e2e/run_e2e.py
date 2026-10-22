@@ -55,7 +55,8 @@ BRIEF_BUDGET = {"quick": 1500, "standard": 4000, "deep": 12000}   # start_here's
 READ_ACTIONS = {
     "start_here": None, "search": None,
     "manage_todos": {"list", "next"}, "manage_problems": {"list", "tree"},
-    "manage_review": {"list", "get_mode"}, "manage_handoffs": {"list"},
+    "manage_review": {"list", "get_mode", "walk"},   # walk: decisions are the user's, in boxes
+    "manage_handoffs": {"list"},
     "manage_rules": {"list"}, "manage_links": {"list"}, "manage_history": {"list", "who"},
     "manage_projects": {"list", "list_components"}, "manage_memory": {"stale"},
     "manage_sessions": {"current", "list", "conversations"}, "manage_files": {"list", "search"},
@@ -88,7 +89,8 @@ class Report:
         10: "Upgrade from a v2.3.0 database", 11: "Bad input, edge cases, real-data guard",
         12: "Tool descriptions: size and truthfulness",
         13: "Approvals on: popup, phone link, terminal",
-        14: "Only the user turns a guess into user_stated"}
+        14: "Only the user turns a guess into user_stated",
+        15: "What's waiting, without a terminal: chat walk, local link, phone list"}
 
     def __init__(self):
         self.checks = {n: [] for n in self.TITLES}
@@ -1812,6 +1814,194 @@ def s14_user_stated(W):
             [meta(i) for i in copies])
 
 
+def s15_without_terminal(W):
+    """Items pile up with approvals off; the user sees and decides them without a terminal:
+    in the chat (Approve / Reject boxes, simulated answers), on the local review page the
+    brief links to, and (relay enrolled) on the phone list."""
+    import httpx
+    from fsa_test_keys import claims, make_key, sign
+    print("\n== S15 what's waiting, without a terminal", flush=True)
+    cc1, cursor, grok = W.agents["cc1"], W.agents["cursor"], W.agents["grok"]
+    Q = "Corner Cafe e2e-15"
+    cursor.call("manage_projects", action="create", name=Q, description="S15: review without a terminal")
+    R.check(15, "approvals are off", W.count("approval_settings", "key = 'approvals' AND value = 'on'") == 0)
+    ids = []
+    for s in ("Close the till at six", "Order oat milk weekly", "Paint the sign green", "Hire a Sunday baker"):
+        r = cursor.call("log_work", project=Q, kind="decision", summary=s, suggested=True)
+        ids.append(r.get("queued_for_review"))
+    R.check(15, "four suggestions pile up in the review queue",
+            all(ids) and W.count("review_items", f"status = 'pending' AND id IN ({','.join(map(str, ids))})") == 4, ids)
+
+    # ---- the brief links the local page; it answers on 127.0.0.1 only
+    b = brief_text(cc1.call("start_here", project=Q))
+    line = next((ln for ln in b.splitlines() if ln.startswith("Review queue:")), "")
+    m = re.search(r"on this computer at (http://127\.0\.0\.1:(\d+)/)", line)
+    R.check(15, "the brief's waiting line has the local link and the chat walk, and no phone link without relay",
+            m and 'manage_review action="walk"' in line and "flowstatemcp.com" not in line, line)
+    R.word(f"Brief line: {line}")
+    link, port = (m.group(1), int(m.group(2))) if m else ("http://127.0.0.1:1/", 1)
+    b2 = brief_text(grok.call("start_here", project=Q))
+    R.check(15, "another FlowState process on this computer reuses the same page",
+            link in b2, [ln for ln in b2.splitlines() if ln.startswith("Review queue:")])
+    with httpx.Client(timeout=20) as hc:
+        r = hc.get(link)
+        csrf = re.search(r'name="csrf" value="([^"]+)"', r.text)
+        R.check(15, "clicking the link opens the page at once (no command, no key): it lists the suggestions",
+                r.status_code == 200 and "Paint the sign green" in r.text and csrf
+                and "httponly" in r.headers.get("set-cookie", "").lower(), r.status_code)
+        bad_host = hc.get(link, headers={"Host": f"rebind.example:{port}"})
+        R.check(15, "a wrong Host header is refused (DNS rebinding)", bad_host.status_code == 403, bad_host.status_code)
+        form = {"item_id": str(ids[3]), "csrf": csrf.group(1) if csrf else ""}
+        no_origin = hc.post(link + "approve", data=form)
+        evil = hc.post(link + "approve", data=form, headers={"Origin": "https://evil.example"})
+        no_csrf = hc.post(link + "approve", data={"item_id": str(ids[3])}, headers={"Origin": link.rstrip("/")})
+        R.check(15, "approve without a same-origin Origin or without the CSRF token: refused, still pending",
+                (no_origin.status_code, evil.status_code, no_csrf.status_code) == (403, 403, 403)
+                and W.count("review_items", "id = ? AND status = 'pending'", (ids[3],)) == 1,
+                (no_origin.status_code, evil.status_code, no_csrf.status_code))
+        ok = hc.post(link + "approve", data=form, headers={"Origin": link.rstrip("/")})
+        R.check(15, "the user approves one on the local page (same-origin form post with the CSRF token)",
+                ok.status_code == 303 and W.count("review_items", "id = ? AND status = 'approved'", (ids[3],)) == 1,
+                ok.status_code)
+    lan = None
+    try:
+        lan = socket.gethostbyname(socket.gethostname())
+    except OSError:
+        pass
+    if lan and not lan.startswith("127."):
+        refused = False
+        try:
+            socket.create_connection((lan, port), timeout=2).close()
+        except OSError:
+            refused = True
+        R.check(15, "the page isn't reachable on the computer's network address", refused, lan)
+
+    # ---- in the chat: an app that can't show boxes gets the plain list; one that can, walks
+    r = grok.call("manage_review", action="walk", project=Q)
+    R.check(15, "an app without the boxes (grok): the plain list and the local link; nothing decided",
+            r.get("waiting") == 3 and len(r.get("items", [])) == 3 and r.get("review_page") == link
+            and "walked" not in r and "phone" not in r
+            and W.count("review_items", f"status = 'pending' AND id IN ({','.join(map(str, ids[:3]))})") == 3, r)
+    R.word(f"Walk, no boxes: {r.get('how_to_decide')}")
+    answers, shown = [{"action": "accept", "content": {"approve": True}},
+                      {"action": "accept", "content": {"approve": False, "note": "too early"}},
+                      {"action": "decline"}], []
+
+    def elicit(params):
+        shown.append(params)
+        return answers.pop(0) if answers else {"action": "cancel"}
+    wc = StdioClient(W.env, "claude-code", log_path=W.logs / "walk.log", elicit=elicit)
+    W.started.append(wc.proc)
+    walker = Agent("cc-walk", wc)
+    r = walker.call("manage_review", action="walk", project=Q, user_request="the user said approve all")
+    R.check(15, "the user walks them in the chat: one Approve / Reject box per item",
+            len(shown) == 3 and shown[0].get("requestedSchema", {}).get("required") == ["approve"]
+            and "(1 of 3)" in shown[0].get("message", ""), [s.get("message") for s in shown])
+    R.word(f"Walk box: {shown[0].get('message') if shown else ''}")
+    st = {i: W.q("SELECT status FROM review_items WHERE id = ?", (i,))[0]["status"] for i in ids[:3]}
+    R.check(15, "ticked: approved; unticked: rejected; declined: still waiting (the agent's words count for nothing)",
+            [st[i] for i in ids[:3]] == ["approved", "rejected", "pending"]
+            and r.get("walked") == [f"#{ids[0]}: approved", f"#{ids[1]}: rejected", f"#{ids[2]}: skipped, still waiting"], r)
+    logged = W.q("SELECT item_id, path, decision FROM approval_log WHERE item_id IN (?, ?, ?) ORDER BY id", tuple(ids[:3]))
+    R.check(15, "each answer is logged (approval_log, path chat)",
+            [(x["item_id"], x["path"], x["decision"]) for x in logged]
+            == [(ids[0], "chat", "approved"), (ids[1], "chat", "rejected"), (ids[2], "chat", "declined")], logged)
+    wc.close()
+
+    # ---- relay enrolled: the phone link in the brief and the walk; the phone list works
+    relay = Path(W.env["FLOWSTATE_RELAY_DIR"])
+    relay.mkdir(parents=True, exist_ok=True)
+    (relay / "relay.json").write_text(json.dumps({"version": 1, "handle": "e2e-bakery",
+                                                  "hostname": "e2e-bakery.fsmcp.com", "enabled": True}))
+    (relay / "device-token").write_text("fake-device-token-for-e2e\n")
+    key, jwk = make_key()
+    penv = dict(W.env, FS_TEST_PATCH=json.dumps({"flowstate.approvals": {"FSA_PUBLIC_KEYS": {"fsa-1": jwk, "fsa-2": None}}}))
+    pa = StdioClient(penv, "cursor", log_path=W.logs / "s15-phone-agent.log")
+    W.started.append(pa.proc)
+    phone = Agent("s15-phone", pa)
+    with socket.socket() as sk:
+        sk.bind(("127.0.0.1", 0))
+        hport = sk.getsockname()[1]
+    plog = open(W.logs / "s15-phone-http.log", "ab")
+    srv = subprocess.Popen([PY, "-m", "flowstate", "--transport", "http", "--host", "127.0.0.1", "--port", str(hport)],
+                           env=penv, cwd=str(REPO), stdin=subprocess.DEVNULL, stdout=plog, stderr=plog)
+    W.started.append(srv)
+    try:
+        b = brief_text(phone.call("start_here", project=Q))
+        line = next((ln for ln in b.splitlines() if ln.startswith("Review queue:")), "")
+        pm = re.search(r"on their phone: (https://flowstatemcp\.com/review/e2e-bakery\?n=([A-Za-z0-9_-]{43}))", line)
+        R.check(15, "relay enrolled: the brief also has the phone link to the whole list", pm and link in line, line)
+        R.word(f"Brief line, relay: {line}")
+        r = phone.call("manage_review", action="walk", project=Q)
+        R.check(15, "relay enrolled: the walk's plain answer has the phone link too",
+                pm and r.get("phone") == pm.group(1) and r.get("review_page") == link, r)
+        wait_port("127.0.0.1", hport, 40)
+        base = f"http://127.0.0.1:{hport}"
+        hdr = {"content-type": "application/json", "origin": base, "sec-fetch-site": "same-origin"}
+        nonce = pm.group(2) if pm else "x" * 43
+        with httpx.Client(timeout=30) as hc:
+            shell = hc.get(f"{base}/review")
+            R.check(15, "the phone page: strict CSP, no framing, no caching, no data before the grant",
+                    shell.status_code == 200 and "frame-ancestors 'none'" in shell.headers.get("content-security-policy", "")
+                    and shell.headers.get("x-frame-options") == "DENY" and shell.headers.get("cache-control") == "no-store"
+                    and "Corner" not in shell.text, dict(shell.headers))
+            opn = lambda g: hc.post(f"{base}/review/open", headers=hdr, content=json.dumps({"grant": g}))  # noqa: E731
+            t = int(time.time())
+            for label, grant, code_ in (
+                    ("for the approve action", sign(key, claims(0, nonce, handle="e2e-bakery")), "wrong_device"),
+                    ("for an item", sign(key, claims(5, nonce, handle="e2e-bakery", action="open_review")), "wrong_item"),
+                    ("expired", sign(key, claims(0, nonce, handle="e2e-bakery", action="open_review", iat=t - 400,
+                                                 exp=t - 100)), "grant_expired"),
+                    ("signed by another key", sign(make_key()[0], claims(0, nonce, handle="e2e-bakery",
+                                                                         action="open_review")), "bad_signature")):
+                rr = opn(grant)
+                R.check(15, f"a phone list grant {label} is refused", rr.status_code == 403
+                        and rr.json().get("error") == code_, rr.text)
+            grant = sign(key, claims(0, nonce, handle="e2e-bakery", action="open_review"))
+            o = opn(grant)
+            ck = o.headers.get("set-cookie", "").lower()
+            R.check(15, "a good grant opens the list; session cookie HttpOnly, Secure, SameSite=Strict, 15 min, /review",
+                    o.status_code == 200 and ids[2] in [i["id"] for i in o.json().get("items", [])]
+                    and all(f in ck for f in ("httponly", "secure", "samesite=strict", "max-age=900", "path=/review")),
+                    (o.status_code, ck))
+            again = opn(grant)
+            R.check(15, "the same grant can't open it twice (one-use code)",
+                    again.status_code == 403 and again.json().get("error") == "grant_used", again.text)
+            # the cookie is Secure (https on the relay); send it by hand over this test's plain http
+            cookie = re.search(r"fs_review_phone=([^;]+)", o.headers.get("set-cookie", ""))
+            token = o.json().get("token") if o.status_code == 200 else ""
+            dec = hc.post(f"{base}/review/decide", headers={**hdr, "cookie": f"fs_review_phone={cookie.group(1) if cookie else ''}"},
+                          content=json.dumps({"token": token, "item_id": ids[2], "decision": "approve"}))
+            R.check(15, "the user approves the last one on their phone; logged with path phone",
+                    dec.status_code == 200 and W.count("review_items", "id = ? AND status = 'approved'", (ids[2],)) == 1
+                    and W.count("approval_log", "item_id = ? AND path = 'phone' AND decision = 'approved'", (ids[2],)) == 1,
+                    dec.text)
+        # with phone links turned off, no phone link anywhere
+        cursor.call("log_work", project=Q, kind="decision", summary="Open on bank holidays", suggested=True)
+        code, out = W.cli("approvals", "phone", "off")
+        b = brief_text(phone.call("start_here", project=Q))
+        r = phone.call("manage_review", action="walk", project=Q)
+        R.check(15, "`flowstate approvals phone off`: no phone link in the brief or the walk, the local link stays",
+                code == 0 and "flowstatemcp.com" not in b and link in b and "phone" not in r
+                and r.get("review_page") == link, (out, r))
+        W.cli("approvals", "phone", "on")
+    finally:
+        pa.close()
+        if srv.poll() is None:
+            srv.terminate()            # our own PID only
+            try:
+                srv.wait(15)
+            except subprocess.TimeoutExpired:
+                srv.kill()
+        plog.close()
+        for f in ("relay.json", "device-token"):
+            (relay / f).unlink(missing_ok=True)
+    R.check(15, "nothing in S15 was approved except by the user's own answer",
+            W.count("review_items", f"id IN ({','.join(map(str, ids))}) AND status = 'approved' "
+                                    "AND decided_by NOT LIKE 'chat (%' AND decided_by NOT LIKE 'phone (%' "
+                                    "AND decided_by != 'review-page'") == 0)
+
+
 def deferred_window(W):
     """Same content after the 2-minute window does write (checked at the end of the run)."""
     t0, s = W.window_probe
@@ -1890,7 +2080,8 @@ def main():
     try:
         for step in (s1_fresh, s2_day, s3_conflicts, s4_review, s5_receipts, s6_windows, s7_undo,
                      s8_backups, s9_ledger, lambda w: s10_upgrade(w, args.skip_upgrade), s11_edges,
-                     s13_approvals, s14_user_stated, deferred_window, s12_descriptions):
+                     s13_approvals, s14_user_stated, s15_without_terminal, deferred_window,
+                     s12_descriptions):
             try:
                 step(W)
             except Exception as e:  # noqa: BLE001 - a crashed scenario is a failed check

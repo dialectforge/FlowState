@@ -6,12 +6,13 @@ project ("Lakeside Bakery ordering app") the way AI apps do, only through MCP to
 - claude-code in two windows (two stdio server processes), cursor (stdio), grok (streamable
   HTTP with its own app key), plus a slow-timeout window, two HTTP claude-code sessions and
   a v2.3.0 server for the upgrade check;
-- 13 scenarios (fresh install, a normal day with claims, conflicting decisions, review mode,
+- 15 scenarios (fresh install, a normal day with claims, conflicting decisions, review mode,
   self-approval and the `flowstate approve` step, receipts and timed-out writes, two windows
   and "since your last visit", undo, deletes / backups / safety copies / health check, run
   ledger, upgrade from v2.3.0, bad input, concurrency and the real-data guard, tool
-  descriptions, and approvals on: the popup, the phone page and the terminal), each pass/fail
-  with evidence;
+  descriptions, approvals on: the popup, the phone page and the terminal, only the user turns a
+  guess into user_stated, and what's waiting without a terminal: the chat walk, the local
+  review link and the phone list), each pass/fail with evidence;
 - every tool and every action it offers is called at least once (the report says how many).
 
 ```bash
