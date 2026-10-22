@@ -10,6 +10,7 @@ import sqlite3
 from pathlib import Path
 from typing import Optional
 
+from . import dbconn
 from .brief import resolve_project
 
 # (tool, action) -> argument holding the target record id, or None for creates.
@@ -143,7 +144,7 @@ def explicit_project(args: dict):
 
 
 def _project_name(db_path: Path, pid) -> str:
-    conn = sqlite3.connect(str(db_path), timeout=5.0)
+    conn = dbconn.connect(str(db_path), timeout=5.0)
     try:
         row = conn.execute("SELECT name FROM projects WHERE id = ?", (pid,)).fetchone()
         return row[0] if row else f"#{pid}"
@@ -198,7 +199,7 @@ def check_write(db_path: Path, name: str, args: dict) -> int:
 
     target = WRITES.get(key) if key else None
     if target and args.get(target) is not None:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = dbconn.connect(str(db_path), timeout=5.0)
         try:
             row = conn.execute(_OWNER_SQL[target], (args[target],)).fetchone()
         finally:

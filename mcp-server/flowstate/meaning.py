@@ -25,6 +25,8 @@ import threading
 from pathlib import Path
 from typing import Optional
 
+from . import dbconn
+
 DEFAULT_MODEL = "all-MiniLM-L6-v2"   # the model embeddings.py was written for
 TYPES = ("todo", "decision", "change", "learning", "problem", "solution")
 MAX_LAZY = 64                         # records embedded during one search call
@@ -110,7 +112,7 @@ def status() -> dict:
 
 # ---------------------------------------------------------------- records
 def _conn(db_path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(db_path), timeout=5.0)
+    conn = dbconn.connect(str(db_path), timeout=5.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 5000")
     return conn

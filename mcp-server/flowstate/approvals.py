@@ -38,6 +38,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
+from . import dbconn
+
 # Apps known to show the elicitation form as a real dialog to the user (clientInfo name,
 # lower case). `flowstate approvals popup add|remove NAME` changes this per install.
 POPUP_CLIENTS = ("claude-code", "cursor", "cursor-vscode", "visual studio code",
@@ -83,7 +85,7 @@ def _ts(dt: Optional[datetime] = None) -> str:
 
 
 def _conn(db_path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(db_path), timeout=5.0)
+    conn = dbconn.connect(str(db_path), timeout=5.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 5000")
     return conn

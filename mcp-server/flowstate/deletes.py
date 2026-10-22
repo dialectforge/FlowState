@@ -31,6 +31,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Optional
 
+from . import dbconn
 from . import history, identity, review
 
 # record type -> (table, SQL for a one-line title)
@@ -91,7 +92,7 @@ class DeleteError(Exception):
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(db_path), timeout=5.0, isolation_level=None)
+    conn = dbconn.connect(str(db_path), timeout=5.0, isolation_level=None)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.execute("PRAGMA foreign_keys = ON")   # the ON DELETE rules do the removing

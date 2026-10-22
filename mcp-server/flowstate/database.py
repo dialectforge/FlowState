@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 from datetime import datetime, timedelta, timezone
 
+from . import dbconn
 from .models import (
     Project, Component, Change, Problem, SolutionAttempt, 
     Solution, Todo, Conversation, Learning, Session, ProjectContext
@@ -47,7 +48,7 @@ def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
     path = db_path or default_db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     
-    conn = sqlite3.connect(str(path), timeout=5.0)
+    conn = dbconn.connect(str(path), timeout=5.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     # Two processes (stdio desktop app + HTTP server) can share one DB file.

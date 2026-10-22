@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass
 
+from . import dbconn
 from .embeddings import get_embedding_service, EmbeddingService
 
 
@@ -44,7 +45,7 @@ class SearchService:
     
     def _conn(self) -> sqlite3.Connection:
         """Get a database connection."""
-        conn = sqlite3.connect(self.db_path)
+        conn = dbconn.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
     

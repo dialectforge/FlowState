@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
+from . import dbconn
 from . import history, links, review
 
 STALE_TODO_DAYS = 120
@@ -137,7 +138,7 @@ class _Model:
 def suggest(db_path: Path, project_id: Optional[int] = None,
             kinds=("duplicate", "stale", "misfiled"), now: Optional[datetime] = None) -> list[dict]:
     """All suggestions for one project (or every project), most useful first."""
-    conn = sqlite3.connect(str(db_path), timeout=5.0)
+    conn = dbconn.connect(str(db_path), timeout=5.0)
     conn.row_factory = sqlite3.Row
     try:
         recs = _records(conn)
@@ -205,7 +206,7 @@ def _fingerprint(s: dict) -> str:
 def queue(db_path: Path, suggestions: list[dict], source: str = "cleanup") -> dict:
     """Add suggestions to the review queue (additive). Skips any already suggested before,
     whatever its status (so rejected ones don't come back)."""
-    conn = sqlite3.connect(str(db_path), timeout=5.0)
+    conn = dbconn.connect(str(db_path), timeout=5.0)
     try:
         if not review.available(conn):
             raise review.ReviewError("review_queue_unavailable", "The review queue isn't set up.")

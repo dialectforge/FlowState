@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
+from . import dbconn
 from . import secrets_scan
 
 MAX_PER_RUN = 50
@@ -35,7 +36,7 @@ def _now() -> str:
 
 
 def _conn(db_path: Path):
-    conn = sqlite3.connect(str(db_path), timeout=5.0)
+    conn = dbconn.connect(str(db_path), timeout=5.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 5000")
     return conn

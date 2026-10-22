@@ -13,6 +13,7 @@ import re
 import sqlite3
 from pathlib import Path
 
+from . import dbconn
 from . import review, secrets_scan
 
 MAX_ITEMS = 500
@@ -66,7 +67,7 @@ def import_memories(db_path: Path, project_id: int, text: str, source: str = "me
     if kind not in review.RECORD_KINDS:
         raise ValueError(f"kind must be one of {', '.join(review.RECORD_KINDS)}")
     memories = parse(text)
-    conn = sqlite3.connect(str(db_path), timeout=5.0)
+    conn = dbconn.connect(str(db_path), timeout=5.0)
     try:
         existing = {_flat(r[0]).lower() for r in conn.execute(
             "SELECT insight FROM learnings WHERE project_id = ?", (project_id,))}

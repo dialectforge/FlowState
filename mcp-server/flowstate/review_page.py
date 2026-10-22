@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlencode
 
+from . import dbconn
 from . import activity, history, review, review_mode, who
 
 HOST = "127.0.0.1"
@@ -59,7 +60,7 @@ class Page:
 
     # ------------------------------------------------------------ data
     def _conn(self):
-        conn = sqlite3.connect(str(self.db_path), timeout=5.0)
+        conn = dbconn.connect(str(self.db_path), timeout=5.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout = 5000")
         return conn

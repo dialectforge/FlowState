@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import urlparse
 
+from . import dbconn
 from . import identity
 
 ENDPOINTS = ("project", "component", "decision", "change", "learning", "problem", "todo")
@@ -67,7 +68,7 @@ class LinkError(Exception):
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(db_path), timeout=5.0)
+    conn = dbconn.connect(str(db_path), timeout=5.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 5000")
     return conn

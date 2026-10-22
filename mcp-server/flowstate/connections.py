@@ -7,6 +7,7 @@ import sqlite3
 from pathlib import Path
 from typing import Optional
 
+from . import dbconn
 from . import identity
 
 
@@ -16,7 +17,7 @@ def current_session(db_path: Path, tracker, client: str, pid: Optional[int]) -> 
     if own is None:
         return {"session": None, "note": "No session is open for this window yet; FlowState "
                                          "opens one with your first call that names a project."}
-    conn = sqlite3.connect(str(db_path), timeout=5.0)
+    conn = dbconn.connect(str(db_path), timeout=5.0)
     conn.row_factory = sqlite3.Row
     try:
         row = conn.execute("SELECT * FROM sessions WHERE id = ?", (own["session_id"],)).fetchone()

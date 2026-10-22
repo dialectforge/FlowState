@@ -13,6 +13,8 @@ from datetime import datetime, timedelta
 from typing import Optional
 from dataclasses import dataclass, field
 
+from . import dbconn
+
 
 @dataclass
 class StoryChapter:
@@ -52,7 +54,7 @@ class StoryGenerator:
     
     def _conn(self) -> sqlite3.Connection:
         """Get a database connection."""
-        conn = sqlite3.connect(self.db_path)
+        conn = dbconn.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
     

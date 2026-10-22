@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Optional
 import json
 
+from . import dbconn
+
 # Optional imports - gracefully degrade if not available
 try:
     from sentence_transformers import SentenceTransformer
@@ -67,7 +69,7 @@ class EmbeddingService:
     
     def _conn(self) -> sqlite3.Connection:
         """Get a database connection with sqlite-vec loaded."""
-        conn = sqlite3.connect(self.db_path)
+        conn = dbconn.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         
         # Load sqlite-vec extension if available

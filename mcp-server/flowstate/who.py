@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
+from . import dbconn
 from . import history, identity
 
 PER_PAGE = 50
@@ -239,7 +240,7 @@ def recent(db_path: Path, app: Optional[str] = None, model: Optional[str] = None
     page = max(1, int(page or 1))
     per_page = max(1, min(int(per_page or PER_PAGE), MAX_PER_PAGE))
     since_u, until_u = parse_time(since), parse_time(until, end=True)
-    conn = sqlite3.connect(str(db_path), timeout=5.0)
+    conn = dbconn.connect(str(db_path), timeout=5.0)
     conn.row_factory = sqlite3.Row
     try:
         has = _tables(conn)

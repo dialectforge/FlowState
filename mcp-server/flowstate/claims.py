@@ -24,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
+from . import dbconn
 from . import handoffs, identity, links
 
 DEFAULT_MINUTES, MIN_MINUTES, MAX_MINUTES = 15, 1, 120
@@ -56,7 +57,7 @@ def available(conn) -> bool:
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(db_path), timeout=10.0, isolation_level=None)
+    conn = dbconn.connect(str(db_path), timeout=10.0, isolation_level=None)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 10000")
     conn.execute("PRAGMA foreign_keys = ON")
