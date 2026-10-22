@@ -130,8 +130,9 @@ def test_an_ai_delete_call_only_queues_a_request(rich, seeded_db):
         assert not r.isError, r.content[0].text
         out = _j(r)
         assert out["delete_requested"] and out["status"] == "waiting for the user"
-        assert out["next"] == (f"Waiting for the user: ask them to run `flowstate approve "
-                               f"{out['delete_requested']}` in their terminal.")
+        assert out["next"] == (f"Waiting for the user: ask them to open the FlowState review shortcut "
+                               f"on their desktop and approve it there (or run `flowstate approve "
+                               f"{out['delete_requested']}` in a terminal).")
     assert dump(seeded_db) == before                       # not one row removed or changed
     kinds = [k for _i, k, _s in _pending(seeded_db)]
     assert kinds.count("delete") == 5                      # the repeat returned the same item

@@ -16,7 +16,14 @@ Two ways to run it:
     once (no key: the link is meant to be clicked); every action still needs that cookie,
     the page's CSRF token and a same-origin Origin header
 
-Safety (both): bound to 127.0.0.1 only, never mounted on the HTTP or public listener; every
+The desktop shortcut setup_flowstate.py makes ("FlowState review") runs the command; if a
+FlowState on this computer already serves the linked page for this database on that port, the
+command opens that one instead of failing on the busy port (another busy port: any free one).
+
+On the public (tunnel) listener, review_tunnel.py shows this same page behind the owner
+passphrase; this module itself is never mounted on the HTTP or public listener.
+
+Safety (both): bound to 127.0.0.1 only; every
 form carries a CSRF token; the Host header must be 127.0.0.1/localhost (blocks DNS-rebinding
 pages); strict Content-Security-Policy, no caching, no scripts, no framing. Honest limit: a
 program on this computer (an agent that runs commands or drives the user's browser) can open
@@ -69,10 +76,18 @@ class Page:
     plain visit to / starts a browser session (waiting.py)."""
 
     def __init__(self, db_path: Union[Path, Callable[[], Path]], port: int = DEFAULT_PORT,
-                 open_link: bool = False):
+                 open_link: bool = False, base: str = "", client: str = CLIENT,
+                 user_words: str = USER_WORDS, stylesheet: Optional[str] = None,
+                 sign_out: Optional[str] = None):
         self._db = db_path if callable(db_path) else Path(db_path)
         self.port = port
         self.open_link = open_link
+        # review_tunnel.py serves the same page under /review/tunnel on the public listener:
+        # its links and forms start with `base`, its decisions are labelled `client`, and its
+        # CSS is a file (`stylesheet`) because that page's CSP allows no inline style, and it
+        # has a Sign out button (posting to `sign_out`)
+        self.base, self.client, self.user_words = base, client, user_words
+        self.stylesheet, self.sign_out = stylesheet, sign_out
         self.launch_key: Optional[str] = None if open_link else secrets.token_urlsafe(32)
         self.sessions: dict[str, str] = {}   # cookie value -> csrf token
 
@@ -112,14 +127,14 @@ class Page:
         item = review.get_item(self.db_path, int(form["item_id"]))
         if not item:
             return "That item no longer exists."
-        args = {"item_id": item["id"], "user_request": USER_WORDS.format(what="Approve"),
+        args = {"item_id": item["id"], "user_request": self.user_words.format(what="Approve"),
                 **{k: form[k] for k in ("summary", "details", "move_to", "confirm_name")
                    if form.get(k, "").strip()}}
         if args.get("summary") == item["summary"]:
             args.pop("summary")
         if args.get("details") == (item["details"] or ""):
             args.pop("details")
-        res = S._review_decide("review_approve", item["project_id"], args, CLIENT)
+        res = S._review_decide("review_approve", item["project_id"], args, self.client)
         return res.get("message") if isinstance(res, dict) and "error" in res else \
             f"Approved #{item['id']}."
 
@@ -131,7 +146,7 @@ class Page:
         reason = (form.get("reason") or "").strip() or "rejected on the review page"
         res = S._review_decide("review_reject", item["project_id"],
                                {"item_id": item["id"], "reason": reason,
-                                "user_request": USER_WORDS.format(what="Reject")}, CLIENT)
+                                "user_request": self.user_words.format(what="Reject")}, self.client)
         return res.get("message") if isinstance(res, dict) and "error" in res else \
             f"Rejected #{item['id']}."
 
@@ -140,7 +155,7 @@ class Page:
         try:
             r = review_mode.set_mode(self.db_path, form.get("mode"),
                                      [k for k in review_mode.KINDS if form.get(f"kind_{k}")], pid,
-                                     USER_WORDS.format(what="set review mode"), CLIENT, CLIENT,
+                                     self.user_words.format(what="set review mode"), self.client, self.client,
                                      clear=bool(form.get("clear")))
         except review_mode.ModeError as e:
             return e.payload["message"]
@@ -149,7 +164,7 @@ class Page:
     def set_app(self, form: dict) -> str:
         app = form.get("app", "")
         paused = form.get("paused") == "1"
-        activity.set_paused(self.db_path, app, paused, CLIENT)
+        activity.set_paused(self.db_path, app, paused, self.client)
         return f"{app}: {'paused' if paused else 'resumed'}."
 
     def undo(self, form: dict) -> str:
@@ -159,16 +174,22 @@ class Page:
             return "Unknown record type."
         res = S._history(int(form["project_id"]),
                          {"action": "undo", "record_type": form["record_type"],
-                          "record_id": int(form["record_id"])}, CLIENT)
+                          "record_id": int(form["record_id"])}, self.client)
         if isinstance(res, dict) and "error" in res:
             return res.get("message") or res["error"]
         return f"Undid the last change to {form['record_type']} #{form['record_id']}."
 
     # ------------------------------------------------------------ html
-    def _head(self, flash: str, view: str) -> list:
+    def _head(self, flash: str, view: str, csrf: str = "") -> list:
+        style = (f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                 f"<link rel='stylesheet' href='{_e(self.stylesheet)}'>" if self.stylesheet
+                 else f"<style>{_CSS}</style>")
         out = [f"<!doctype html><html><head><meta charset='utf-8'><title>FlowState review</title>"
-               f"<style>{_CSS}</style></head><body><h1>FlowState review</h1>"
-               f"<p class='meta'><a href='/'>Review queue</a> · <a href='/?view=who'>Who did what</a>"
+               f"{style}</head><body><h1>FlowState review</h1>"
+               + (f"<form method='post' action='{_e(self.sign_out)}'><input type='hidden' "
+                  f"name='csrf' value='{_e(csrf)}'><button>Sign out</button></form>"
+                  if self.sign_out else "") +
+               f"<p class='meta'><a href='{self.base}/'>Review queue</a> · <a href='{self.base}/?view=who'>Who did what</a>"
                f"{' (this page)' if view == 'who' else ''}</p>"]
         if flash:
             out.append(f"<p class='ok'>{_e(flash)}</p>")
@@ -181,7 +202,7 @@ class Page:
         projects = self.projects()
         pid = int(q["project"]) if q.get("project", "").isdigit() else None
         page_no = int(q["page"]) if q.get("page", "").isdigit() else 1
-        out = self._head(flash, "who")
+        out = self._head(flash, "who", csrf)
         try:
             res = who.recent(self.db_path, q.get("app"), q.get("model"), q.get("machine"), pid,
                              q.get("since"), q.get("until"), page_no, who.PER_PAGE)
@@ -203,7 +224,7 @@ class Page:
             undo = ""
             if r["undo"]:
                 u = r["undo"]
-                undo = (f'<form method="post" action="/undo">{hidden}'
+                undo = (f'<form method="post" action="{self.base}/undo">{hidden}'
                         f'<input type="hidden" name="record_type" value="{_e(u["record_type"])}">'
                         f'<input type="hidden" name="record_id" value="{_e(u["record_id"])}">'
                         f'<input type="hidden" name="project_id" value="{_e(u["project_id"])}">'
@@ -218,10 +239,10 @@ class Page:
             keep = {k: v for k, v in q.items() if v and k not in ("page", "flash", "view")}
             nav = []
             if res["page"] > 1:
-                nav.append(f"<a href='/?{_e(urlencode({'view': 'who', **keep, 'page': res['page'] - 1}))}'>Newer</a>")
+                nav.append(f"<a href='{self.base}/?{_e(urlencode({'view': 'who', **keep, 'page': res['page'] - 1}))}'>Newer</a>")
             nav.append(f"page {res['page']} of {res['pages']}")
             if res["page"] < res["pages"]:
-                nav.append(f"<a href='/?{_e(urlencode({'view': 'who', **keep, 'page': res['page'] + 1}))}'>Older</a>")
+                nav.append(f"<a href='{self.base}/?{_e(urlencode({'view': 'who', **keep, 'page': res['page'] + 1}))}'>Older</a>")
             out.append(f"<p>{' · '.join(nav)}</p>")
         out.append("</body></html>")
         return "".join(out)
@@ -236,7 +257,7 @@ class Page:
         hidden = f'<input type="hidden" name="csrf" value="{_e(csrf)}">'
         opts = "".join(f'<option value="{p["id"]}"{" selected" if p["id"] == pid else ""}>{_e(p["name"])}</option>'
                        for p in projects)
-        out = self._head(flash, "queue")
+        out = self._head(flash, "queue", csrf)
         out.append(f"""<form method="get" class="row"><select name="project"><option value="">All projects</option>{opts}</select>
 <select name="status">{''.join(f'<option{" selected" if s == status else ""}>{s}</option>' for s in ("pending", "approved", "rejected", "all"))}</select>
 <button>Show</button></form>""")
@@ -255,15 +276,15 @@ class Page:
                 if it["kind"] == "cleanup":   # one plain question: nothing to edit
                     verb = "move" if move else "cancel"
                     out.append(f"""<p><strong>{_e(it['summary'])}</strong></p><p class="meta">{_e(it['details'])}</p>
-<form method="post" action="/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">{move}
+<form method="post" action="{self.base}/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">{move}
 <button>Approve: {verb} it</button></form>""")
                 elif it["kind"] == "conflict":   # possible conflicting decisions: nothing to edit
                     out.append(f"""<p><strong>{_e(it['summary'])}</strong></p><p class="meta">{_e(it['details'])}</p>
-<form method="post" action="/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
+<form method="post" action="{self.base}/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
 <button>Approve: they really conflict</button></form>""")
                 elif it["kind"] == "source":   # "did you say this?": nothing to edit
                     out.append(f"""<p><strong>{_e(it['summary'])}</strong></p><p class="meta">{_e(it['details'])}</p>
-<form method="post" action="/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
+<form method="post" action="{self.base}/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
 <button>Approve: I said this</button></form>""")
                 elif it["kind"] == "delete":   # nothing to edit; a project needs its name typed
                     confirm = ""
@@ -271,14 +292,14 @@ class Page:
                         confirm = ('<label>Type the project name to confirm '
                                    '<input type="text" name="confirm_name" autocomplete="off"></label>')
                     out.append(f"""<p><strong>{_e(it['summary'])}</strong></p><p class="meta">{_e(it['details'])}</p>
-<form method="post" action="/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">{confirm}
+<form method="post" action="{self.base}/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">{confirm}
 <button>Approve: delete it</button></form>""")
                 else:
-                    out.append(f"""<form method="post" action="/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
+                    out.append(f"""<form method="post" action="{self.base}/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
 <textarea name="summary" rows="2">{_e(it['summary'])}</textarea><textarea name="details" rows="2" placeholder="details">{_e(it['details'])}</textarea>{move}
 <button>Approve (with any edits)</button></form>""")
                 out.append(f"""
-<form method="post" action="/reject">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
+<form method="post" action="{self.base}/reject">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
 <input type="text" name="reason" placeholder="Reason for rejecting"><button>Reject</button></form>""")
             else:
                 out.append(f"<p>{_e(it['summary'])}</p>"
@@ -289,14 +310,14 @@ class Page:
         kinds = "".join(f'<label><input type="checkbox" name="kind_{k}"{" checked" if k in m["kinds"] else ""}> {k}</label> '
                         for k in review_mode.KINDS)
         out.append(f"""<h2>Review mode</h2><p>Whole install: <b>{_e(m['mode'])}</b>, {_e(review_mode.describe(m))}.</p>
-<form method="post" action="/mode">{hidden}<div class="row"><select name="mode">{''.join(f'<option{" selected" if x == m["mode"] else ""}>{x}</option>' for x in review_mode.MODES)}</select>
+<form method="post" action="{self.base}/mode">{hidden}<div class="row"><select name="mode">{''.join(f'<option{" selected" if x == m["mode"] else ""}>{x}</option>' for x in review_mode.MODES)}</select>
 <select name="project_id"><option value="">Whole install</option>{opts.replace(' selected', '')}</select></div>
 <p>For "types": {kinds}</p><label><input type="checkbox" name="clear"> Remove this project's own setting</label><br><button>Set review mode</button></form>""")
         # apps
         out.append("<h2>Apps</h2><table><tr><th>App</th><th>Last seen</th><th>Calls</th><th>Writes</th><th></th></tr>")
         for a in activity.apps(self.db_path):
             out.append(f"""<tr><td>{_e(a['app'])}{' <b>(paused)</b>' if a['paused'] else ''}</td><td>{_e(a['last_seen'] or '-')}</td>
-<td>{a['calls']}</td><td>{a['writes'] or 0}</td><td><form method="post" action="/app">{hidden}<input type="hidden" name="app" value="{_e(a['app'])}">
+<td>{a['calls']}</td><td>{a['writes'] or 0}</td><td><form method="post" action="{self.base}/app">{hidden}<input type="hidden" name="app" value="{_e(a['app'])}">
 <input type="hidden" name="paused" value="{'0' if a['paused'] else '1'}"><button>{'Resume' if a['paused'] else 'Pause writes'}</button></form></td></tr>""")
         out.append("</table><h2>Recent activity</h2><table><tr><th>When (UTC)</th><th>App</th><th>Tool</th><th>Project</th><th>Result</th></tr>")
         for r in activity.recent(self.db_path, None, 30):
@@ -416,6 +437,21 @@ def serve(db_path: Path, port: int = DEFAULT_PORT, open_browser: bool = True,
     S.init_backend(db_path)    # approve uses the same code as the MCP tools
     if S.backend.error:
         raise SystemExit(f"FlowState database unavailable: {S.backend.error}")
+    from .waiting import _bind, _ping
+    try:
+        sock = _bind(port)
+    except OSError as e:
+        raise SystemExit(f"Couldn't start the review page on 127.0.0.1: {e}") from e
+    if sock.getsockname()[1] != port and _ping(port, db_path):
+        # the shortcut, while a FlowState here already serves this database's linked page
+        sock.close()
+        print(f"FlowState's review page is already open at http://{HOST}:{port}/ (this computer only).",
+              flush=True)
+        if open_browser:
+            import webbrowser
+            webbrowser.open(f"http://{HOST}:{port}/")
+        return
+    port = sock.getsockname()[1]
     page = Page(db_path, port)
     app = create_app(page)
     url = page.launch_url()
@@ -435,4 +471,4 @@ def serve(db_path: Path, port: int = DEFAULT_PORT, open_browser: bool = True,
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
         if not print_url:
             print("Opening it in your browser (use --print-url if it doesn't open).", flush=True)
-    uvicorn.run(app, host=HOST, port=port, log_level="warning", access_log=False)
+    uvicorn.Server(uvicorn.Config(app, log_level="warning", access_log=False)).run(sockets=[sock])

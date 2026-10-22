@@ -331,7 +331,7 @@ def test_phone_link_only_with_relay_keys_and_phone_on(backend, relay_dir, monkey
 
 
 def _grant(key, db, **over):
-    nonce = approvals.start_nonce(db)
+    nonce = approvals.start_nonce(db, "test-user-0001")
     c = claims(0, nonce, action="open_review")
     c.update(over)
     return sign(key, c), nonce
@@ -353,7 +353,7 @@ def test_phone_grant_refused(backend, relay, case, expect):
     if case == "other_key":
         grant, _n = _grant(make_key()[0], db)
     elif case == "unknown_kid":
-        nonce = approvals.start_nonce(db)
+        nonce = approvals.start_nonce(db, "test-user-0001")
         grant = sign(key, claims(0, nonce, action="open_review"), kid="fsa-9")
     else:
         grant, _n = _grant(key, db, **over)
@@ -369,7 +369,7 @@ def test_phone_grant_is_one_use(backend, relay):
     with pytest.raises(approvals.ApprovalError) as e:
         approvals.verify_review_grant(db, grant)
     assert e.value.code == "grant_used"
-    assert approvals.start_nonce(db) != nonce                       # a fresh code next time
+    assert approvals.start_nonce(db, "test-user-0001") != nonce                       # a fresh code next time
     # a code made for an approve link doesn't open the list
     item = pile(db, 1)[0]
     with pytest.raises(approvals.ApprovalError):
@@ -468,7 +468,7 @@ def test_relay_connection_named_cursor_gets_the_plain_list_and_no_boxes(backend,
         assert out["waiting"] == 3 and len(out["items"]) == 3
         assert "review_page" not in out and "127.0.0.1" not in json.dumps(out)   # task 34
         assert ("relay" in out["how_to_decide"]) == (via == "relay")
-        assert "on the computer where FlowState runs (`flowstate review-page` there)" in out["how_to_decide"]
+        assert waiting.ELSEWHERE in out["how_to_decide"]
     assert log(db) == [] and [status(db, i) for i in items] == ["pending"] * 3
 
 
@@ -614,8 +614,16 @@ def test_walk_and_list_page_through_102_items(backend, relay_dir):
 
 
 # ---------------------------------------------------------------- 5. (task 33) bookmark link
-def _start(c, **kw):
-    return c.get("/review/start", follow_redirects=False, **kw)
+def ticket(key, sub="test-user-0001", **over):
+    """The site's start ticket (action start_review, item 0, a fresh 22-character nonce)."""
+    import secrets
+    return sign(key, claims(0, secrets.token_urlsafe(16), action="start_review", sub=sub, **over))
+
+
+def _start(c, key=None, params=None, **kw):
+    """GET /review/start, with a fresh ticket signed by `key` (none without a key)."""
+    params = dict(params or {}, **({"t": ticket(key)} if key is not None else {}))
+    return c.get("/review/start", params=params, follow_redirects=False, **kw)
 
 
 def _open_nonces(db):
@@ -628,7 +636,7 @@ def test_review_start_sends_a_fresh_code_back_to_the_site(backend, relay):
     db = backend.backend.db_path
     pile(db, 2)
     c = _phone_client(db)
-    r = _start(c, params={"handle": "evil", "next": "https://evil.example"},
+    r = _start(c, relay, params={"handle": "evil", "next": "https://evil.example"},
                headers={"Host": "evil.fsmcp.com", "X-Forwarded-Host": "evil.example"})
     assert r.status_code == 303
     m = re.fullmatch(r"https://flowstatemcp\.com/review/testbox\?n=([A-Za-z0-9_-]{43})", r.headers["location"])
@@ -640,7 +648,7 @@ def test_review_start_sends_a_fresh_code_back_to_the_site(backend, relay):
     row = _q(db, "SELECT created_at, expires_at FROM review_open_nonces WHERE nonce = ?", nonce)[0]
     life = datetime.fromisoformat(row[1]) - datetime.fromisoformat(row[0])
     assert life.total_seconds() == 15 * 60
-    assert _start(c).headers["location"] != r.headers["location"]       # fresh every time
+    assert _start(c, relay).headers["location"] != r.headers["location"]   # fresh every time
     # the site signs a grant with it (after the user's Continue); it opens the list once
     grant = sign(relay, claims(0, nonce, action="open_review"))
     o = c.post("/review/open", content=json.dumps({"grant": grant}), headers=JSON_H)
@@ -653,7 +661,7 @@ def test_review_start_code_expires_after_15_minutes(backend, relay, monkeypatch)
     from datetime import timedelta
     db = backend.backend.db_path
     c = _phone_client(db)
-    nonce = _start(c).headers["location"].split("?n=")[1]
+    nonce = _start(c, relay).headers["location"].split("?n=")[1]
     later = approvals._now() + timedelta(minutes=16)
     monkeypatch.setattr(approvals, "_now", lambda: later)
     t = int(later.timestamp())
@@ -667,14 +675,14 @@ def test_review_start_cap_and_rate_limit_and_old_codes(backend, relay):
     from datetime import timedelta
     db = backend.backend.db_path
     c = _phone_client(db)
-    made = [_start(c).headers["location"].split("?n=")[1] for _ in range(12)]
+    made = [_start(c, relay).headers["location"].split("?n=")[1] for _ in range(12)]
     assert sorted(n for (n,) in _open_nonces(db)) == sorted(made[2:])   # 10 open; the oldest expired
     with pytest.raises(approvals.ApprovalError):
         approvals.verify_review_grant(db, sign(relay, claims(0, made[0], action="open_review")))
     for _ in range(approvals.START_PER_HOUR - 12):
-        assert _start(c).status_code == 303
+        assert _start(c, relay).status_code == 303
     n = _q(db, "SELECT COUNT(*) FROM review_open_nonces")[0][0]
-    r = _start(c)
+    r = _start(c, relay)
     assert r.status_code == 429 and "Too many" in r.text and r.headers["cache-control"] == "no-store"
     assert _q(db, "SELECT COUNT(*) FROM review_open_nonces")[0][0] == n
     # an older release's 7-day chat code doesn't count against the start limits and still works
@@ -700,8 +708,11 @@ def test_review_start_off_or_unavailable_shows_a_plain_page(backend, relay_dir, 
         approvals.set_value(db, "phone_approvals", "off")
     if case == "no_keys":
         monkeypatch.setattr(approvals, "FSA_PUBLIC_KEYS", {"fsa-1": None, "fsa-2": None})
-    r = _start(_phone_client(db))
+    r = _start(_phone_client(db), key)   # a good ticket too: the off check comes first
     assert r.status_code == 200 and "Phone review is off" in r.text and "flowstate approvals phone on" in r.text
+    # (task 38) tunnel users are pointed to their tunnel page and the shortcut, the relay is one option
+    assert "/review/tunnel</code> and sign in with the owner passphrase" in r.text
+    assert "FlowState review shortcut" in r.text and "one more option" in r.text
     assert "location" not in r.headers and "<script" not in r.text
     assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
     assert r.headers["cache-control"] == "no-store" and r.headers["referrer-policy"] == "no-referrer"
@@ -781,7 +792,7 @@ def test_stdio_still_gets_the_local_link(backend, relay_dir):
     pile(db, 1)
     assert "http://127.0.0.1:" in call(S, "start_here", {"project": "Alpha"})
     out = call(S, "manage_review", {"action": "walk"}, app="grok")
-    assert out["review_page"].startswith("http://127.0.0.1:") and "review-page` there" not in out["how_to_decide"]
+    assert out["review_page"].startswith("http://127.0.0.1:") and waiting.ELSEWHERE not in out["how_to_decide"]
 
 
 @pytest.mark.parametrize("peer", ["127.0.0.1", "::1"])
@@ -810,9 +821,10 @@ def test_lan_from_another_computer_gets_no_local_link(backend, relay_dir, no_pag
         assert "127.0.0.1" not in json.dumps(answer) and "flowstatemcp.com" not in json.dumps(answer)
     line = next(l for l in brief.splitlines() if l.startswith("Review queue:"))
     assert line.endswith('in this chat when they ask (manage_review action="walk") or on the computer '
-                         'where FlowState runs (`flowstate review-page` there).'), line
+                         'where FlowState runs (the FlowState review shortcut, or `flowstate review-page`), '
+                         'or on its tunnel review page if it has one.'), line
     assert "review_page" not in walk and "phone" not in walk and walk["note"] == waiting.NOT_SHOWN
-    assert "`flowstate review-page` there" in walk["how_to_decide"]
+    assert waiting.ELSEWHERE in walk["how_to_decide"]
     assert [int(i.split(" ")[0][1:]) for i in listing["items"]] == items   # one line per item
     assert no_page == []                                                 # the page wasn't started
     assert log(db) == []
@@ -827,7 +839,7 @@ def test_relay_gets_the_phone_link_never_the_local_one(backend, relay, no_page, 
     for answer in (brief, walk, listing):
         assert "127.0.0.1" not in json.dumps(answer)
     assert "on their phone: https://flowstatemcp.com/review/testbox, in this chat" in brief
-    assert "(`flowstate review-page` there)" in brief and "?n=" not in brief
+    assert waiting.ELSEWHERE in brief and "?n=" not in brief
     assert walk["phone"] == "https://flowstatemcp.com/review/testbox" and "review_page" not in walk
     assert "relay" in walk["how_to_decide"] and walk["phone"] in walk["how_to_decide"]
     assert no_page == [] and log(db) == []

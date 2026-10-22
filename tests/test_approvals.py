@@ -173,7 +173,8 @@ def test_on_turning_review_off_waits_for_the_user(on):
                                     "user_request": "User: turn review off"})
     item = out["setting_requested"]
     assert out["status"] == "waiting for the user"
-    assert out["next"] == f"Waiting for the user: ask them to run `flowstate approve {item}` in their terminal."
+    assert out["next"] == (f"Waiting for the user: ask them to open the FlowState review shortcut on their "
+                           f"desktop and approve it there (or run `flowstate approve {item}` in a terminal).")
     assert review_mode.get(db, 1)["mode"] == "auto_only"
     again = call(S, "manage_review", {"action": "approve", "project": "Alpha", "item_id": item,
                                       "user_request": "User: yes really, approve it"}, app="Claude Desktop")
@@ -274,8 +275,9 @@ def test_no_popup_unless_declared_allowlisted_and_not_claude_ai(on, app, answer)
     seen = []
     out = call(S, "manage_memory", DEL_TODO, app=app, answer=answer, seen=seen)
     assert seen == [] and out["status"] == "waiting for the user"
-    assert out["next"] == (f"Waiting for the user: ask them to run `flowstate approve "
-                           f"{out['delete_requested']}` in their terminal.")
+    assert out["next"] == (f"Waiting for the user: ask them to open the FlowState review shortcut on their "
+                           f"desktop and approve it there (or run `flowstate approve "
+                           f"{out['delete_requested']}` in a terminal).")
     assert _q(db, "SELECT COUNT(*) FROM todos WHERE id = 1") == [(1,)]
 
 

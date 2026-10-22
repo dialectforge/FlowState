@@ -21,8 +21,13 @@ Three ways, none of which shows anything unless the user asks (or has approvals 
   3. Relay users: a bookmarkable phone link to the whole list, https://flowstatemcp.com/review/
      <handle> (approvals.review_link, review_phone.py; no code in the chat).
 
+Plus two the user opens themselves: the "FlowState review" desktop shortcut setup makes
+(`flowstate review-page`), and, for users with their own tunnel, https://<tunnel>/review/tunnel
+behind the owner passphrase (review_tunnel.py). ELSEWHERE names both for apps elsewhere.
+
 Decisions made in 1 and 3 go through the same user-only path as the popup and the phone page
-(popup.as_user) and are all logged in approval_log (path "chat" / "phone").
+(popup.as_user) and are all logged in approval_log (path "chat" / "phone"; the tunnel page:
+"tunnel page").
 """
 
 import asyncio
@@ -197,7 +202,8 @@ def where_line(db_path: Path) -> str:
 
 
 # for apps on another computer (relay, public, LAN from elsewhere), instead of a 127.0.0.1 link
-ELSEWHERE = "on the computer where FlowState runs (`flowstate review-page` there)"
+ELSEWHERE = ("on the computer where FlowState runs (the FlowState review shortcut, or "
+             "`flowstate review-page`), or on its tunnel review page if it has one")
 
 
 # ---------------------------------------------------------------- 1. the chat walk

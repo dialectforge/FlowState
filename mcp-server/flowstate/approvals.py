@@ -19,8 +19,10 @@ can pass the user's OK along: only a human click or keypress decides, in this or
              (approve_page.py checks it here with FSA_PUBLIC_KEYS). The phone review list
              of everything waiting (review_phone.py) takes the same grants with action
              open_review and item 0; its bookmarkable link (review_link) has no code in it:
-             the site sends the browser to /review/start here, which makes a fresh one-use
-             code (start_nonce) and sends it back to the site to be signed.
+             the site signs the owner in and sends the browser to /review/start?t=<ticket>
+             here (a grant with action start_review, verify_start_ticket), which makes a
+             fresh one-use code (start_nonce, limited per site user) and sends it back to
+             the site to be signed.
   3. terminal `flowstate approve <id>` asks for the user's `y` on their own terminal.
 
 Turning approvals on needs nothing; turning them off needs the user's terminal
@@ -57,10 +59,14 @@ CLOCK_SKEW = 60
 NONCE_DAYS = 7               # the phone link's one-use code, then a fresh one is made
 START_MINUTES = 15           # a review-list code made by /review/start (review_phone.py)
 START_OPEN = 10              # at most this many of those open at once (the oldest expire)
-START_PER_HOUR = 30          # and at most this many made per hour (then a plain 429 page)
+START_PER_HOUR = 30          # and at most this many made per hour per site user (then 429)
+# All users together, as a backstop only: every code needs a ticket only the site can sign, so
+# this can only be reached with a leaked signing key, and then it still keeps the table small.
+START_PER_HOUR_ALL = 120
 SITE = "https://flowstatemcp.com"
 ACTION = "approve_review"
 REVIEW_ACTION = "open_review"   # the phone review list (review_phone.py): item 0
+START_ACTION = "start_review"   # the site's ticket for /review/start (review_phone.py): item 0
 USER_ONLY_KINDS = ("delete", "setting", "source")
 
 # The flowstatemcp.com approval-grant public keys (ES256 / P-256 JWKs), pinned per release:
@@ -75,6 +81,10 @@ FSA_PUBLIC_KEYS: dict = {
 }
 
 _NONCE_RE = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
+_TICKET_NONCE_RE = re.compile(r"^[A-Za-z0-9_-]{22,43}$")
+# a compact ES256 JWS: header.payload.signature (64 bytes = 86 base64url characters); checked
+# before any crypto so a junk request costs nothing
+TICKET_RE = re.compile(r"^[A-Za-z0-9_-]{16,512}\.[A-Za-z0-9_-]{16,2048}\.[A-Za-z0-9_-]{86}$")
 
 
 class ApprovalError(Exception):
@@ -310,23 +320,70 @@ def review_link(db_path: Path) -> Optional[str]:
     return f"{SITE}/review/{handle}" if handle else None
 
 
-def start_nonce(db_path: Path) -> Optional[str]:
-    """A fresh one-use code for the review list, made by /review/start (review_phone.py):
-    43 url-safe characters, valid START_MINUTES. At most START_OPEN open at once (the oldest
-    are expired) and START_PER_HOUR made per hour (else ApprovalError rate_limited). Codes
-    made here are told apart from the 7-day codes older releases put in chat links by their
-    lifetime (under a day). None if the database has no review_open_nonces table."""
+def _start_ready(conn) -> bool:
+    """review_open_nonces exists with the ticket columns (021 and 022)."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(review_open_nonces)")}
+    return {"nonce", "sub", "ticket"} <= cols
+
+
+def ticket_key(ticket_nonce: str) -> str:
+    """What is stored for a start ticket: a hash of its nonce, never the ticket."""
+    return hashlib.sha256(("start_review:" + ticket_nonce).encode()).hexdigest()
+
+
+def verify_start_ticket(db_path: Path, ticket: str, handle: Optional[str] = None,
+                        now: Optional[datetime] = None, keys: Optional[dict] = None) -> dict:
+    """Check the site's ticket for /review/start: the same ES256 grant checks as every phone
+    grant (pinned key, signature, times with the 5-minute lifetime and clock skew, issuer,
+    audience and handle from this device's relay.json, action start_review, item 0), plus a
+    22-43 character nonce not used here before. Returns its claims; raises ApprovalError.
+    Nothing is stored: start_nonce remembers the nonce when it makes the code."""
+    if not isinstance(ticket, str) or not TICKET_RE.match(ticket):
+        raise ApprovalError("bad_grant", "The link is malformed.")
+    claims = _claims(ticket, handle, now, keys, START_ACTION, 0)
+    if not _TICKET_NONCE_RE.match(claims["nonce"]):
+        raise ApprovalError("bad_grant", "The approval grant's code is malformed.")
     conn = _conn(db_path)
     try:
-        if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
-                            "AND name='review_open_nonces'").fetchone():
+        if _start_ready(conn) and conn.execute(
+                "SELECT 1 FROM review_open_nonces WHERE ticket = ?",
+                (ticket_key(claims["nonce"]),)).fetchone():
+            raise ApprovalError("ticket_used", "This link was already used.")
+    finally:
+        conn.close()
+    return claims
+
+
+def start_nonce(db_path: Path, sub: str, ticket_nonce: Optional[str] = None) -> Optional[str]:
+    """A fresh one-use code for the review list, made by /review/start (review_phone.py) for
+    the site user `sub` of a verified start ticket: 43 url-safe characters, valid
+    START_MINUTES. At most START_OPEN open at once (the oldest are expired), START_PER_HOUR
+    made per hour per user and START_PER_HOUR_ALL for everyone (else ApprovalError
+    rate_limited). `ticket_nonce`: the ticket's nonce, remembered (hashed) with the code, so
+    each ticket makes at most one code (a replay raises ticket_used and counts nothing).
+    Codes made here are told apart from the 7-day codes older releases put in chat links by
+    their lifetime (under a day). None if the database has no review_open_nonces table with
+    the 022 columns."""
+    if not isinstance(sub, str) or not sub:
+        raise ApprovalError("bad_grant", "The link doesn't say who signed in.")
+    conn = _conn(db_path)
+    try:
+        if not _start_ready(conn):
             return None
         now = _ts()
+        hour_ago = _ts(_now() - timedelta(hours=1))
         short = "julianday(expires_at) - julianday(created_at) < 1"
+        key = ticket_key(ticket_nonce) if ticket_nonce else None
         conn.execute("BEGIN IMMEDIATE")
-        made = conn.execute(f"SELECT COUNT(*) FROM review_open_nonces WHERE {short} AND "
-                            "created_at > ?", (_ts(_now() - timedelta(hours=1)),)).fetchone()[0]
-        if made >= START_PER_HOUR:
+        if key and conn.execute("SELECT 1 FROM review_open_nonces WHERE ticket = ?",
+                                (key,)).fetchone():
+            conn.rollback()
+            raise ApprovalError("ticket_used", "This link was already used.")
+        mine = conn.execute(f"SELECT COUNT(*) FROM review_open_nonces WHERE {short} AND sub = ? "
+                            "AND created_at > ?", (sub, hour_ago)).fetchone()[0]
+        everyone = conn.execute(f"SELECT COUNT(*) FROM review_open_nonces WHERE {short} AND "
+                                "created_at > ?", (hour_ago,)).fetchone()[0]
+        if mine >= START_PER_HOUR or everyone >= START_PER_HOUR_ALL:
             conn.rollback()
             raise ApprovalError("rate_limited", "Too many review links were opened in the last "
                                                 "hour. Try again later.")
@@ -336,9 +393,10 @@ def start_nonce(db_path: Path) -> Optional[str]:
             conn.execute("UPDATE review_open_nonces SET expires_at = ? WHERE nonce = ?",
                          (now, row["nonce"]))
         nonce = secrets.token_urlsafe(32)   # 43 url-safe characters, never reused
-        conn.execute("INSERT INTO review_open_nonces (nonce, action, created_at, expires_at) "
-                     "VALUES (?, ?, ?, ?)", (nonce, REVIEW_ACTION, now,
-                                             _ts(_now() + timedelta(minutes=START_MINUTES))))
+        conn.execute("INSERT INTO review_open_nonces (nonce, action, created_at, expires_at, sub, "
+                     "ticket) VALUES (?, ?, ?, ?, ?, ?)",
+                     (nonce, REVIEW_ACTION, now, _ts(_now() + timedelta(minutes=START_MINUTES)),
+                      sub[:200], key))
         conn.commit()
         return nonce
     finally:
@@ -365,7 +423,14 @@ def ask_line(db_path: Path, item_id: int, what: str = "approve it") -> str:
     link = phone_link(db_path, item_id)
     if link:
         return f"Waiting for the user: ask them to {what} on their phone: {link}"
-    return f"Waiting for the user: ask them to run `flowstate approve {item_id}` in their terminal."
+    from .review_tunnel import page_url
+    tunnel = page_url()
+    if tunnel:   # this app came in through the user's own tunnel: its review page exists
+        return (f"Waiting for the user: ask them to {what} on their tunnel review page ({tunnel}) "
+                f"or with the FlowState review shortcut on their desktop (or run "
+                f"`flowstate approve {item_id}` in a terminal).")
+    return (f"Waiting for the user: ask them to open the FlowState review shortcut on their "
+            f"desktop and {what} there (or run `flowstate approve {item_id}` in a terminal).")
 
 
 def describe(item: dict, project: str, db_path: Optional[Path] = None) -> str:
@@ -441,15 +506,15 @@ def log_decision(db_path: Path, item: dict, path: str, client: str, decision: st
 def path_of(client: str) -> str:
     """How a user-only decision was made, from the decider's label."""
     c = (client or "").lower()
-    for p in ("popup", "phone", "review-page", "chat"):
+    for p in ("popup", "phone", "review-page", "tunnel page", "chat"):
         if c.startswith(p):
             return p.replace("-", " ")
     return "terminal"
 
 
 # Paths where every decision is logged, not only user-only items': the user went through the
-# queue themselves (waiting.py's chat walk, review_phone.py's phone list).
-LOG_EVERY_DECISION = ("chat", "phone")
+# queue themselves (waiting.py's chat walk, review_phone.py's phone list, review_tunnel.py).
+LOG_EVERY_DECISION = ("chat", "phone", "tunnel page")
 
 
 def logs_every_decision(client: str, agent: bool) -> bool:

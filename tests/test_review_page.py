@@ -95,7 +95,37 @@ def test_mode_and_pause_from_the_page(page):
 
 def test_never_bound_beyond_loopback():
     import inspect
-    from flowstate import review_page, server
+    from flowstate import review_page, server, waiting
     assert review_page.HOST == "127.0.0.1"
-    assert "host=HOST" in inspect.getsource(review_page.serve)
+    assert "_bind(port)" in inspect.getsource(review_page.serve)          # waiting._bind:
+    assert "s.bind((HOST, p))" in inspect.getsource(waiting._bind)       # 127.0.0.1 only
     assert "review_page" not in inspect.getsource(server.create_http_app)
+
+
+# ---------------------------------------------------------------- (task 38) the shortcut's command
+def test_review_page_command_reuses_the_page_already_open_for_this_database(backend, seeded_db, monkeypatch):
+    import socket
+    import webbrowser
+    import uvicorn
+    from flowstate import review_page, waiting
+    opened, ran = [], []
+    monkeypatch.setattr(webbrowser, "open", lambda url: opened.append(url))
+    monkeypatch.setattr(uvicorn.Server, "run", lambda self, sockets=None: ran.append(sockets))
+    busy = socket.socket()
+    busy.bind(("127.0.0.1", 0))
+    busy.listen(1)
+    port = busy.getsockname()[1]
+    try:
+        # a FlowState here already serves this database's page on that port: open it, start nothing
+        monkeypatch.setattr(waiting, "_ping", lambda p, db: p == port)
+        review_page.serve(seeded_db, port, open_browser=True)
+        assert opened == [f"http://127.0.0.1:{port}/"] and ran == []
+        # something else holds the port: the page starts on another free port, 127.0.0.1 only
+        monkeypatch.setattr(waiting, "_ping", lambda p, db: False)
+        review_page.serve(seeded_db, port, open_browser=False)
+        assert len(ran) == 1
+        host, other = ran[0][0].getsockname()
+        assert host == "127.0.0.1" and other != port
+        ran[0][0].close()
+    finally:
+        busy.close()

@@ -3,16 +3,28 @@ agent reaches at https://<handle>.fsmcp.com (TLS ends on this computer).
 
 The link FlowState gives is the bookmarkable https://flowstatemcp.com/review/<handle>
 (approvals.review_link; no code in it). The site signs the user in, checks the device is on
-their account and sends the browser (303) to /review/start here, which makes a fresh one-use
-code and sends the browser (303) back to https://flowstatemcp.com/review/<handle>?n=<code>,
-with the handle from this device's relay.json, never from the request. There the user taps
-Continue, and only then does the site sign a grant and send the browser (303) to
-/review#g=<grant>: the same ES256 grant as the approve page, with action "open_review" and
+their account and sends the browser (303) to /review/start?t=<ticket> here. The ticket is the
+same ES256 grant as the approve page, with action "start_review", item 0, the site user's id
+in `sub`, a fresh nonce and a 5-minute life (approvals.verify_start_ticket). With a good
+ticket this device makes a fresh one-use code and sends the browser (303) back to
+https://flowstatemcp.com/review/<handle>?n=<code>, with the handle from this device's
+relay.json, never from the request. There the user taps Continue, and only then does the
+site sign a grant and send the browser (303) to /review#g=<grant>: action "open_review",
 item 0 (approvals.verify_review_grant). The fragment never reaches a server or a log.
 
-  GET  /review/start     no sign-in here (a code is useless without a grant only the site
-                         signs, for the signed-in owner); 15-minute code, at most 10 open and
-                         30 an hour (then 429); phone review off or unavailable: a plain page
+  GET  /review/start     ?t=<ticket> from the site (no other sign-in here). No, bad, expired
+                         or already used ticket: a plain page (400 malformed, else 403) saying
+                         to open the "Waiting for you" link again; no code, nothing counted,
+                         the ticket never echoed or logged. Good ticket: a 15-minute code, at
+                         most 10 open, 30 an hour per site user and 120 for everyone (then
+                         429); each ticket makes one code. Phone review off or unavailable
+                         (checked first): a plain page
+
+Compatibility. Tickets came with flowstatemcp.com's matching change, which must be deployed
+first: a site without it sends no ticket and this device refuses with the plain page (phone
+review is unavailable until the site is updated). Older devices ignore ?t= (their
+/review/start reads no query) and work as before. Chat links with 7-day codes and the
+per-item /approve links don't use /review/start and are unchanged.
   GET  /review           an empty shell (no data); its script reads #g=, removes it from the
                          address bar at once (history.replaceState) and posts it
   POST /review/open      checks the grant and uses up its one-use code; starts a session:
@@ -205,11 +217,24 @@ def _note_page(title: str, text: str) -> str:
 
 
 OFF_PAGE = _note_page("Phone review is off", "Phone review is turned off on this computer, or "
-                      "this FlowState can't offer it (no relay set up). To turn it on, run "
-                      "<code>flowstate approvals phone on</code> on the computer where FlowState "
-                      "runs. You can still review there: <code>flowstate review-page</code>.")
+                      "this FlowState can't offer it. You can still review what's waiting: on "
+                      "the computer where FlowState runs, open the FlowState review shortcut on "
+                      "the desktop (or run <code>flowstate review-page</code>). If you reach "
+                      "FlowState through your own tunnel, open "
+                      "<code>https://&lt;your tunnel&gt;/review/tunnel</code> and sign in with "
+                      "the owner passphrase. Phone review through flowstatemcp.com is one more "
+                      "option: it needs the relay (<code>flowstate relay enroll</code>) and "
+                      "<code>flowstate approvals phone on</code> on that computer.")
 BUSY_PAGE = _note_page("Too many tries", "This list was opened too many times in the last hour. "
                        "Try again later.")
+AGAIN = "Open the “Waiting for you” link from flowstatemcp.com again."
+TICKET_PAGES = {   # no ticket, or one that can't be used: never echoed, nothing counted
+    "missing": _note_page("Open the link again", "This page needs the sign-in from "
+                          "flowstatemcp.com, and it didn't come with this visit. " + AGAIN),
+    "bad": _note_page("Open the link again", "This link isn't valid for this FlowState. " + AGAIN),
+    "expired": _note_page("This link expired", "This link expired after 5 minutes. " + AGAIN),
+    "used": _note_page("This link was already used", "Each link opens your list once. " + AGAIN),
+}
 
 
 def _total(db_path) -> int:
@@ -242,10 +267,21 @@ def routes(db_path_fn):
         handle = await asyncio.to_thread(approvals.review_handle, db)
         if not handle:
             return HTMLResponse(OFF_PAGE, headers=HEADERS)
+        ticket = request.query_params.get("t")
+        if not ticket:
+            return HTMLResponse(TICKET_PAGES["missing"], status_code=403, headers=HEADERS)
+        if not approvals.TICKET_RE.match(ticket):   # cheap: before any crypto or database
+            return HTMLResponse(TICKET_PAGES["bad"], status_code=400, headers=HEADERS)
         try:
-            nonce = await asyncio.to_thread(approvals.start_nonce, db)
-        except approvals.ApprovalError:
-            return HTMLResponse(BUSY_PAGE, status_code=429, headers={**HEADERS, "Retry-After": "3600"})
+            claims = await asyncio.to_thread(approvals.verify_start_ticket, db, ticket, handle)
+            nonce = await asyncio.to_thread(approvals.start_nonce, db, claims["sub"],
+                                            claims["nonce"])
+        except approvals.ApprovalError as e:
+            if e.code == "rate_limited":
+                return HTMLResponse(BUSY_PAGE, status_code=429,
+                                    headers={**HEADERS, "Retry-After": "3600"})
+            page = {"grant_expired": "expired", "ticket_used": "used"}.get(e.code, "bad")
+            return HTMLResponse(TICKET_PAGES[page], status_code=403, headers=HEADERS)
         if not nonce:
             return HTMLResponse(OFF_PAGE, headers=HEADERS)
         return RedirectResponse(f"{approvals.SITE}/review/{handle}?n={nonce}", status_code=303,

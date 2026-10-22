@@ -612,6 +612,9 @@ LISTENER_KEY = "flowstate.listener"   # ASGI scope key Gate sets: lan / public /
 # ASGI scope key Gate sets: True only for the LAN listener with a loopback socket peer (an app
 # on this computer); the 127.0.0.1 review link is offered only then (waiting.links)
 LOCAL_KEY = "flowstate.on_this_computer"
+# ASGI scope key Gate sets: the caller's address as Gate's rate limits see it (review_tunnel.py
+# limits passphrase tries per address with it)
+CLIENT_IP_KEY = "flowstate.client_ip"
 
 
 def is_loopback(peer) -> bool:
@@ -673,6 +676,7 @@ class Gate:
         t0 = time.monotonic()
         headers = dict(scope.get("headers") or [])
         ip = self._ip(scope, headers)
+        scope[CLIENT_IP_KEY] = ip
         path = scope.get("path", "")
         who = "-"
         status = {"code": 0}

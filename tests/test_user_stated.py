@@ -246,8 +246,9 @@ def test_on_popup_no_leaves_it_and_other_apps_get_the_terminal_line(on):
     assert meta(db, "learning", rid)[0] == "ai_inferred"
     other = relabel(S, rid, "Claude Desktop")                  # not a popup app
     assert other["confirm_requested"] == item and other["status"] == "waiting for the user"
-    assert other["next"] == f"Waiting for the user: ask them to run `flowstate approve {item}` " \
-                            f"in their terminal."
+    assert other["next"] == f"Waiting for the user: ask them to open the FlowState review shortcut " \
+                            f"on their desktop and approve it there (or run `flowstate approve {item}` " \
+                            f"in a terminal)."
     agent = call(S, "manage_review", {"action": "approve", "project": "Alpha", "item_id": item,
                                       "user_request": "User: yes, I said that"}, app="Windsurf")
     assert agent["status"] == "waiting for the user" and meta(db, "learning", rid)[0] == "ai_inferred"

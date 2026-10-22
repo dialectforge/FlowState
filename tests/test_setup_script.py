@@ -154,3 +154,79 @@ def test_windows_store_claude_path(home):
     assert places.config_path("claude-desktop") == store / "claude_desktop_config.json"
     plain = setup.Places(home / "nostore", system="Windows")
     assert plain.config_path("claude-desktop").parts[-3:] == ("Roaming", "Claude", "claude_desktop_config.json")
+
+
+# ---------------------------------------------------------------- (task 38) desktop shortcut
+def test_places_desktop_is_under_the_fake_home(home):
+    for system in ("Windows", "Darwin", "Linux"):
+        assert setup.Places(home, system=system).desktop == home / "Desktop"
+
+
+def test_shortcut_is_made_once_and_kept_up_to_date(home):
+    db = home / "data" / "fs.db"
+    desk = home / "Desktop"
+    desk.mkdir()
+    r = run_setup(home, "--clients", "none", "--db", str(db), "--dry-run")
+    assert r.returncode == 0 and "FlowState review" in r.stdout and "would be created (dry run)" in r.stdout
+    assert not any(desk.iterdir())
+    r = run_setup(home, "--clients", "none", "--db", str(db))
+    assert r.returncode == 0, r.stdout + r.stderr
+    places = setup.Places(home)
+    path, text, _x = setup.shortcut_file(places, Path(sys.executable), db.resolve())
+    assert path.parent == desk and path.read_bytes().decode("utf-8") == text
+    assert f"[shortcut] {path}: created" in r.stdout
+    assert setup.SHORTCUT_MARK in text and "review-page" in text and str(db.resolve()) in text
+    assert str(setup.SERVER_DIR) in text and str(sys.executable) in text
+    r = run_setup(home, "--clients", "none", "--db", str(db))
+    assert f"[shortcut] {path}: unchanged" in r.stdout
+    other = home / "data" / "other.db"
+    r = run_setup(home, "--clients", "none", "--db", str(other))
+    assert f"[shortcut] {path}: updated" in r.stdout and str(other.resolve()) in path.read_text(encoding="utf-8")
+    assert [p.name for p in desk.iterdir()] == [path.name]
+
+
+def test_shortcut_never_replaces_the_users_own_file(home):
+    desk = home / "Desktop"
+    desk.mkdir()
+    places = setup.Places(home)
+    path, _t, _x = setup.shortcut_file(places, Path(sys.executable), home / "fs.db")
+    path.write_text("my own script\n", encoding="utf-8")
+    r = run_setup(home, "--clients", "none", "--db", str(home / "fs.db"))
+    assert r.returncode == 0 and "left alone" in r.stdout
+    assert path.read_text(encoding="utf-8") == "my own script\n"
+
+
+def test_no_desktop_folder_skips_with_a_line(home):
+    r = run_setup(home, "--clients", "none", "--db", str(home / "fs.db"))
+    assert r.returncode == 0 and "no desktop folder at" in r.stdout and "skipped" in r.stdout
+    assert not (home / "Desktop").exists()
+
+
+@pytest.mark.parametrize("system,name", [("Windows", "FlowState review.cmd"),
+                                         ("Darwin", "FlowState review.command"),
+                                         ("Linux", "flowstate-review.desktop")])
+def test_shortcut_per_os(home, system, name):
+    (home / "Desktop").mkdir()
+    places = setup.Places(home, system=system)
+    py = home / "py 100% \"odd\" $dir's" / "python"
+    db = home / "data's 50%" / "fs.db"
+    out = setup.make_shortcut(places, py, db, dry=False)
+    path = home / "Desktop" / name
+    assert out == f"{path}: created" and path.exists()
+    raw = path.read_bytes().decode("utf-8")
+    assert setup.SHORTCUT_MARK in raw
+    if system == "Windows":
+        assert "\r\n" in raw and raw.startswith("@echo off")
+        assert f'set "FLOWSTATE_DB={str(db).replace("%", "%%")}"' in raw
+        assert f'"{str(py).replace("%", "%%")}" -m flowstate review-page' in raw
+    elif system == "Darwin":
+        assert raw.startswith("#!/bin/sh\n") and "exec '" in raw and "'\\''s" in raw
+        # the quoting round-trips through a POSIX shell parser
+        import shlex
+        line = next(l for l in raw.splitlines() if l.startswith("exec "))
+        assert shlex.split(line) == ["exec", str(py), "-m", "flowstate", "review-page"]
+    else:
+        assert raw.startswith("[Desktop Entry]\n") and "Terminal=true" in raw
+        exec_ = next(l for l in raw.splitlines() if l.startswith("Exec="))
+        assert "%%" in exec_ and '\\"odd\\"' in exec_ and "\\$dir" in exec_
+    assert setup.make_shortcut(places, py, db, dry=False) == f"{path}: unchanged"

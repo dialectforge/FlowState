@@ -20,7 +20,9 @@ What it does, in order (safe to re-run; it only changes what is out of date):
   6. optionally (--schedule-backups) adds a nightly local backup to the OS scheduler
   7. optionally (--install-skill, or asked on a terminal) installs the "flowstate"
      Agent Skill into ~/.agents/skills and ~/.claude/skills, backing up an existing copy
-  8. optionally (--verify) starts the server the way the client will, and calls
+  8. puts a "FlowState review" shortcut on the desktop that opens the review page
+     (`flowstate review-page`, 127.0.0.1 only); a file of that name it didn't make is left alone
+  9. optionally (--verify) starts the server the way the client will, and calls
      start_here over MCP to prove it answers
 
 Clients: claude-desktop, cursor, windsurf, claude-code, codex, grok, or any JSON
@@ -79,6 +81,21 @@ class Places:
     @property
     def localappdata(self) -> Path:
         return self._win("LOCALAPPDATA", "AppData", "Local")
+
+    @property
+    def desktop(self) -> Path:
+        """The desktop folder; with --home always <home>/Desktop (tests never see the real one).
+        Windows asks the shell, which knows a desktop moved to OneDrive."""
+        if not self.fake and self.system == "Windows":
+            try:
+                import ctypes
+                buf = ctypes.create_unicode_buffer(1024)
+                # CSIDL_DESKTOPDIRECTORY = 0x10
+                if ctypes.windll.shell32.SHGetFolderPathW(None, 0x10, None, 0, buf) == 0 and buf.value:
+                    return Path(buf.value)
+            except (AttributeError, OSError):
+                pass
+        return self.home / "Desktop"
 
     def default_db(self) -> Path:
         if not self.fake:
@@ -299,6 +316,74 @@ def setup_skill(a, places: "Places") -> bool:
     say("[skill] Claude apps / ChatGPT: upload the skills/flowstate folder as a ZIP in their "
         "Skills settings")
     return True
+
+
+# ------------------------------------------------------------------ desktop shortcut
+SHORTCUT_MARK = "FlowState review shortcut (made by setup_flowstate.py; setup may replace this file)"
+
+
+def shortcut_file(places: "Places", py: Path, db: Path) -> tuple:
+    """(path, text, executable) of the desktop shortcut that runs `flowstate review-page`
+    with this setup's Python and database. Windows: a .cmd file (no PowerShell or COM needed);
+    macOS: a .command file; Linux: a .desktop launcher that opens a terminal."""
+    env = {"FLOWSTATE_DB": str(db), "PYTHONPATH": str(SERVER_DIR)}
+    if places.system == "Windows":
+        def q(v) -> str:   # cmd expands %...%
+            return str(v).replace("%", "%%")
+        lines = ["@echo off", f"rem {SHORTCUT_MARK}", "chcp 65001 >nul"]
+        lines += [f'set "{k}={q(v)}"' for k, v in env.items()]
+        lines += [f'"{q(py)}" -m flowstate review-page', "if errorlevel 1 pause", ""]
+        return places.desktop / "FlowState review.cmd", "\r\n".join(lines), False
+    if places.system == "Darwin":
+        def q(v) -> str:   # one single-quoted shell word
+            return "'" + str(v).replace("'", "'\\''") + "'"
+        lines = ["#!/bin/sh", f"# {SHORTCUT_MARK}"]
+        lines += [f"export {k}={q(v)}" for k, v in env.items()]
+        lines += [f"exec {q(py)} -m flowstate review-page", ""]
+        return places.desktop / "FlowState review.command", "\n".join(lines), True
+
+    def q(v) -> str:   # a quoted argument in a .desktop Exec line
+        v = str(v).replace("\\", "\\\\")
+        for c in '"`$':
+            v = v.replace(c, "\\" + c)
+        return '"' + v.replace("%", "%%") + '"'
+    exec_ = "env " + " ".join(q(f"{k}={v}") for k, v in env.items()) + \
+        f" {q(py)} -m flowstate review-page"
+    lines = ["[Desktop Entry]", f"# {SHORTCUT_MARK}", "Type=Application", "Name=FlowState review",
+             "Comment=See and decide what's waiting for you in FlowState", f"Exec={exec_}",
+             "Terminal=true", ""]
+    return places.desktop / "flowstate-review.desktop", "\n".join(lines), True
+
+
+def make_shortcut(places: "Places", py: Path, db: Path, dry: bool) -> str:
+    path, text, executable = shortcut_file(places, py, db)
+    if not path.parent.is_dir():
+        return (f"no desktop folder at {path.parent}; skipped (open the page with "
+                f"`flowstate review-page`)")
+    action = "created"
+    if path.exists():
+        try:
+            old = path.read_bytes().decode("utf-8")
+        except (OSError, UnicodeDecodeError):
+            old = ""
+        if SHORTCUT_MARK not in old:
+            return f"{path}: left alone (a file of that name exists that setup didn't make)"
+        if old == text:
+            return f"{path}: unchanged"
+        action = "updated"
+    if dry:
+        return f"{path}: would be {action} (dry run)"
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
+    if executable:
+        os.chmod(path, 0o755)
+    return f"{path}: {action}"
+
+
+def setup_shortcut(places: "Places", py: Path, db: Path, dry: bool) -> None:
+    say(f"[shortcut] {make_shortcut(places, py, db, dry)}")
+    if places.system == "Linux":
+        say("[shortcut] if your desktop asks, right-click it and choose \"Allow Launching\"")
 
 
 # ------------------------------------------------------------------ config edits
@@ -552,6 +637,7 @@ def main(argv=None) -> int:
             "`flowstate schedule-backups` later)")
 
     failures += not setup_skill(a, places)
+    setup_shortcut(places, py, db, a.dry_run)
 
     if a.verify and not a.dry_run:
         ok, detail = verify(server_entry(py, db, "generic"))

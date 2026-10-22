@@ -69,6 +69,10 @@ def create_http_app(token: Optional[str], path: str = "/mcp", db_path: Optional[
         routes += prm + [Route("/.well-known/oauth-protected-resource", prm[0].endpoint,
                                methods=["GET", "OPTIONS"])]
         routes += RA.consent_routes(provider)
+        if not relay:   # the owner's review page behind the passphrase (review_tunnel.py);
+            # relay users have the signed-in phone list, LAN users `flowstate review-page`
+            from .review_tunnel import routes as tunnel_routes
+            routes += tunnel_routes(lambda: S.backend.db_path, store, public_url)
         rmd = str(build_resource_metadata_url(AnyHttpUrl(resource)))
         allowed_hosts = {urlparse_host(public_url), "127.0.0.1", "localhost"}
     # per-app LAN keys (app_keys.py) on the LAN listener only, never on the public one
