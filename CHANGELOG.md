@@ -14,6 +14,8 @@
   review page on your computer or the "FlowState review" shortcut on your desktop, (with the
   relay) on your phone, or (with your own tunnel) on a passphrase page at
   `https://<tunnel>/review/tunnel`. Nothing pops up unless you ask.
+- Fewer review items: a session that saved nothing new (only reads, undo or review
+  decisions) isn't queued, and the summaries that are say plainly what was saved.
 - Four bugs fixed: timed-out writes, pre-restore backups pruned the same day, two windows of
   one app sharing a session, and undo that couldn't take back a new record or refused a
   whole change over one row. Then 14 more found by an end-to-end mock-project test (below).
@@ -238,6 +240,24 @@
   the list on a reachable computer (approving one item from its own link still needs that
   item's code from your computer). With your computer off or the relay agent down, the phone
   link can't open the list.
+
+### Fewer session summaries to review
+- **Housekeeping sessions aren't queued.** A session that saved nothing new (only reads,
+  briefs and searches, undo, review decisions, a handoff pickup or todo claims) no longer puts
+  a session summary in your review queue; one undo run used to leave a dozen. The session still
+  closes and keeps a plain record (`[auto summary, housekeeping] ...`), which the brief's "Last
+  session" line skips. A session with any other write (a learning, decision, change, problem,
+  todo, link, rule, review-mode change, or anything FlowState doesn't know) is queued as before.
+  Items already waiting are left as they are.
+- **Plainer summaries.** `Cursor session in FlowState: saved 2 learnings and 1 todo.` instead
+  of `Cursor, 3 calls over 12 min (closed after idle timeout). Logged: ...`. Why the session
+  closed is still kept with the session.
+- **"Keep this session summary?"** The phone list, the review page and the tunnel page ask
+  that, with Keep / Don't keep, and say what each does (Keep saves it as the session's record;
+  Don't keep marks it rejected and nothing is deleted). They show the text without the
+  `[auto-captured, needs review]` tag; the chat list and popup say the same.
+- A long session no longer loses its saves from its activity list to later reads, and a
+  review-mode change is recorded as a write in the session's activity, not as a read.
 
 ### Clean-up questions you can judge at a glance
 - **No unsure guesses.** A "misfiled" clean-up idea is only queued when FlowState is sure:

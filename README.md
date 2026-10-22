@@ -146,7 +146,8 @@ prompt `flowstate-start`.
   of saving a copy.
 - **Automatic sessions**: a session opens on the first call for a project (one per app window
   or connection) and closes after 2 hours idle (or when the app quits), with a short summary
-  marked `[auto-captured, needs review]`. FlowState keeps a lean record of each session's
+  marked `[auto-captured, needs review]`. A small housekeeping session (only reads, undo or
+  review decisions) isn't queued for review. FlowState keeps a lean record of each session's
   reads and writes (record ids and hashes, never the text).
 
 **You stay in charge**

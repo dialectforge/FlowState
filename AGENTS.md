@@ -341,7 +341,8 @@ don't show server instructions:
    keys, tokens, passwords or card numbers are refused with `secret_detected`). If you know
    your model name, pass it as `model="<name>"` on writes; never guess or invent it.
 4. Sessions open and close automatically (closed after 2 hours idle or when the app quits,
-   with a summary marked `[auto-captured, needs review]`).
+   with a summary marked `[auto-captured, needs review]`). A small housekeeping session (only
+   reads, undo or review decisions) isn't queued for review.
 5. If FlowState is slow or errors, tell the user once and carry on without it. Every write's
    answer has a `receipt` (`change` id and `saved` record ids). If a write times out, don't
    repeat it: the next FlowState answer says whether it saved. The same write repeated within

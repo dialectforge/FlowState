@@ -134,7 +134,8 @@ on: still true -> `manage_memory(action="mark_checked", ...)`; changed -> log th
 
 When the work wraps up, log the outcome: what was done, decisions made, open problems,
 next steps (as `change`, `decision`, `problem` and `todo` records). FlowState also closes
-idle sessions itself and queues an automatic summary for the user's review.
+idle sessions itself and queues an automatic summary for the user's review (small
+housekeeping sessions, with only reads, undo or review decisions, aren't queued).
 
 If you must stop in the middle of a task (out of time, context or tokens; the user ends the
 chat), leave a handoff for the next AI: `manage_handoffs(action="leave", project=...,
