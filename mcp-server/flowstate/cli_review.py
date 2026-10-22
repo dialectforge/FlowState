@@ -9,10 +9,11 @@
 With approvals on, an agent can't approve its own delete requests or turn review off; it asks
 you to run one of these (or to use the popup or the phone link). approve / reject and
 `approvals off` read your "y" from the controlling
-terminal (/dev/tty; on Windows the console), never from stdin, so an agent piping "y" into
-the command from its own shell can't confirm, and with no terminal they refuse. This stops
-agents approving their own work through FlowState; an agent with full control of your own
-terminal window could still type into it.
+terminal (/dev/tty; on Windows the console, and only one with a window), never from stdin, so
+an agent piping "y" into the command from its own shell can't confirm, and with no terminal
+they refuse. This stops agents approving their own work through FlowState; an agent with
+full control of your own terminal window could still type into it, and so could one that
+opens a terminal of its own (a pseudo-terminal, or a new console on Windows) to run it in.
 """
 
 import json
@@ -38,6 +39,8 @@ class Terminal:
 
     def __init__(self):
         if os.name == "nt":
+            if not _console_has_window():
+                raise OSError("a console without a window, not the user's terminal")
             self.inp = open("CONIN$", "r", encoding="utf-8", errors="replace")
             self.out = open("CONOUT$", "w", encoding="utf-8", errors="replace")
         else:
@@ -62,6 +65,17 @@ class Terminal:
                 f.close()
             except OSError:
                 pass
+
+
+def _console_has_window() -> bool:
+    """Windows: is this a console the user can see and type into? An AI app's shell runs with
+    a hidden console that has no window (CREATE_NO_WINDOW): CONIN$ opens there too, but nobody
+    can type into it, so reading it would wait forever (and only that app could feed it). A
+    console window, or Windows Terminal / VS Code's pseudo-console, has one."""
+    import ctypes
+    k32 = ctypes.WinDLL("kernel32")
+    k32.GetConsoleWindow.restype = ctypes.c_void_p
+    return bool(k32.GetConsoleWindow())
 
 
 def open_terminal():

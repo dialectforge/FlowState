@@ -6,9 +6,7 @@ before: the app that queued one decides it only with the user's own words."""
 
 import asyncio
 import json
-import os
 import sqlite3
-import subprocess
 import sys
 
 import pytest
@@ -16,6 +14,7 @@ from mcp import types
 from mcp.shared.memory import create_connected_server_and_client_session
 
 from conftest import SERVER_DIR, server_env
+from terminal_run import run_in_terminal, run_no_terminal
 
 # pty.fork() in pytest's multi-threaded process: safe here, the child execs at once
 pytestmark = pytest.mark.filterwarnings("ignore:This process .* is multi-threaded:DeprecationWarning")
@@ -84,10 +83,10 @@ def test_another_app_keeps_the_user_request_rule(backend):
 
 # ---------------------------------------------------------------- the user's step
 def _cli(db, *args, stdin=None):
-    """Run `flowstate ...` with no controlling terminal (a new session), like an agent's shell."""
-    return subprocess.run([sys.executable, "-m", "flowstate", *args, "--db", str(db)],
-                          input=stdin, env=server_env(db), cwd=str(SERVER_DIR), capture_output=True,
-                          text=True, timeout=60, start_new_session=True)
+    """Run `flowstate ...` with no terminal, like an agent's shell (POSIX: a new session with no
+    controlling terminal; Windows: a console without a window, as AI apps' shells get)."""
+    return run_no_terminal([sys.executable, "-m", "flowstate", *args, "--db", str(db)],
+                           input=stdin, env=server_env(db), cwd=str(SERVER_DIR), timeout=60)
 
 
 def test_review_lists_what_waits(backend):
@@ -107,35 +106,13 @@ def test_piped_y_without_a_terminal_is_refused(backend, verb):
 
 
 def _in_a_terminal(db, args, answers):
-    """Run `flowstate ...` with a pseudo-terminal as its controlling terminal (as when the
-    user runs it), typing each answer when a "Type ..." prompt appears. (exit code, output)"""
-    import pty
-    import select
-    import time
-    env = server_env(db)
-    pid, master = pty.fork()
-    if pid == 0:   # the child: exec at once
-        os.execve(sys.executable, [sys.executable, "-m", "flowstate", *args, "--db", str(db)], env)
-    seen, todo, deadline = b"", list(answers), time.monotonic() + 60
-    try:
-        while time.monotonic() < deadline:
-            if select.select([master], [], [], 0.2)[0]:
-                try:
-                    data = os.read(master, 4096)
-                except OSError:   # the child closed the terminal
-                    break
-                if not data:
-                    break
-                seen += data
-                if todo and seen.count(b"Type ") > len(answers) - len(todo):
-                    os.write(master, todo.pop(0).encode() + b"\n")
-        _, status = os.waitpid(pid, 0)
-    finally:
-        os.close(master)
-    return os.waitstatus_to_exitcode(status), seen.decode(errors="replace")
+    """Run `flowstate ...` in a terminal of its own (as when the user runs it: a pseudo-terminal,
+    or on Windows a console), typing each answer when a "Type ..." prompt appears. (exit code,
+    output)"""
+    return run_in_terminal([sys.executable, "-m", "flowstate", *args, "--db", str(db)], answers,
+                           env=server_env(db), cwd=str(SERVER_DIR), timeout=60)
 
 
-@pytest.mark.skipif(os.name == "nt", reason="pseudo-terminals are POSIX only")
 def test_the_user_confirms_in_their_terminal(backend):
     S = backend
     item = _suggest(S)
@@ -145,7 +122,6 @@ def test_the_user_confirms_in_their_terminal(backend):
     assert status == "approved" and by == "command-line"
 
 
-@pytest.mark.skipif(os.name == "nt", reason="pseudo-terminals are POSIX only")
 def test_answering_no_in_the_terminal_changes_nothing(backend):
     S = backend
     item = _suggest(S)
@@ -154,7 +130,6 @@ def test_answering_no_in_the_terminal_changes_nothing(backend):
     assert _status(S.backend.db_path, item)[0] == "pending"
 
 
-@pytest.mark.skipif(os.name == "nt", reason="pseudo-terminals are POSIX only")
 def test_several_items_with_one_confirmation(backend):
     S = backend
     a, b = _suggest(S), _suggest(S, app="Grok")

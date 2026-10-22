@@ -508,16 +508,14 @@ def test_the_page_is_mounted_on_the_http_app(on):
 
 # ---------------------------------------------------------------- the switch itself
 def test_turning_approvals_on_needs_nothing_and_off_needs_the_users_terminal(backend):
-    import os
     from test_user_approval import _cli, _in_a_terminal
     db = backend.backend.db_path
     r = _cli(db, "approvals", "on")
     assert r.returncode == 0 and "now on" in r.stdout and approvals.is_on(db)
     r = _cli(db, "approvals", "off", stdin="y\n")
     assert r.returncode == 2 and "Refused" in r.stdout and approvals.is_on(db)
-    if os.name != "nt":
-        code, out = _in_a_terminal(db, ["approvals", "off"], ["y"])
-        assert code == 0 and "now off" in out and not approvals.is_on(db)
+    code, out = _in_a_terminal(db, ["approvals", "off"], ["y"])
+    assert code == 0 and "now off" in out and not approvals.is_on(db)
     r = _cli(db, "approvals", "on", "--project", "Alpha")
     assert r.returncode == 0 and approvals.is_on(db, 1)
 
