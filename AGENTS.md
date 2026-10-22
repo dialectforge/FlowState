@@ -126,6 +126,7 @@ All commands run with the venv Python: `<venv python> -m flowstate <command>`.
 | check off-site without pushing | `flowstate offsite push --dry-run` |
 | restore | `flowstate restore <backup file>` (into a new file, verified; `--to <new file>`) |
 | approvals (user) | `flowstate approvals` shows them; `approvals on [--project P]`: an AI's deletes and turning review off wait for the user (popup, phone link, terminal); `approvals off` asks for `y` on the terminal; `approvals phone on\|off`; `approvals popup add\|remove NAME` |
+| update FlowState (only when the user asks) | `flowstate update --dry-run` (the plan; changes nothing), then `flowstate update --yes --user-said "<the user's words>"` (or without `--yes`: the user types `y` in their terminal); `flowstate update --rollback`. Signed releases only; see README "Upgrading" |
 | update check | `flowstate update check` shows it; `update check on\|off\|now` (once a day from `start_here`, asks GitHub for the newest release; sends nothing about you) |
 | review queue (user) | `flowstate review` lists it; `flowstate approve <id> [<id> ...]` / `flowstate reject <id> [--reason ...]` ask for `y` on the terminal (never piped input; no terminal = refused) |
 | review page (user) | `flowstate review-page` (127.0.0.1:8770 only; opens the browser with a one-time link; includes "Who did what"), or the "FlowState review" desktop shortcut setup makes (runs that command; opens the page FlowState already has open, if any). Without a command: the `http://127.0.0.1:<port>/` link in the brief and in `manage_review(action="walk")`'s answer, shown only to apps on the same computer (FlowState starts the page on first need, 127.0.0.1 only; `FLOWSTATE_REVIEW_PORT`) |
@@ -404,7 +405,11 @@ don't show server instructions:
    visit (...)` says what other sessions saved since this app last read the brief; after a
    long gap, use the `manage_history(action="who", since=...)` call it gives. A line on top
    `FlowState X.Y.Z is out (this computer has ...)` comes from the daily update check: tell the
-   user once, and never update FlowState unless they ask. Local FlowState makes one network
+   user once, and never update FlowState unless they ask. When they ask, run
+   `flowstate update --dry-run` in a terminal on that computer, show them the plan, then
+   `flowstate update --yes --user-said "<their words>"` (there is no tool for it, so a remote app
+   can't update anyone's computer). `FlowState was updated to X; this app still runs Y` means:
+   ask the user to restart the app. Local FlowState makes one network
    call: once a day it asks GitHub whether there is a newer release. It sends nothing about you
    or your projects (only what any web request reveals: your IP address). Turn it off with
    `flowstate update check off`.

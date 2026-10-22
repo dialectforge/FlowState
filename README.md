@@ -399,6 +399,7 @@ the venv active). Add `-h` to any command for its options.
 | `schedule-backups [--time HH:MM] [--offsite]` / `schedule-backups --remove` | Nightly backup on / off |
 | `offsite setup --repo OWNER/NAME` / `offsite status` / `offsite push --dry-run` / `offsite disable` | Private GitHub off-site copy |
 | `migrate [--dry-run]` | Apply new database migrations (backup first) |
+| `update --dry-run` / `update` / `update --rollback` | Update to the newest signed release (dry run first; asks for `y`; rolls back on any failure). See "Upgrading" |
 | `update check` / `update check on\|off\|now` | The daily update check: show the last result, turn it on or off, or check now |
 | `cleanup --project NAME [--queue]` | Clean-up suggestions (printed; `--queue` sends them to the review queue) |
 | `export-md --project NAME --out FILE` / `import-md --project NAME FILE` | Readable markdown copy; edits come back through the review queue |
@@ -581,7 +582,43 @@ The database is created at `FLOWSTATE_DB` if set, else Windows
 `%LOCALAPPDATA%\flowstate\flowstate.db`, macOS `~/Library/Application Support/flowstate/flowstate.db`,
 Linux `~/.local/share/flowstate/flowstate.db`. More settings are listed in [AGENTS.md](AGENTS.md#settings-environment-variables).
 
-## Upgrading from v1.1
+## Upgrading
+
+FlowState checks once a day whether a newer release is out and, if so, puts one line on top of
+the brief; your AI tells you once. Nothing updates on its own.
+
+**From 2.5 on: `flowstate update`.** Ask your AI to "update FlowState". It runs
+`<venv python> -m flowstate update --dry-run` in a terminal on this computer and shows you the
+plan, then `<venv python> -m flowstate update --yes --user-said "<your words>"`. Or run
+`<venv python> -m flowstate update` yourself: it asks you to type `y` in your terminal. It:
+
+1. refuses, and changes nothing, unless this folder is a plain clone of
+   `github.com/dialectforge/FlowState` with no local changes, at a release tag or on `main`
+   with no commits of your own, with one worktree and a real `.venv` folder;
+2. downloads only the newest release's tag and checks that it is signed with a FlowState release
+   key listed in the copy you already have (`mcp-server/flowstate/release_signers`). An unsigned
+   tag, an unknown key or any check error: nothing is changed;
+3. backs up your database (labelled `pre-update`, kept at least 7 days);
+4. stops this folder's FlowState services (scheduled tasks, LaunchAgents or systemd user units
+   that run from this folder; your AI apps are listed, not stopped), moves the code to the new
+   tag (a fresh `.venv` only when the release changes the Python packages, and then every app
+   must be quit first), migrates the database, starts the services again and checks them;
+5. if anything in step 4 fails, it puts the old version back on its own: the same commit and
+   branch, the same `.venv`, the old services. Your database is never put back or overwritten
+   (migrations only add tables and columns, so the old version reads it as it is).
+
+Then quit and reopen your AI apps; until you do, an app still running the old version says so
+in its brief. `flowstate update --rollback` goes back to the version before the last update.
+A developer setup (your own branch or commits, extra worktrees, a linked `.venv`) is refused:
+update it by hand. To turn `flowstate update` off on a computer, put `"self_update": false` in
+FlowState's `config.json` (or a `.flowstate-no-self-update` file in the folder).
+
+**By hand (and for 2.4.x).** In the FlowState folder run `git pull`, then
+`python setup_flowstate.py --clients <your apps> --verify` with the same options as when you
+set it up, then quit and reopen your AI apps. The first release that has `flowstate update`
+has to be installed this way.
+
+### From v1.1
 
 Pull the new code and run `setup_flowstate.py` again (or just restart your app). Your existing
 database is kept. Before new migrations run on a database with data, FlowState takes an

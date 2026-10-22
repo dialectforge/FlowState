@@ -1,5 +1,39 @@
 # Changelog
 
+## 2.5.0 - unreleased
+
+### Added
+- **`flowstate update`: update to the newest release when you ask, and roll back on its own if
+  anything fails.** `flowstate update --dry-run` checks everything and shows the plan without
+  changing anything; `flowstate update` asks you to type `y` in your own terminal; an AI app runs
+  `flowstate update --yes --user-said "<your words>"` only after you asked (your words and the
+  app's name go into the edit history). It refuses, and changes nothing, unless the folder is a
+  plain clone of `github.com/dialectforge/FlowState` with no local changes, at a release tag or
+  on `main` with nothing of your own, with one worktree and a real `.venv` folder, and not opted
+  out (`"self_update": false` in `config.json`, or a `.flowstate-no-self-update` file).
+- **Signed releases only.** It downloads only the release's tag and checks its SSH signature
+  against `mcp-server/flowstate/release_signers` read from the copy you already have, before
+  anything changes. An unsigned tag, a key that isn't listed, an empty list ("no release signing
+  key is set up yet"), a missing `ssh-keygen` or any check error: nothing is changed, and it says
+  how to update by hand. `release_signers` ships with no key yet; see `docs/RELEASING.md`.
+- Then: a `pre-update` backup of the database (kept at least 7 days, like `pre-migration`),
+  this folder's services stopped (Windows scheduled tasks, macOS LaunchAgents, Linux systemd
+  user units that run from this folder; a leftover FlowState process from this `.venv` is
+  stopped; AI apps are listed, not stopped), the code moved to the tag (a fresh `.venv` only when
+  the release changes the Python packages; the old one is kept as `.venv.pre-update`), the
+  database migrated, the services started and checked (the version, a stdio `start_here`, the
+  HTTP server's `/health`, the relay tunnel). Any failure puts the exact old commit, branch and
+  `.venv` back and starts the old services. The database is never put back or overwritten.
+- `flowstate update --rollback`: back to the version before the last update.
+- An app still running the old code after an update says in its brief: `FlowState was updated
+  to X; this app still runs Y. Ask the user to restart it.`
+
+### Changed
+- The update-check line now says "run flowstate update --dry-run" when the installed copy has
+  that command and the computer isn't opted out; otherwise it still gives the manual steps.
+- README "Upgrading", AGENTS.md, the skill and the server instructions: update only when the
+  user asks; dry run first.
+
 ## 2.4.1 - unreleased
 
 ### Added
