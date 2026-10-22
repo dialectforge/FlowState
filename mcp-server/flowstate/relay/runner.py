@@ -80,7 +80,7 @@ async def run(store: Optional[RelayStore] = None, *, db_path: Optional[Path] = N
 
     peer_map: dict = {}
     app = create_http_app(None, db_path=db_path, public_url=f"https://{host}", trust_proxy=False,
-                          peer_resolver=lambda peer: peer_map.get(peer[1]))
+                          peer_resolver=lambda peer: peer_map.get(peer[1]), relay=True)
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="info",
                                            access_log=False, proxy_headers=False,
                                            server_header=False))

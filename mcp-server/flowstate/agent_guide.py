@@ -65,7 +65,7 @@ _USER_ONLY = (
 REVIEW_DESCRIPTION = (
     "The user's review queue and mode. Session summaries, suggestions, imports, clean-ups, "
     "delete requests and conflicts wait here. list, get_mode: read-only. walk: when the user "
-    "asks what's waiting: they decide each item in a box, or you get links to pass on. "
+    "asks what's waiting: boxes for them, or a list and links to pass on. "
     "approve: make it a record (edit fields or move_to first), do a delete (project: "
     "confirm_name) or confirm a conflict. reject: mark it rejected. set_mode: which new "
     "records wait." + _USER_ONLY +

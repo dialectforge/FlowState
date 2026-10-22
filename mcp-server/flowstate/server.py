@@ -993,20 +993,7 @@ def _suggest(pid: int, args: dict, client: str) -> Any:
 
 
 def _review_list(args: dict, walk: bool = False) -> Any:
-    pid = None
-    named = explicit_project(args)
-    if named is not None:
-        res = resolve_project(backend.db_path, named, fuzzy=False)
-        if "project" not in res:
-            return {"error": "project_not_found", "message": f"No single project matches {named!r}.",
-                    "candidates": res.get("candidates", [])}
-        pid = res["project"]["id"]
-    try:
-        out = review.list_items(backend.db_path, pid, "pending" if walk else args.get("status") or "pending",
-                                waiting.WALK_MAX if walk else args.get("limit") or 20)
-    except review.ReviewError as e:
-        return e.payload
-    return waiting.prepare(out, backend.db_path, _caller()[1], pid) if walk else out
+    return waiting.review_list(args, walk, _caller()[1])   # one page, oldest first; after=
 
 
 # The older direct deletes: (tool, action) -> (record type, argument holding its id). Since

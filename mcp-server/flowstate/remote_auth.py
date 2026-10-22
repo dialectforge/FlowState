@@ -608,6 +608,9 @@ def _int_env(name: str, default: int) -> int:
 
 
 # ---------------------------------------------------------------- ASGI guard
+LISTENER_KEY = "flowstate.listener"   # ASGI scope key Gate sets: lan / public / relay
+
+
 class Gate:
     """Outermost layer: Host allow-list, rate limits, one access-log line per request
     (method, path without query, status, time, client, IP; never bodies or headers), and
@@ -615,8 +618,12 @@ class Gate:
 
     def __init__(self, app, checker: TokenChecker, mcp_path: str,
                  allowed_hosts: Optional[set[str]] = None, trust_proxy: bool = False,
-                 resource_metadata_url: Optional[str] = None, peer_resolver=None):
+                 resource_metadata_url: Optional[str] = None, peer_resolver=None,
+                 listener: str = "lan"):
         self.app, self.checker, self.mcp_path = app, checker, mcp_path
+        # which listener this is (lan / public / relay), set here for every request so the
+        # popup and the review walk know it from the server's own side, never from a header
+        self.listener = listener
         self.allowed_hosts = {h.lower() for h in allowed_hosts} if allowed_hosts else None
         self.trust_proxy = trust_proxy
         self.rmd = resource_metadata_url
@@ -643,6 +650,7 @@ class Gate:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
+        scope[LISTENER_KEY] = self.listener
         from starlette.authentication import AuthCredentials
         from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
         t0 = time.monotonic()

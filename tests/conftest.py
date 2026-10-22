@@ -129,6 +129,25 @@ def _never_live(monkeypatch, tmp_path):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _a_person_answers(monkeypatch):
+    """In-memory test apps answer Approve / Reject boxes at once, which FlowState treats as a
+    box no person saw (popup.HUMAN_SECONDS). By default each box here "takes" 2 s, like a
+    person; the too-fast tests put the real clock back (fixture `instant_answers`)."""
+    import itertools
+    from flowstate import popup
+    tick = itertools.count(0, 2.0)
+    monkeypatch.setattr(popup, "_clock", lambda: float(next(tick)))
+    yield
+
+
+@pytest.fixture
+def instant_answers(monkeypatch):
+    import time as _time
+    from flowstate import popup
+    monkeypatch.setattr(popup, "_clock", _time.monotonic)
+
+
 def _assert_not_live(p: Path):
     assert not _guard.forbidden(p), f"refusing to use live data: {p}"
 

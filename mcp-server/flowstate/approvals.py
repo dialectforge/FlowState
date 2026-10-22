@@ -18,7 +18,9 @@ can pass the user's OK along: only a human click or keypress decides, in this or
              browser to https://<handle>.fsmcp.com/approve/<item> with a short signed grant
              (approve_page.py checks it here with FSA_PUBLIC_KEYS). The phone review list
              of everything waiting (review_phone.py) takes the same grants with action
-             open_review and item 0, and its own one-use code (review_link).
+             open_review and item 0; its bookmarkable link (review_link) has no code in it:
+             the site sends the browser to /review/start here, which makes a fresh one-use
+             code (start_nonce) and sends it back to the site to be signed.
   3. terminal `flowstate approve <id>` asks for the user's `y` on their own terminal.
 
 Turning approvals on needs nothing; turning them off needs the user's terminal
@@ -53,6 +55,9 @@ POPUP_SECONDS = 120
 GRANT_SECONDS = 300          # a phone grant lives 5 minutes
 CLOCK_SKEW = 60
 NONCE_DAYS = 7               # the phone link's one-use code, then a fresh one is made
+START_MINUTES = 15           # a review-list code made by /review/start (review_phone.py)
+START_OPEN = 10              # at most this many of those open at once (the oldest expire)
+START_PER_HOUR = 30          # and at most this many made per hour (then a plain 429 page)
 SITE = "https://flowstatemcp.com"
 ACTION = "approve_review"
 REVIEW_ACTION = "open_review"   # the phone review list (review_phone.py): item 0
@@ -288,36 +293,56 @@ def phone_link(db_path: Path, item_id: int) -> Optional[str]:
     return f"{SITE}/approve/{handle}/{int(item_id)}?n={nonce}" if nonce else None
 
 
-def review_nonce(db_path: Path) -> Optional[str]:
-    """The phone review list's open one-use code; a fresh random one if none is open."""
+def review_handle(db_path: Path) -> Optional[str]:
+    """This device's handle when the phone review list is available here: relay enrolled,
+    keys pinned, phone links not off. Else None."""
+    handle = relay_handle()
+    if not handle or not phone_on(db_path) or not keys_ready():
+        return None
+    return handle
+
+
+def review_link(db_path: Path) -> Optional[str]:
+    """The bookmarkable phone link to the whole waiting list (no code in it, so nothing secret
+    lands in chat history): https://flowstatemcp.com/review/<handle>. The site signs the user
+    in and sends the browser to this device's /review/start, which makes a fresh code."""
+    handle = review_handle(db_path)
+    return f"{SITE}/review/{handle}" if handle else None
+
+
+def start_nonce(db_path: Path) -> Optional[str]:
+    """A fresh one-use code for the review list, made by /review/start (review_phone.py):
+    43 url-safe characters, valid START_MINUTES. At most START_OPEN open at once (the oldest
+    are expired) and START_PER_HOUR made per hour (else ApprovalError rate_limited). Codes
+    made here are told apart from the 7-day codes older releases put in chat links by their
+    lifetime (under a day). None if the database has no review_open_nonces table."""
     conn = _conn(db_path)
     try:
         if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
                             "AND name='review_open_nonces'").fetchone():
             return None
+        now = _ts()
+        short = "julianday(expires_at) - julianday(created_at) < 1"
         conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute("SELECT nonce FROM review_open_nonces WHERE used_at IS NULL AND "
-                           "expires_at > ? ORDER BY created_at DESC LIMIT 1", (_ts(),)).fetchone()
-        if row:
-            conn.commit()
-            return row["nonce"]
+        made = conn.execute(f"SELECT COUNT(*) FROM review_open_nonces WHERE {short} AND "
+                            "created_at > ?", (_ts(_now() - timedelta(hours=1)),)).fetchone()[0]
+        if made >= START_PER_HOUR:
+            conn.rollback()
+            raise ApprovalError("rate_limited", "Too many review links were opened in the last "
+                                                "hour. Try again later.")
+        open_ = conn.execute(f"SELECT nonce FROM review_open_nonces WHERE {short} AND used_at "
+                             "IS NULL AND expires_at > ? ORDER BY created_at, rowid", (now,)).fetchall()
+        for row in open_[:max(0, len(open_) - START_OPEN + 1)]:   # make room: oldest expire now
+            conn.execute("UPDATE review_open_nonces SET expires_at = ? WHERE nonce = ?",
+                         (now, row["nonce"]))
         nonce = secrets.token_urlsafe(32)   # 43 url-safe characters, never reused
         conn.execute("INSERT INTO review_open_nonces (nonce, action, created_at, expires_at) "
-                     "VALUES (?, ?, ?, ?)", (nonce, REVIEW_ACTION, _ts(),
-                                             _ts(_now() + timedelta(days=NONCE_DAYS))))
+                     "VALUES (?, ?, ?, ?)", (nonce, REVIEW_ACTION, now,
+                                             _ts(_now() + timedelta(minutes=START_MINUTES))))
         conn.commit()
         return nonce
     finally:
         conn.close()
-
-
-def review_link(db_path: Path) -> Optional[str]:
-    """The phone link to the whole waiting list: relay enrolled, keys pinned, phone not off."""
-    handle = relay_handle()
-    if not handle or not phone_on(db_path) or not keys_ready():
-        return None
-    nonce = review_nonce(db_path)
-    return f"{SITE}/review/{handle}?n={nonce}" if nonce else None
 
 
 def use_review_nonce(db_path: Path, nonce: str) -> bool:

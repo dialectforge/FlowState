@@ -84,7 +84,9 @@ def pending_count(db_path: Path, project_id: int) -> Optional[int]:
 
 
 def list_items(db_path: Path, project_id: Optional[int] = None, status: str = "pending",
-               limit: int = 20) -> dict:
+               limit: int = 20, after: Optional[int] = None) -> dict:
+    """Oldest first, at most `limit` (max 100); `after` an item id: the page after it.
+    `total` counts every match; `more` says whether items follow this page."""
     conn = _conn(db_path)
     try:
         _need_table(conn)
@@ -95,17 +97,22 @@ def list_items(db_path: Path, project_id: Optional[int] = None, status: str = "p
         if status != "all":
             where.append("r.status = ?")
             params.append(status)
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM review_items r WHERE {' AND '.join(where)}",
+            params).fetchone()[0]
+        if after:
+            where.append("r.id > ?")
+            params.append(int(after))
+        limit = max(1, min(int(limit or 20), 100))
         rows = conn.execute(
             f"""SELECT r.id, r.project_id, p.name AS project, r.kind, r.status, r.summary,
                        r.details, r.source, r.session_id, r.created_at, r.decided_at,
                        r.reject_reason, r.result_table, r.result_id, r.payload
                 FROM review_items r JOIN projects p ON p.id = r.project_id
                 WHERE {' AND '.join(where)} ORDER BY r.id LIMIT ?""",
-            (*params, max(1, min(int(limit or 20), 100)))).fetchall()
-        total = conn.execute(
-            f"SELECT COUNT(*) FROM review_items r WHERE {' AND '.join(where)}",
-            params).fetchone()[0]
-        return {"items": [dict(r) for r in rows], "total": total, "status": status,
+            (*params, limit + 1)).fetchall()
+        return {"items": [dict(r) for r in rows[:limit]], "total": total, "status": status,
+                "more": len(rows) > limit,
                 "note": "Only approve or reject when the user explicitly asks you to."}
     finally:
         conn.close()

@@ -128,6 +128,7 @@ def test_walk_on_other_apps_only_lists_with_the_local_link(backend, relay_dir):
         assert out["items"][0].startswith(f"#{items[0]} (Alpha, todo): Waiting thing 0")
         assert out["review_page"].startswith("http://127.0.0.1:") and "phone" not in out
         assert "can't show" in out["how_to_decide"] and "Don't approve or reject" in out["how_to_decide"]
+        assert out["note"] == waiting.NOT_SHOWN and "decided these" not in json.dumps(out)
     assert [status(db, i) for i in items] == ["pending", "pending"]
     assert log(db) == []
 
@@ -297,7 +298,7 @@ def test_brief_shows_the_local_link_only_when_something_waits(backend, relay_dir
     pile(db, 1)
     text = call(S, "start_here", {"project": "Alpha"})
     line = next(l for l in text.splitlines() if l.startswith("Review queue:"))
-    assert re.search(r"on this computer at http://127\.0\.0\.1:\d+/ or in this chat when they ask "
+    assert re.search(r"on the computer where FlowState runs at http://127\.0\.0\.1:\d+/ or in this chat when they ask "
                      r'\(manage_review action="walk"\)\.$', line), line
     assert "flowstatemcp.com" not in line
 
@@ -314,8 +315,9 @@ def test_phone_link_only_with_relay_keys_and_phone_on(backend, relay_dir, monkey
     assert approvals.review_link(db) is None                        # no keys pinned
     monkeypatch.setattr(approvals, "FSA_PUBLIC_KEYS", {"fsa-1": jwk, "fsa-2": None})
     link = approvals.review_link(db)
-    assert re.fullmatch(r"https://flowstatemcp\.com/review/testbox\?n=[A-Za-z0-9_-]{43}", link)
-    assert approvals.review_link(db) == link                        # the open code is reused
+    assert link == "https://flowstatemcp.com/review/testbox"         # bookmarkable: no code in it
+    assert approvals.review_link(db) == link
+    assert _q(db, "SELECT COUNT(*) FROM review_open_nonces") == [(0,)]   # no code made for chat
     text = call(S, "start_here", {"project": "Alpha"})
     assert f"on their phone: {link}" in text
     out = call(S, "manage_review", {"action": "walk"}, app="grok")
@@ -329,7 +331,7 @@ def test_phone_link_only_with_relay_keys_and_phone_on(backend, relay_dir, monkey
 
 
 def _grant(key, db, **over):
-    nonce = approvals.review_nonce(db)
+    nonce = approvals.start_nonce(db)
     c = claims(0, nonce, action="open_review")
     c.update(over)
     return sign(key, c), nonce
@@ -351,7 +353,7 @@ def test_phone_grant_refused(backend, relay, case, expect):
     if case == "other_key":
         grant, _n = _grant(make_key()[0], db)
     elif case == "unknown_kid":
-        nonce = approvals.review_nonce(db)
+        nonce = approvals.start_nonce(db)
         grant = sign(key, claims(0, nonce, action="open_review"), kid="fsa-9")
     else:
         grant, _n = _grant(key, db, **over)
@@ -367,7 +369,7 @@ def test_phone_grant_is_one_use(backend, relay):
     with pytest.raises(approvals.ApprovalError) as e:
         approvals.verify_review_grant(db, grant)
     assert e.value.code == "grant_used"
-    assert approvals.review_nonce(db) != nonce                      # a fresh code next time
+    assert approvals.start_nonce(db) != nonce                       # a fresh code next time
     # a code made for an approve link doesn't open the list
     item = pile(db, 1)[0]
     with pytest.raises(approvals.ApprovalError):
@@ -446,3 +448,278 @@ def test_phone_list_is_served_by_the_http_app(backend, relay):
     app = create_http_app("x" * 32, db_path=backend.backend.db_path)
     paths = {getattr(r, "path", None) for r in app.app.routes}
     assert {"/review", "/review/open", "/review/decide"} <= paths
+
+
+# ---------------------------------------------------------------- 4. (task 33) honest walk
+def test_relay_connection_named_cursor_gets_the_plain_list_and_no_boxes(backend, relay_dir, monkeypatch):
+    """The live bug (Oct 22, 2026): a relay connection calling itself "Cursor" and declaring
+    elicitation got 20 boxes, each "declined" at once, and the answer said the user decided."""
+    from flowstate import popup
+    S, db = backend, backend.backend.db_path
+    items = pile(db, 3)
+    for via in ("relay", "public", "unknown"):
+        monkeypatch.setattr(popup, "listener", lambda via=via: via)
+        seen = []
+        out = call(S, "manage_review", {"action": "walk"}, app="Cursor", seen=seen,
+                   answers=[types.ElicitResult(action="decline")] * 3)
+        assert seen == [], via                                         # zero forms sent
+        assert out["note"] == waiting.NOT_SHOWN and "walked" not in out
+        assert "decided these" not in json.dumps(out)
+        assert out["waiting"] == 3 and len(out["items"]) == 3 and out["review_page"]
+        assert ("relay" in out["how_to_decide"]) == (via == "relay")
+        assert "on the computer where FlowState runs" in out["how_to_decide"]
+    assert log(db) == [] and [status(db, i) for i in items] == ["pending"] * 3
+
+
+def test_the_approvals_popup_is_refused_on_relay_connections(backend, relay_dir, monkeypatch):
+    from flowstate import popup
+    S, db = backend, backend.backend.db_path
+    approvals.set_on(db, True)
+    monkeypatch.setattr(popup, "listener", lambda: "relay")
+    seen = []
+    r = call(S, "manage_projects", {"action": "delete", "project": "Beta Project"}, app="Cursor",
+             answers=[acc(approve=True, confirm_name="Beta Project")], seen=seen)
+    assert seen == [] and "flowstate approve" in r["next"]
+    assert _q(db, "SELECT COUNT(*) FROM projects WHERE name = 'Beta Project'") == [(1,)]
+    assert log(db) == []
+
+
+def test_listener_is_set_by_the_server_never_by_a_header():
+    from types import SimpleNamespace
+    from mcp.server.lowlevel.server import request_ctx
+    from mcp.shared.context import RequestContext
+    from flowstate import popup
+    from flowstate.http_app import create_http_app
+    from flowstate.remote_auth import LISTENER_KEY, Gate
+    seen = {}
+
+    async def app(scope, receive, send):
+        seen.update(scope)
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+    c = TestClient(Gate(app, None, "/mcp", listener="relay"))
+    c.get("/health", headers={"x-flowstate-listener": "lan", LISTENER_KEY: "lan"})
+    assert seen[LISTENER_KEY] == "relay"
+    assert create_http_app("x" * 32).listener == "lan"
+    assert create_http_app("x" * 32, relay=True).listener == "relay"
+    assert create_http_app(None, public_url="https://box.example").listener == "public"
+    assert create_http_app(None, public_url="https://testbox.fsmcp.com", relay=True).listener == "relay"
+    # popup.listener reads the marker from the request FlowState is answering
+    assert popup.listener() == "stdio"
+    for scope, want in (({LISTENER_KEY: "relay"}, "relay"), ({LISTENER_KEY: "lan"}, "lan"), ({}, "unknown")):
+        tok = request_ctx.set(RequestContext(1, None, None, None, request=SimpleNamespace(scope=scope)))
+        try:
+            assert popup.listener() == want
+        finally:
+            request_ctx.reset(tok)
+
+
+def test_the_relay_agent_marks_its_listener_as_relay(relay, monkeypatch):
+    from flowstate import server as S
+    from flowstate.relay import runner
+    got = {}
+
+    class Stop(Exception):
+        pass
+
+    def fake(*a, **kw):
+        got.update(kw)
+        raise Stop
+    monkeypatch.setattr(S, "create_http_app", fake)
+    with pytest.raises(Stop):
+        asyncio.run(runner.run(port=0, ct_fetch=False))
+    assert got.get("relay") is True and got.get("public_url") == "https://testbox.fsmcp.com"
+
+
+def test_boxes_answered_faster_than_a_person_were_not_shown(backend, relay_dir, instant_answers):
+    S, db = backend, backend.backend.db_path
+    items = pile(db, 3)
+    for answer in (types.ElicitResult(action="decline"), acc(approve=True), acc(approve=False),
+                   types.ElicitResult(action="cancel")):
+        seen = []
+        out = call(S, "manage_review", {"action": "walk"}, seen=seen, answers=[answer] * 3)
+        assert len(seen) == 1                                          # stopped at once
+        assert out["note"] == waiting.NOT_SHOWN and "walked" not in out
+        assert "faster than a person" in out["how_to_decide"] and len(out["items"]) == 3
+    assert log(db) == [] and [status(db, i) for i in items] == ["pending"] * 3
+
+
+def test_a_real_walk_then_a_too_fast_box(backend, relay_dir, monkeypatch):
+    from flowstate import popup
+    S, db = backend, backend.backend.db_path
+    a, b, c = pile(db, 3)
+    ticks = iter([0.0, 5.0, 10.0, 13.0, 20.0, 20.1])                   # 5 s, 3 s, then 0.1 s
+    monkeypatch.setattr(popup, "_clock", lambda: next(ticks))
+    out = call(S, "manage_review", {"action": "walk"},
+               answers=[acc(approve=True), types.ElicitResult(action="decline"), acc(approve=True)])
+    assert out["walked"] == [f"#{a}: approved", f"#{b}: skipped, still waiting"]
+    assert out["note"].startswith("In the boxes the user approved 1, rejected 0 and skipped 1; "
+                                  "only those answers were logged.")
+    assert "that box was not shown and nothing more was decided" in out["note"]
+    assert log(db) == [(a, "chat", "approved"), (b, "chat", "declined")]
+    assert status(db, c) == "pending" and out["still_waiting"] == 2
+
+
+def test_real_slow_answers_note_has_counts(backend, relay_dir):
+    S, db = backend, backend.backend.db_path
+    a, b, c = pile(db, 3)
+    out = call(S, "manage_review", {"action": "walk"},
+               answers=[acc(approve=True), acc(approve=False), types.ElicitResult(action="decline")])
+    assert out["note"] == ("In the boxes the user approved 1, rejected 1 and skipped 1; only those "
+                           "answers were logged.")
+    assert log(db) == [(a, "chat", "approved"), (b, "chat", "rejected"), (c, "chat", "declined")]
+
+
+def test_the_approvals_popup_answered_too_fast_is_not_a_decision(backend, relay_dir, instant_answers):
+    S, db = backend, backend.backend.db_path
+    approvals.set_on(db, True)
+    seen = []
+    r = call(S, "manage_projects", {"action": "delete", "project": "Beta Project"}, app="claude-code",
+             answers=[acc(approve=True, confirm_name="Beta Project")], seen=seen)
+    assert len(seen) == 1 and r["next"].startswith("No popup was shown")
+    assert _q(db, "SELECT COUNT(*) FROM projects WHERE name = 'Beta Project'") == [(1,)]
+    assert log(db) == []
+
+
+def test_walk_and_list_page_through_102_items(backend, relay_dir):
+    S, db = backend, backend.backend.db_path
+    ids = pile(db, 102)
+    out = call(S, "manage_review", {"action": "walk"}, app="grok")
+    assert out["waiting"] == 102 and len(out["items"]) == 20
+    assert out["items"][0].startswith(f"#{ids[0]} ") and out["items"][-1].startswith(f"#{ids[19]} ")
+    assert out["showing"] == f"20 of 102, oldest first: #{ids[0]} to #{ids[19]}"
+    assert out["next_page"] == f'manage_review(action="walk", after={ids[19]})'
+    seen, after, pages = [], None, 0
+    while True:
+        args = {"action": "walk", **({"after": after} if after else {})}
+        out = call(S, "manage_review", args, app="grok")
+        pages += 1
+        seen += [int(x.split(" ")[0][1:]) for x in out["items"]]
+        assert out["waiting"] == 102
+        if "next_page" not in out:
+            break
+        after = int(out["next_page"].split("after=")[1].rstrip(")"))
+    assert pages == 6 and seen == ids and len(out["items"]) == 2
+    assert out["showing"] == f"2 of 102, oldest first: #{ids[100]} to #{ids[101]}"
+    out = call(S, "manage_review", {"action": "walk", "after": ids[-1]}, app="grok")
+    assert out["items"] == [] and out["note"] == f"Nothing more is waiting after #{ids[-1]}."
+    # list pages the same way (its own limit)
+    out = call(S, "manage_review", {"action": "list"})
+    assert out["total"] == 102 and len(out["items"]) == 20 and "more" not in out
+    assert out["next_page"] == f'manage_review(action="list", after={ids[19]})'
+    out = call(S, "manage_review", {"action": "list", "after": ids[99], "limit": 50})
+    assert [i["id"] for i in out["items"]] == ids[100:] and "next_page" not in out
+    assert out["total"] == 102
+
+
+# ---------------------------------------------------------------- 5. (task 33) bookmark link
+def _start(c, **kw):
+    return c.get("/review/start", follow_redirects=False, **kw)
+
+
+def _open_nonces(db):
+    return _q(db, "SELECT nonce FROM review_open_nonces WHERE used_at IS NULL AND expires_at > ?",
+              approvals._ts())
+
+
+def test_review_start_sends_a_fresh_code_back_to_the_site(backend, relay):
+    from datetime import datetime
+    db = backend.backend.db_path
+    pile(db, 2)
+    c = _phone_client(db)
+    r = _start(c, params={"handle": "evil", "next": "https://evil.example"},
+               headers={"Host": "evil.fsmcp.com", "X-Forwarded-Host": "evil.example"})
+    assert r.status_code == 303
+    m = re.fullmatch(r"https://flowstatemcp\.com/review/testbox\?n=([A-Za-z0-9_-]{43})", r.headers["location"])
+    assert m, r.headers["location"]
+    for h, v in (("cache-control", "no-store"), ("referrer-policy", "no-referrer"), ("x-frame-options", "DENY")):
+        assert r.headers[h] == v
+    assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
+    nonce = m.group(1)
+    row = _q(db, "SELECT created_at, expires_at FROM review_open_nonces WHERE nonce = ?", nonce)[0]
+    life = datetime.fromisoformat(row[1]) - datetime.fromisoformat(row[0])
+    assert life.total_seconds() == 15 * 60
+    assert _start(c).headers["location"] != r.headers["location"]       # fresh every time
+    # the site signs a grant with it (after the user's Continue); it opens the list once
+    grant = sign(relay, claims(0, nonce, action="open_review"))
+    o = c.post("/review/open", content=json.dumps({"grant": grant}), headers=JSON_H)
+    assert o.status_code == 200 and len(o.json()["items"]) == 2 and o.json()["total"] == 2
+    again = c.post("/review/open", content=json.dumps({"grant": grant}), headers=JSON_H)
+    assert again.status_code == 403 and again.json()["error"] == "grant_used"
+
+
+def test_review_start_code_expires_after_15_minutes(backend, relay, monkeypatch):
+    from datetime import timedelta
+    db = backend.backend.db_path
+    c = _phone_client(db)
+    nonce = _start(c).headers["location"].split("?n=")[1]
+    later = approvals._now() + timedelta(minutes=16)
+    monkeypatch.setattr(approvals, "_now", lambda: later)
+    t = int(later.timestamp())
+    grant = sign(relay, claims(0, nonce, action="open_review", iat=t, exp=t + 300))
+    with pytest.raises(approvals.ApprovalError) as e:
+        approvals.verify_review_grant(db, grant)
+    assert e.value.code == "grant_used"
+
+
+def test_review_start_cap_and_rate_limit_and_old_codes(backend, relay):
+    from datetime import timedelta
+    db = backend.backend.db_path
+    c = _phone_client(db)
+    made = [_start(c).headers["location"].split("?n=")[1] for _ in range(12)]
+    assert sorted(n for (n,) in _open_nonces(db)) == sorted(made[2:])   # 10 open; the oldest expired
+    with pytest.raises(approvals.ApprovalError):
+        approvals.verify_review_grant(db, sign(relay, claims(0, made[0], action="open_review")))
+    for _ in range(approvals.START_PER_HOUR - 12):
+        assert _start(c).status_code == 303
+    n = _q(db, "SELECT COUNT(*) FROM review_open_nonces")[0][0]
+    r = _start(c)
+    assert r.status_code == 429 and "Too many" in r.text and r.headers["cache-control"] == "no-store"
+    assert _q(db, "SELECT COUNT(*) FROM review_open_nonces")[0][0] == n
+    # an older release's 7-day chat code doesn't count against the start limits and still works
+    old = "B" * 43
+    conn = sqlite3.connect(db)
+    conn.execute("INSERT INTO review_open_nonces (nonce, action, created_at, expires_at) VALUES "
+                 "(?, 'open_review', ?, ?)", (old, approvals._ts(),
+                                              approvals._ts(approvals._now() + timedelta(days=7))))
+    conn.commit()
+    conn.close()
+    assert approvals.verify_review_grant(db, sign(relay, claims(0, old, action="open_review")))["nonce"] == old
+
+
+@pytest.mark.parametrize("case", ["phone_off", "not_enrolled", "no_keys"])
+def test_review_start_off_or_unavailable_shows_a_plain_page(backend, relay_dir, monkeypatch, case):
+    from flowstate.relay.store import RelayStore
+    db = backend.backend.db_path
+    key, jwk = make_key()
+    monkeypatch.setattr(approvals, "FSA_PUBLIC_KEYS", {"fsa-1": jwk, "fsa-2": None})
+    if case != "not_enrolled":
+        RelayStore().save_enrollment("testbox", "fake-device-token-for-tests")
+    if case == "phone_off":
+        approvals.set_value(db, "phone_approvals", "off")
+    if case == "no_keys":
+        monkeypatch.setattr(approvals, "FSA_PUBLIC_KEYS", {"fsa-1": None, "fsa-2": None})
+    r = _start(_phone_client(db))
+    assert r.status_code == 200 and "Phone review is off" in r.text and "flowstate approvals phone on" in r.text
+    assert "location" not in r.headers and "<script" not in r.text
+    assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
+    assert r.headers["cache-control"] == "no-store" and r.headers["referrer-policy"] == "no-referrer"
+    assert _q(db, "SELECT COUNT(*) FROM review_open_nonces") == [(0,)]
+
+
+def test_review_start_is_get_only(backend, relay):
+    db = backend.backend.db_path
+    c = _phone_client(db)
+    assert c.head("/review/start").status_code == 405
+    assert c.post("/review/start").status_code == 405
+    assert _q(db, "SELECT COUNT(*) FROM review_open_nonces") == [(0,)]
+
+
+def test_brief_and_walk_show_the_bare_bookmark_link(backend, relay):
+    S, db = backend, backend.backend.db_path
+    pile(db, 1)
+    text = call(S, "start_here", {"project": "Alpha"})
+    assert "on their phone: https://flowstatemcp.com/review/testbox or in this chat" in text and "?n=" not in text
+    out = call(S, "manage_review", {"action": "walk"}, app="grok")
+    assert out["phone"] == "https://flowstatemcp.com/review/testbox" and "?n=" not in json.dumps(out)
+    assert _q(db, "SELECT COUNT(*) FROM review_open_nonces") == [(0,)]

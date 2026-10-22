@@ -3,14 +3,20 @@
 Three ways, none of which shows anything unless the user asks (or has approvals on):
 
   1. In the chat: manage_review(action="walk"). On apps that show MCP elicitation forms as a
-     real dialog (the approvals popup's allowlist, approvals.popup_allowed), each waiting item
-     comes up one at a time as an Approve / Reject box and FlowState acts on the user's own
-     answer. Elsewhere it answers with the list in plain words and the links below. It never
-     approves anything itself, and nothing an app passes along counts as the user's answer.
+     real dialog (the approvals popup's allowlist, approvals.popup_allowed) and reach FlowState
+     on this computer (stdio or the LAN listener; never the relay or the public listener, where
+     the app's name is its own say-so: popup.no_box), each waiting item comes up one at a time
+     as an Approve / Reject box and FlowState acts on the user's own answer. A box answered
+     faster than a person could (popup.HUMAN_SECONDS) counts as not shown: the walk stops and
+     logs nothing for it. Elsewhere it answers with one page of the list in plain words (20,
+     oldest first; after=<id> for the next page) and the links below, and says that no boxes
+     were shown and nothing was decided. It never approves anything itself, and nothing an app
+     passes along counts as the user's answer.
   2. A local link, http://127.0.0.1:<port>/: the review page (review_page.py) started inside
      this FlowState process the first time a link is needed, one per computer and database
      (a running one is reused), on 127.0.0.1 only.
-  3. Relay users: a phone link to the whole list (approvals.review_link, review_phone.py).
+  3. Relay users: a bookmarkable phone link to the whole list, https://flowstatemcp.com/review/
+     <handle> (approvals.review_link, review_phone.py; no code in the chat).
 
 Decisions made in 1 and 3 go through the same user-only path as the popup and the phone page
 (popup.as_user) and are all logged in approval_log (path "chat" / "phone").
@@ -171,7 +177,7 @@ def where_line(db_path: Path) -> str:
     ways = links(db_path)
     parts = []
     if ways.get("review_page"):
-        parts.append(f"on this computer at {ways['review_page']}")
+        parts.append(f"on the computer where FlowState runs at {ways['review_page']}")
     if ways.get("phone"):
         parts.append(f"on their phone: {ways['phone']}")
     parts.append('in this chat when they ask (manage_review action="walk")')
@@ -191,15 +197,60 @@ def _plain(it: dict) -> str:
     return f"#{it['id']} ({it['project']}, {_KIND.get(it['kind'], it['kind'])}): {summary}"
 
 
-def prepare(listing: dict, db_path: Path, scopes, project_id: Optional[int] = None) -> dict:
-    """review_walk's first part (in the call's worker thread): the waiting items, and what
-    to do with them after the call (_walk, read by popup.ask_user in server.py)."""
+def _page(listing: dict, after: Optional[int], action: str) -> dict:
+    """Which part of the waiting list this answer shows, and how to ask for the next part."""
+    items = listing.get("items") or []
+    out = {}
+    if items:
+        out["showing"] = (f"{len(items)} of {listing['total']}, oldest first: #{items[0]['id']} to "
+                          f"#{items[-1]['id']}")
+        if listing.get("more"):
+            out["next_page"] = f'manage_review(action="{action}", after={items[-1]["id"]})'
+    return out
+
+
+def review_list(args: dict, walk: bool, scopes) -> dict:
+    """manage_review list / walk (server._handle): one page of the queue, oldest first.
+    `after` (an item id) gives the next page; `total` counts every match."""
+    from . import review
+    from . import server as S
+    from .brief import resolve_project
+    from .guard import explicit_project
+    pid = None
+    named = explicit_project(args)
+    if named is not None:
+        res = resolve_project(S.backend.db_path, named, fuzzy=False)
+        if "project" not in res:
+            return {"error": "project_not_found", "message": f"No single project matches {named!r}.",
+                    "candidates": res.get("candidates", [])}
+        pid = res["project"]["id"]
+    after = args.get("after")
+    after = after if isinstance(after, int) and not isinstance(after, bool) and after > 0 else None
+    try:
+        out = review.list_items(S.backend.db_path, pid,
+                                "pending" if walk else args.get("status") or "pending",
+                                WALK_MAX if walk else args.get("limit") or 20, after=after)
+    except review.ReviewError as e:
+        return e.payload
+    if walk:
+        return prepare(out, S.backend.db_path, scopes, pid, after)
+    out.update(_page(out, after, "list"))
+    out.pop("more", None)
+    return out
+
+
+def prepare(listing: dict, db_path: Path, scopes, project_id: Optional[int] = None,
+            after: Optional[int] = None) -> dict:
+    """review_walk's first part (in the call's worker thread): one page of the waiting items,
+    and what to do with them after the call (_walk, read by popup.ask_user in server.py)."""
     if not isinstance(listing, dict) or "items" not in listing:
         return listing   # an error (no queue, unknown project)
     items = listing["items"][:WALK_MAX]
-    out = {"waiting": listing["total"], "items": [_plain(it) for it in items]}
+    out = {"waiting": listing["total"], **_page(listing, after, "walk"),
+           "items": [_plain(it) for it in items]}
     if not items:
-        out["note"] = "Nothing is waiting for the user."
+        out["note"] = (f"Nothing more is waiting after #{after}." if after
+                       else "Nothing is waiting for the user.")
         return out
     out["_walk"] = {"ids": [it["id"] for it in items], "project_id": project_id,
                     "may_decide": scopes is None or "flowstate:write" in scopes,
@@ -207,9 +258,13 @@ def prepare(listing: dict, db_path: Path, scopes, project_id: Optional[int] = No
     return out
 
 
+NOT_SHOWN = "No boxes were shown here; nothing was decided."
+
+
 def _plain_answer(out: dict, ways: dict, why: str) -> dict:
+    out["note"] = NOT_SHOWN
     out["how_to_decide"] = (f"{why} Show the user this list. They decide each item themselves: "
-                            + "; ".join(f"{'on this computer' if k == 'review_page' else 'on their phone'}: {v}"
+                            + "; ".join(f"{'on the computer where FlowState runs' if k == 'review_page' else 'on their phone'}: {v}"
                                         for k, v in ways.items())
                             + ("; " if ways else "") + "or in a terminal: `flowstate review`. Don't "
                             "approve or reject anything for them.")
@@ -239,41 +294,45 @@ def _form(it: dict, i: int, n: int) -> tuple[str, dict]:
     return msg, {"type": "object", "properties": props, "required": ["approve"]}
 
 
+def _counts(done: list) -> str:
+    n = {k: sum(1 for d in done if d.endswith(k))
+         for k in (": approved", ": rejected", ": skipped, still waiting")}
+    return (f"In the boxes the user approved {n[': approved']}, rejected {n[': rejected']} and "
+            f"skipped {n[': skipped, still waiting']}; only those answers were logged.")
+
+
 async def walk(result: dict, session, client: str) -> dict:
     """After the call: one Approve / Reject box per item on apps that show them, else the
-    plain list with links. Each box waits at most approvals.POPUP_SECONDS, holding no lock."""
+    plain list with links. Each box waits at most approvals.POPUP_SECONDS, holding no lock.
+    A box answered faster than a person could (popup.HUMAN_SECONDS) was not shown: the walk
+    stops there, logs nothing for it and, if nothing was decided, answers with the plain list."""
     from . import server as S
-    from .popup import as_user, declared
+    from .popup import as_user, elicit, no_box
     plan = result.pop("_walk")
     db = S.backend.db_path
     ways = plan["links"]
     if not plan["may_decide"]:
         return _plain_answer(result, ways, "This app has read-only access, so FlowState shows "
                                            "no Approve / Reject boxes here.")
-    if session is None or not approvals.popup_allowed(db, client, declared(session)):
-        return _plain_answer(result, ways, "This app can't show FlowState's Approve / Reject "
-                                           "boxes.")
+    why = no_box(session, client, db)
+    if why:
+        return _plain_answer(result, ways, why)
     try:
         rid = S.server.request_context.request_id
     except LookupError:
         rid = None
     label = f"chat ({client})"
-    done, n = [], len(plan["ids"])
+    done, n, unseen = [], len(plan["ids"]), False
     for i, item_id in enumerate(plan["ids"], 1):
         it = await asyncio.to_thread(S._safe_call, _item_view, db, item_id)
         if not it or it["status"] != "pending":
             done.append(f"#{item_id}: already decided elsewhere")
             continue
         msg, form = _form(it, i, n)
-        try:
-            res = await asyncio.wait_for(session.elicit_form(msg, form, rid), approvals.POPUP_SECONDS)
-            action = res.action
-            content = res.content if isinstance(res.content, dict) else {}
-        except asyncio.TimeoutError:
-            action, content = "timed_out", {}
-        except Exception as e:  # noqa: BLE001 - a broken box is never an answer
-            log.warning("walk box failed: %s", e)
-            action, content = "failed", {}
+        action, content = await elicit(session, msg, form, rid)
+        if action == "not_shown":   # answered by software, not a person: stop, log nothing
+            unseen = True
+            break
         choice = content.get("approve") if action == "accept" else None
         if choice is True or choice is False:
             name = "review_approve" if choice else "review_reject"
@@ -299,13 +358,19 @@ async def walk(result: dict, session, client: str) -> dict:
             if rest:
                 done.append(f"stopped; {len(rest)} more still waiting")
             break
+    if unseen and not done:   # not one box reached a person: the honest plain list
+        return _plain_answer(result, ways, "This app answered FlowState's box at once, faster "
+                                           "than a person could, so no box was shown.")
     left = await asyncio.to_thread(S._safe_call, _pending_total, db, plan.get("project_id"))
-    result.pop("items", None)
+    for k in ("items", "showing", "next_page"):
+        result.pop(k, None)
     result["walked"] = done
     result["still_waiting"] = left
     if left:
         result.update(ways)
-    result["note"] = "The user decided these in Approve / Reject boxes in this app; logged."
+    result["note"] = _counts(done) + (
+        " Then this app answered a box at once, faster than a person could, so FlowState "
+        "stopped: that box was not shown and nothing more was decided." if unseen else "")
     return result
 
 

@@ -506,7 +506,7 @@
     "readOnlyHint": false,
     "title": "Review queue (user decides)"
    },
-   "description": "The user's review queue and mode. Session summaries, suggestions, imports, clean-ups, delete requests and conflicts wait here. list, get_mode: read-only. walk: when the user asks what's waiting: they decide each item in a box, or you get links to pass on. approve: make it a record (edit fields or move_to first), do a delete (project: confirm_name) or confirm a conflict. reject: mark it rejected. set_mode: which new records wait. approve, reject, set_mode: ONLY call this when the user has explicitly told you, in this chat; quote them in user_request; never approve your own suggestions or change the mode to get your own writes saved. Returns {items, total}, the mode, or the result.",
+   "description": "The user's review queue and mode. Session summaries, suggestions, imports, clean-ups, delete requests and conflicts wait here. list, get_mode: read-only. walk: when the user asks what's waiting: boxes for them, or a list and links to pass on. approve: make it a record (edit fields or move_to first), do a delete (project: confirm_name) or confirm a conflict. reject: mark it rejected. set_mode: which new records wait. approve, reject, set_mode: ONLY call this when the user has explicitly told you, in this chat; quote them in user_request; never approve your own suggestions or change the mode to get your own writes saved. Returns {items, total}, the mode, or the result.",
    "inputSchema": {
     "properties": {
      "action": {
@@ -520,6 +520,10 @@
        "set_mode"
       ],
       "type": "string"
+     },
+     "after": {
+      "description": "list / walk: the page after this id.",
+      "type": "integer"
      },
      "category": {
       "description": "approve: for a learning.",
@@ -540,11 +544,11 @@
       "type": "boolean"
      },
      "component": {
-      "description": "approve: component name to file it under.",
+      "description": "approve: component to file it under.",
       "type": "string"
      },
      "confirm_name": {
-      "description": "approve, project delete: its exact name from the user.",
+      "description": "approve, project delete: its name from the user.",
       "type": "string"
      },
      "details": {
@@ -570,7 +574,7 @@
       "type": "array"
      },
      "limit": {
-      "description": "list: max items. Default 20, max 100.",
+      "description": "list: max items (20; max 100).",
       "type": "integer"
      },
      "mode": {
@@ -607,7 +611,7 @@
       "type": "string"
      },
      "project": {
-      "description": "approve / reject: required. Else omit: all projects / whole install.",
+      "description": "approve / reject: required. Else omit for all.",
       "type": [
        "string",
        "integer"
@@ -628,7 +632,7 @@
       "type": "string"
      },
      "summary": {
-      "description": "approve: a new summary.",
+      "description": "approve: new summary.",
       "type": "string"
      },
      "user_request": {

@@ -130,27 +130,28 @@ MANAGE_PROBLEMS = _tool("manage_problems", guide.PROBLEMS_DESCRIPTION, {
 _REVIEW_ACTIONS = ("list", "walk", "get_mode", "approve", "reject", "set_mode")
 MANAGE_REVIEW = _tool("manage_review", guide.REVIEW_DESCRIPTION, {
     "action": _action(_REVIEW_ACTIONS),
-    "project": _p("approve / reject: required. Else omit: all projects / whole install.",
+    "project": _p("approve / reject: required. Else omit for all.",
                   ["string", "integer"]),
     "status": _p("list: which items. Default pending.",
                  enum=["pending", "approved", "rejected", "all"]),
-    "limit": _p("list: max items. Default 20, max 100.", "integer"),
+    "limit": _p("list: max items (20; max 100).", "integer"),
+    "after": _p("list / walk: the page after this id.", "integer"),
     "item_id": _p("approve / reject: the item's id.", "integer"),
     "user_request": {**USER_REQUEST, "description": "approve / reject / set_mode: the user's "
                                                     "words (required)."},
     "reason": _p("reject: the user's reason (required)."),
-    "summary": _p("approve: a new summary."),
+    "summary": _p("approve: new summary."),
     "details": _p("approve: new details."),
     "priority": {**_PRIORITY, "description": "approve: for a todo or problem."},
     "category": _p("approve: for a learning.", enum=_LEARNING_CATEGORIES),
-    "component": _p("approve: component name to file it under."),
+    "component": _p("approve: component to file it under."),
     "move_to": _p("approve: project to move a misfiled item to.", ["string", "integer"]),
     "mode": _p("set_mode: the new mode (default auto_only).",
                enum=list(review_mode.MODES)),
     "kinds": {"type": "array", "items": {"type": "string", "enum": list(review_mode.KINDS)},
               "description": "set_mode, mode=types: kinds that wait."},
     "clear": _p("set_mode: remove this project's override.", "boolean"),
-    "confirm_name": _p("approve, project delete: its exact name from the user."),
+    "confirm_name": _p("approve, project delete: its name from the user."),
     "model": MODEL,
 }, ["action"])
 

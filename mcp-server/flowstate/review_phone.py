@@ -1,12 +1,18 @@
 """The phone review list (waiting.py, way 3), served by FlowState's HTTP app, which the relay
 agent reaches at https://<handle>.fsmcp.com (TLS ends on this computer).
 
-The link FlowState gives is https://flowstatemcp.com/review/<handle>?n=<code>
-(approvals.review_link). The site signs the user in, checks the device is on their account,
-then sends the browser (303) to /review#g=<grant>: the same ES256 grant as the approve page,
-with action "open_review" and item 0 (approvals.verify_review_grant). The fragment never
-reaches a server or a log. This page:
+The link FlowState gives is the bookmarkable https://flowstatemcp.com/review/<handle>
+(approvals.review_link; no code in it). The site signs the user in, checks the device is on
+their account and sends the browser (303) to /review/start here, which makes a fresh one-use
+code and sends the browser (303) back to https://flowstatemcp.com/review/<handle>?n=<code>,
+with the handle from this device's relay.json, never from the request. There the user taps
+Continue, and only then does the site sign a grant and send the browser (303) to
+/review#g=<grant>: the same ES256 grant as the approve page, with action "open_review" and
+item 0 (approvals.verify_review_grant). The fragment never reaches a server or a log.
 
+  GET  /review/start     no sign-in here (a code is useless without a grant only the site
+                         signs, for the signed-in owner); 15-minute code, at most 10 open and
+                         30 an hour (then 429); phone review off or unavailable: a plain page
   GET  /review           an empty shell (no data); its script reads #g=, removes it from the
                          address bar at once (history.replaceState) and posts it
   POST /review/open      checks the grant and uses up its one-use code; starts a session:
@@ -84,10 +90,12 @@ JS = r"""(function () {
       return r.json().then(function (j) { return {ok: r.ok, j: j}; });
     });
   }
-  function show(items) {
+  function show(items, total) {
     var list = $("list");
     while (list.firstChild) { list.removeChild(list.firstChild); }
-    say(items.length ? "Waiting for you (" + items.length + ")" : "Nothing is waiting for you", "");
+    total = total || items.length;
+    say(items.length ? "Waiting for you (" + total + ")" : "Nothing is waiting for you",
+        total > items.length ? "Showing the oldest " + items.length + "; decide some to see more." : "");
     items.forEach(function (it) {
       var card = el("div", "card");
       card.appendChild(el("p", "eyebrow", it.project + " · " + it.kind_label + " #" + it.id));
@@ -111,7 +119,7 @@ JS = r"""(function () {
         var body = {token: token, item_id: it.id, decision: decision};
         if (name) { body.confirm_name = name.value; }
         post("/review/decide", body).then(function (r) {
-          if (r.ok) { show(r.j.items); $("status").textContent = r.j.message; }
+          if (r.ok) { show(r.j.items, r.j.total); $("status").textContent = r.j.message; }
           else { yes.disabled = no.disabled = false; say("Not done", r.j.message || "", true); }
         }, function () { say("Not done", "Your FlowState didn't answer.", true); });
       }
@@ -127,7 +135,7 @@ JS = r"""(function () {
   post("/review/open", {grant: grant}).then(function (r) {
     if (!r.ok) { say("Can't show your list", r.j.message || "", true); return; }
     token = r.j.token;
-    show(r.j.items);
+    show(r.j.items, r.j.total);
   }, function () { say("Can't show your list", "Your FlowState didn't answer.", true); });
 })();
 """
@@ -166,7 +174,7 @@ class Sessions:
 
 
 def items(db_path) -> list:
-    """The waiting list, from the local database (all projects, oldest first)."""
+    """The waiting list, from the local database (all projects, oldest first, LIST_MAX)."""
     from . import review
     from .approve_page import view
     from .waiting import _KIND
@@ -181,9 +189,37 @@ def items(db_path) -> list:
     return out
 
 
+def _note_page(title: str, text: str) -> str:
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>FlowState: {title}</title>
+<link rel="stylesheet" href="/review/assets/review.css">
+</head><body><main class="wrap">
+<p class="brand">FlowState</p>
+<h1>{title}</h1>
+<p class="muted">{text}</p>
+</main></body></html>
+"""
+
+
+OFF_PAGE = _note_page("Phone review is off", "Phone review is turned off on this computer, or "
+                      "this FlowState can't offer it (no relay set up). To turn it on, run "
+                      "<code>flowstate approvals phone on</code> on the computer where FlowState "
+                      "runs. You can still review there: <code>flowstate review-page</code>.")
+BUSY_PAGE = _note_page("Too many tries", "This list was opened too many times in the last hour. "
+                       "Try again later.")
+
+
+def _total(db_path) -> int:
+    from .waiting import _pending_total
+    return _pending_total(db_path)
+
+
 def routes(db_path_fn):
     """Starlette routes; `db_path_fn()` gives the database in use."""
-    from starlette.responses import HTMLResponse, JSONResponse, Response
+    from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
     from starlette.routing import Route
 
     sessions = Sessions()
@@ -197,6 +233,23 @@ def routes(db_path_fn):
 
     def refuse(e: approvals.ApprovalError, status: int = 403):
         return answer({"error": e.code, "message": str(e)}, status)
+
+    async def start(request):
+        """The bookmark link's second hop: a fresh one-use code, back to the site to sign."""
+        if request.method != "GET":   # Starlette adds HEAD to GET routes: no code for it
+            return Response(status_code=405, headers={**HEADERS, "Allow": "GET"})
+        db = db_path_fn()
+        handle = await asyncio.to_thread(approvals.review_handle, db)
+        if not handle:
+            return HTMLResponse(OFF_PAGE, headers=HEADERS)
+        try:
+            nonce = await asyncio.to_thread(approvals.start_nonce, db)
+        except approvals.ApprovalError:
+            return HTMLResponse(BUSY_PAGE, status_code=429, headers={**HEADERS, "Retry-After": "3600"})
+        if not nonce:
+            return HTMLResponse(OFF_PAGE, headers=HEADERS)
+        return RedirectResponse(f"{approvals.SITE}/review/{handle}?n={nonce}", status_code=303,
+                                headers=HEADERS)
 
     async def shell(request):
         return HTMLResponse(SHELL, headers=HEADERS)
@@ -229,9 +282,10 @@ def routes(db_path_fn):
             claims = await asyncio.to_thread(approvals.verify_review_grant, db, body["grant"])
             cookie, token = sessions.start(claims["handle"])
             listing = await asyncio.to_thread(items, db)
+            total = await asyncio.to_thread(_total, db)
         except approvals.ApprovalError as e:
             return refuse(e)
-        return answer({"items": listing, "token": token}, cookie=cookie)
+        return answer({"items": listing, "total": total, "token": token}, cookie=cookie)
 
     async def decide(request):
         db = db_path_fn()
@@ -256,13 +310,16 @@ def routes(db_path_fn):
                     "user_request": "The user rejected this in their phone list (flowstatemcp.com)."}
             res = await asyncio.to_thread(as_user, "review_reject", args, label)
         listing = await asyncio.to_thread(items, db)
+        total = await asyncio.to_thread(_total, db)
         if isinstance(res, dict) and "error" in res:
             return answer({"error": res["error"], "message": res.get("message") or res["error"],
-                           "items": listing}, 409)
+                           "items": listing, "total": total}, 409)
         done = "Approved" if body["decision"] == "approve" else "Rejected"
-        return answer({"ok": True, "message": f"{done} #{item_id}.", "items": listing})
+        return answer({"ok": True, "message": f"{done} #{item_id}.", "items": listing,
+                       "total": total})
 
     return [Route("/review/assets/{name}", asset, methods=["GET"]),
+            Route("/review/start", start, methods=["GET"]),
             Route("/review", shell, methods=["GET"]),
             Route("/review/open", open_, methods=["POST"]),
             Route("/review/decide", decide, methods=["POST"])]

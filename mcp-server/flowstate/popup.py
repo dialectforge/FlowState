@@ -6,10 +6,16 @@ Sent with the installed MCP SDK's server-to-client request (`session.elicit_form
 the 2026-07-28 style, so that one isn't offered. The wait (at most approvals.POPUP_SECONDS)
 runs after the tool's own work has committed, outside the call's time limit and holding no
 database lock; only accept with approve=true approves. Anything else leaves the item queued.
+
+No box at all (no_box) for requests that came through the relay or the public listener: the
+app's name there is its own say-so. And an answer that comes back faster than a person could
+read the box (HUMAN_SECONDS) means the box was never shown: it counts as no answer, is not
+logged as the user's decision, and FlowState falls back to the plain line / list.
 """
 
 import asyncio
 import logging
+import time
 from typing import Optional
 
 from . import approvals
@@ -19,6 +25,8 @@ log = logging.getLogger("flowstate.popup")
 APPROVE_FIELD = {"type": "boolean", "title": "Approve",
                  "description": "Tick to approve. Leave it unticked, decline or close to say no."}
 NOTE_FIELD = {"type": "string", "title": "Note (optional)", "maxLength": 300}
+HUMAN_SECONDS = 1.0   # an answer sooner than this came from software: the box wasn't shown
+_clock = time.monotonic
 
 
 def schema(project_name: Optional[str] = None) -> dict:
@@ -42,22 +50,64 @@ def declared(session) -> bool:
     return getattr(caps, "form", None) is not None or getattr(caps, "url", None) is None
 
 
-async def ask(session, message: str, form: dict, related_request_id=None,
-              timeout: Optional[float] = None) -> tuple[str, dict]:
-    """(outcome, content): outcome approved / declined / cancelled / timed_out / failed."""
+def listener() -> str:
+    """How this request reached FlowState: stdio, or the HTTP listener remote_auth.Gate
+    marked it with (lan / public / relay; "unknown" if unmarked)."""
+    from . import server as S
+    from .remote_auth import LISTENER_KEY
+    try:
+        req = S.server.request_context.request
+    except LookupError:
+        return "stdio"
+    if req is None:
+        return "stdio"
+    return getattr(req, "scope", {}).get(LISTENER_KEY) or "unknown"
+
+
+def no_box(session, client: str, db_path) -> Optional[str]:
+    """Why this connection gets no Approve / Reject box; None if it may get one."""
+    via = listener()
+    if via == "relay":
+        return ("This request came through the relay, where the app's name is only its own "
+                "say-so, so FlowState shows no Approve / Reject boxes here.")
+    if via not in ("stdio", "lan"):
+        return ("This request came from outside this computer, so FlowState shows no "
+                "Approve / Reject boxes here.")
+    if session is None or not approvals.popup_allowed(db_path, client, declared(session)):
+        return "This app can't show FlowState's Approve / Reject boxes."
+    return None
+
+
+async def elicit(session, message: str, form: dict, related_request_id=None,
+                 timeout: Optional[float] = None) -> tuple[str, dict]:
+    """One box: (action, content). action accept / decline / cancel, timed_out, failed, or
+    not_shown (answered in under HUMAN_SECONDS: no person saw it)."""
+    t0 = _clock()
     try:
         res = await asyncio.wait_for(session.elicit_form(message, form, related_request_id),
                                      approvals.POPUP_SECONDS if timeout is None else timeout)
     except asyncio.TimeoutError:
         return "timed_out", {}
-    except Exception as e:  # noqa: BLE001 - a broken popup is a "no", never an approval
-        log.warning("popup failed: %s", e)
+    except Exception as e:  # noqa: BLE001 - a broken box is a "no", never an approval
+        log.warning("box failed: %s", e)
         return "failed", {}
-    if res.action == "decline":
+    if _clock() - t0 < HUMAN_SECONDS:
+        log.warning("box answered in under %ss (%s): treated as not shown", HUMAN_SECONDS, res.action)
+        return "not_shown", {}
+    return res.action, res.content if isinstance(res.content, dict) else {}
+
+
+async def ask(session, message: str, form: dict, related_request_id=None,
+              timeout: Optional[float] = None) -> tuple[str, dict]:
+    """(outcome, content): outcome approved / declined / cancelled / timed_out / failed /
+    not_shown."""
+    action, content = await elicit(session, message, form, related_request_id, timeout)
+    if action in ("timed_out", "failed", "not_shown"):
+        return action, {}
+    if action == "decline":
         return "declined", {}
-    if res.action != "accept":
+    if action != "accept":
         return "cancelled", {}
-    content = res.content if isinstance(res.content, dict) else {}
     if content.get("approve") is not True:   # required, and exactly true
         return "declined", content
     for key in form.get("required") or ():
@@ -79,11 +129,15 @@ async def resolve(result: dict, session, client: str, db_path, request_id, decid
     (async) records a "no"."""
     ask_user = result.pop("_ask_user")
     item_id = ask_user["item_id"]
-    if session is None or not approvals.popup_allowed(db_path, client, declared(session)):
+    if no_box(session, client, db_path):
         result["next"] = ask_user["line"]
         return result
     outcome, content = await ask(session, ask_user["message"], schema(ask_user.get("project_name")),
                                  request_id)
+    if outcome == "not_shown":   # no person saw it: not the user's answer, nothing logged
+        result["next"] = ("No popup was shown (this app answered it at once, faster than a "
+                          "person could); nothing changed. " + ask_user["line"])
+        return result
     if outcome == "approved" and ask_user.get("project_name") \
             and content.get("confirm_name") != ask_user["project_name"]:
         outcome = "wrong_name"
