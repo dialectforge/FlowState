@@ -63,6 +63,35 @@ Closed in task 31: "Docs say the phone keys are placeholders". CHANGELOG 2.4.0, 
 honest limits and docs/APPROVALS.md section 3 now say what `approvals.py` does: it pins
 `fsa-1` and `fsa-2`.
 
+## From the update check and `flowstate update` (tasks 40/41, branches `dev/t40-update-check`, `dev/t40-self-update`)
+
+Open (need John or a spare machine; none can be closed from a test):
+- **No release signing key yet.** `mcp-server/flowstate/release_signers` ships empty, so every
+  `flowstate update` is refused ("no release signing key is set up yet"). John: make the key,
+  list it, add it to GitHub as a signing key, turn on immutable releases, sign the 2.5.0 tag
+  (`docs/RELEASING.md`). 2.5.0 itself is installed by hand by everyone (trust on first use).
+- **Real service stop/start never ran.** `Services` (Get-ScheduledTask + `schtasks /End` /
+  `/Run`, `launchctl bootout` / `bootstrap`, `systemctl --user stop` / `start`) and `Processes`
+  (Get-CimInstance / `ps`, `taskkill /T /F`) are only exercised with fakes. To check on a spare
+  Windows machine with a plain clone: whether `schtasks /End` leaves the python child of
+  `cmd /c` running, and whether the leftover check finds it (a venv `python.exe` is a launcher:
+  its child is the base Python, whose command line may not name the folder; the kill uses
+  `/T` on the launcher). Same for macOS and Linux.
+- **Real dependency-change path never ran.** A fresh `.venv` with real pip (`Pip`), and Windows
+  refusing to rename a `.venv` in use, are covered by fakes only.
+- **Developer-install opt-out.** When 2.5 lands, add `"self_update": false` to the host PC's FlowState
+  `config.json` (belt and braces; the updater already refuses its layout four times over).
+- **A disabled public listener task** on the host PC still points at an old
+  install folder (seen in task 40; not touched).
+
+Tradeoffs (decided):
+- The update check is on by default (one GitHub request a day; off with
+  `flowstate update check off` or `FLOWSTATE_UPDATE_CHECK=0`). GitHub's ETag saves bytes, not the
+  60/hour unauthenticated quota.
+- No database rollback: migrations only add, so the old code reads the newer file; putting the
+  backup back would lose writes made since.
+- No MCP tool for updating: only a terminal on that computer can start it.
+
 ## From no summaries for housekeeping sessions (task 39, branch `dev/2.4-review-fixes`)
 
 Closed in task 39: on Oct 22, 2026 one undo run left 18 session summaries (#105-#122) John
