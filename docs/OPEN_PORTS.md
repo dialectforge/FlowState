@@ -69,6 +69,11 @@ Closed in task 39: on Oct 22, 2026 one undo run left 18 session summaries (#105-
 had to reject one by one. A session made only of reads, undo, review decisions, a handoff
 pickup or todo claims (`autosession.HOUSEKEEPING`) now files no review item; summaries count
 saves by kind; the pages ask "Keep this session summary?" (Keep / Don't keep).
+Also closed: `test_save_latency_on_2000_records` failed at random under disk load on
+example-host (about 15 ms alone, 36-59 ms when the disk was busy, against a fixed 40 ms wall-clock
+bound). It now checks what the code controls: each save commits exactly once (counted), and the
+save's time without that one commit's disk wait stays under 40 ms (about 10 ms here, also with
+three disk-flooding writers running).
 
 Open:
 - **Optional one-time clean-up of already-queued housekeeping summaries.** Not built: nothing
@@ -82,12 +87,6 @@ Open:
   (read-only copy, no logs). Worth one look at the live logs for those dates.
 - **The phone list and tunnel page wording on a real phone.** Keep / Don't keep is checked in
   tests (the list's JSON, the page HTML), not looked at in a browser.
-- **`test_save_latency_on_2000_records` is load-sensitive on the host PC.** Alone it measures
-  about 15.3 ms median, both on this branch and on c7ff8a9 (5 rounds each, 15.1-15.4 ms). But
-  when the disk is busy it goes to 36-59 ms, with nothing else of the test run going on (seen
-  2026-10-22: one isolated run at 36.3 ms, and full runs at 40.7 and 58.7 ms against the
-  40 ms bound). The bound is a fixed wall-clock number, so a busy disk fails it. One fix would be to compare
-  against a same-run baseline write instead of a fixed number.
 
 Tradeoffs (decided, not debt):
 - **What counts as housekeeping** is a fixed allow-list in `autosession.py`; every other write
