@@ -1846,10 +1846,12 @@ def _stop(srv, plog):
     plog.close()
 
 
-def _from_elsewhere(W, base, Q):
-    """start_here and the walk from an app on another computer (spoofed "local" headers)."""
+def _from_elsewhere(W, base, Q, boxes=False):
+    """start_here and the walk from an app on another computer (spoofed "local" headers).
+    `boxes`: it declares elicitation (on the LAN listener it would then get boxes, which this
+    client never answers, so the LAN checks don't declare it)."""
     rc = HttpClient(f"{base}/mcp", W.shared_token, "Cursor", headers=SPOOF_LOCAL,
-                    capabilities={"elicitation": {}})
+                    capabilities={"elicitation": {}} if boxes else None)
     try:
         b = brief_text(rc.call("start_here", project=Q))
         r = rc.call("manage_review", action="walk", project=Q)
@@ -2020,7 +2022,7 @@ def s15_without_terminal(W):
         hdr = {"content-type": "application/json", "origin": base, "sec-fetch-site": "same-origin"}
         # the live bug: a relay connection calling itself "Cursor" that declares elicitation
         rows = W.count("approval_log")
-        rline, rb, r, rc = _from_elsewhere(W, base, Q)
+        rline, rb, r, rc = _from_elsewhere(W, base, Q, boxes=True)
         R.check(15, "through the relay, an app calling itself Cursor (elicitation declared): no boxes sent, "
                     "nothing logged, the honest plain list with the links",
                 rc.server_requests == [] and "walked" not in r and r.get("items")
@@ -2043,7 +2045,7 @@ def s15_without_terminal(W):
         R.check(15, "an app on another computer on the LAN, relay set up: the bare phone link, no 127.0.0.1",
                 pm and "127.0.0.1" not in lb and "127.0.0.1" not in json.dumps(lr)
                 and f"on their phone: {pm.group(1)}," in lline and lr.get("phone") == pm.group(1)
-                and "review_page" not in lr, (lline, lr))
+                and "review_page" not in lr and lr.get("items") and "walked" not in lr, (lline, lr))
         with httpx.Client(timeout=30) as hc:
             # the bookmark link: the site (signed-in owner) sends the browser to /review/start
             st = hc.get(f"{base}/review/start", params={"handle": "evil"}, headers={"X-Forwarded-Host": "evil.example"},
