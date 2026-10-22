@@ -59,10 +59,30 @@ Closed: the "user-gated hard delete" follow-on. Deletes ship as user-approved re
   unless it uses a per-app key, remote token or OAuth. Same limit as every other "who" field.
 - **Paraphrases.** The duplicate check is cleanup's word match (same words, or Jaccard 0.8+
   on 3+ words). A reworded copy of a guess is saved `user_stated`, shown with the app's name.
-- **Docs say the phone keys are placeholders; the code pins two.** CHANGELOG 2.4.0 ("Not in
-  this release yet: flowstatemcp.com's signing keys") and docs/APPROVALS.md section 3 say
-  `FSA_PUBLIC_KEYS` is `None`; `approvals.py` now pins `fsa-1` and `fsa-2` (Oct 21, 2026).
-  Found, not changed, in task 30: correct the two docs once the site's keys are confirmed live.
+Closed in task 31: "Docs say the phone keys are placeholders". CHANGELOG 2.4.0, README's
+honest limits and docs/APPROVALS.md section 3 now say what `approvals.py` does: it pins
+`fsa-1` and `fsa-2`.
+
+## From "see what's waiting without a terminal" (task 31, branch `release/2.4-trust`)
+
+- **The site's side of the phone review list.** `https://flowstatemcp.com/review/<handle>?n=`
+  (sign-in, device check, 303 to `https://<handle>.fsmcp.com/review#g=<grant>` with action
+  `open_review`, item 0) is built in the web repo, not here. FlowState's side follows
+  docs/APPROVALS.md section 5 and is tested with test keys only; check it end to end against
+  the live site once that ships.
+- **A link outlives the process that serves it.** The local page runs inside one FlowState
+  process (the first that needed a link). When that app quits, a link shown earlier stops
+  answering until the next brief or walk starts the page again in another process (on 8770
+  again when free, else another port, so an old link with another port stays dead). A small
+  separate page process, or handing the page over on exit, would fix it.
+- **Phone review sessions live in memory.** Restarting the HTTP server (or the relay agent)
+  ends them; the user opens a new link from the chat. Persist them (hashed, like
+  `approval_grants`) if that turns out to be annoying.
+
+Tradeoffs (decided, not debt): the walk shows at most 20 items per call (`waiting.WALK_MAX`;
+asking again shows the rest); the brief's 127.0.0.1 link is also shown to apps on other
+machines (it says "on this computer"); the local page has no key, by design (the link is
+meant to be clicked), and its limit is documented.
 
 ## From one commit per save (task 29, branch `release/2.4-trust`)
 

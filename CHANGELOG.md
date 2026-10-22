@@ -10,6 +10,8 @@
   your terminal.
 - Writes say what they saved, and a write that timed out is no longer a mystery (or a
   duplicate when the agent tries again).
+- See and decide what's waiting for you without a terminal: in the chat, from a link to the
+  review page on your computer, or (with the relay) on your phone. Nothing pops up unless you ask.
 - Four bugs fixed: timed-out writes, pre-restore backups pruned the same day, two windows of
   one app sharing a session, and undo that couldn't take back a new record or refused a
   whole change over one row. Then 14 more found by an end-to-end mock-project test (below).
@@ -37,7 +39,7 @@
   returns `skipped: [{record_type, record_id, why}]` instead of refusing all of it; it refuses
   only when nothing could be undone.
 
-- **Found by the end-to-end test** (`tests/e2e/run_e2e.py`, now 13 scenarios, four agents):
+- **Found by the end-to-end test** (`tests/e2e/run_e2e.py`, now 15 scenarios, four agents):
   - Window A never heard about window B's work: "Since your last visit" now counts from this
     window's own previous brief, so other windows of the same app count too. A save in the
     same second as a brief is no longer reported again on the next one.
@@ -127,13 +129,38 @@
   The answer to the agent is one short line: the popup's result, else the link, else the
   command. Every decision is logged with how it was made (popup / phone / terminal / review
   page), the app and the time; `manage_history(action="list")` shows them under `approvals`.
-- **Not in this release yet:** flowstatemcp.com's signing keys. `FSA_PUBLIC_KEYS` in
-  `approvals.py` is a marked placeholder until the site's task ships them; until then every
-  grant is refused and no phone link is shown, so the popup and the terminal are the paths.
+- flowstatemcp.com's public keys (`fsa-1`, `fsa-2`) are pinned in `approvals.py`
+  (`FSA_PUBLIC_KEYS`); a grant signed with any other key is refused.
 - **Honest limit:** this stops agents approving their own work through FlowState. An agent that
   controls your own logged-in browser or your terminal window could still get through.
 - The installed MCP SDK (1.30, protocol up to 2025-11-25) has no support for the 2026-07-28
   way of asking the user, so only the server-to-client request is used.
+
+### See and decide what's waiting for you, without a terminal
+- **In the chat:** ask your AI to show what's waiting; it calls `manage_review(action="walk")`
+  (a new action on an existing tool; no new tool). In Claude Code, Cursor and VS Code (the
+  approvals popup's list, when the app declared form dialogs) each waiting item comes up as a
+  box: ticked = approve, unticked = reject, decline = skip, close = stop; at most 2 minutes per
+  box, holding no database lock. Approvals off too, because you asked. Other apps, and
+  read-only apps, get the list in plain words with the links below. Only your answer in the box
+  decides; nothing the app passes counts.
+- **A link to the review page:** when something waits, the brief and the walk's answer include
+  `http://127.0.0.1:<port>/`. FlowState starts the review page inside its own process the first
+  time a link is needed (stdio or HTTP), one per computer and database (another FlowState
+  process reuses it), on 127.0.0.1 only, port 8770 or a free one if that is taken
+  (`FLOWSTATE_REVIEW_PORT`; `off` turns it off). Clicking the link opens it at once; every
+  change still needs the page's cookie, its CSRF token, a 127.0.0.1 Host and a same-origin
+  Origin. `flowstate review-page` keeps its one-time key.
+- **Your phone (relay users):** `https://flowstatemcp.com/review/<handle>?n=<code>` in the brief
+  and the walk's answer (relay enrolled, keys pinned, phone links on). The site signs you in and
+  sends your phone to your own FlowState at `/review` with a 5-minute signed grant (`action`
+  `open_review`, `item` 0; same keys and checks as the approve page); the one-time code is used
+  up, and you get the whole list with Approve / Reject for 15 minutes (cookie HttpOnly, Secure,
+  SameSite=Strict, path `/review`). Contract: `docs/APPROVALS.md` section 5.
+- Decisions in the chat walk and on the phone list go through the same user-only path as the
+  popup and are all logged with how they were made (`chat` / `phone`).
+- Honest limit: a program on your own computer (an AI that runs commands or drives your browser)
+  can open the 127.0.0.1 page too, as it could run `flowstate approve`.
 
 ### Only you can turn an AI guess into "the user said so"
 - A record's source tag (`user_stated`, `ai_inferred`, `from_code`) now stores who set it and
@@ -193,7 +220,8 @@
   `approval_requests` (each phone link's one-use code), `approval_grants` (hashes of phone
   grants seen) and `approval_log` (every user-only decision). No row = approvals off.
   020 adds three nullable columns to `record_meta` (`source_set_by`, `source_set_model`,
-  `source_set_at`: who set a source tag); older rows keep NULL.
+  `source_set_at`: who set a source tag); older rows keep NULL. 021 adds `review_open_nonces`
+  (the phone review list's one-use codes).
 - Edit history rows for created records use the tool names `create/<type>` and
   `approve/<type>`. "Who did what" still lists each creation once.
 

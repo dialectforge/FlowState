@@ -124,7 +124,8 @@ All commands run with the venv Python: `<venv python> -m flowstate <command>`.
 | restore | `flowstate restore <backup file>` (into a new file, verified; `--to <new file>`) |
 | approvals (user) | `flowstate approvals` shows them; `approvals on [--project P]`: an AI's deletes and turning review off wait for the user (popup, phone link, terminal); `approvals off` asks for `y` on the terminal; `approvals phone on\|off`; `approvals popup add\|remove NAME` |
 | review queue (user) | `flowstate review` lists it; `flowstate approve <id> [<id> ...]` / `flowstate reject <id> [--reason ...]` ask for `y` on the terminal (never piped input; no terminal = refused) |
-| review page (user) | `flowstate review-page` (127.0.0.1:8770 only; opens the browser with a one-time link; includes "Who did what") |
+| review page (user) | `flowstate review-page` (127.0.0.1:8770 only; opens the browser with a one-time link; includes "Who did what"). Without a command: the `http://127.0.0.1:<port>/` link in the brief and in `manage_review(action="walk")`'s answer (FlowState starts the page on first need, 127.0.0.1 only; `FLOWSTATE_REVIEW_PORT`) |
+| phone review list (user, relay) | `https://flowstatemcp.com/review/<handle>?n=<code>` in the brief and the walk's answer when the relay is enrolled and phone links are on (`approvals phone on\|off`); see `docs/APPROVALS.md` |
 | per-app keys for the local/LAN HTTP server (user) | `flowstate keys add --name NAME [--read-only] [--workspace W]` (shows the key once) / `keys list` / `keys revoke --id ID` (or `--name NAME`) |
 | pause an app (user) | `flowstate apps list` / `apps pause --app NAME` / `apps resume --app NAME` |
 
@@ -347,7 +348,12 @@ don't show server instructions:
    words in `user_request`. An item your own app queued needs the user's own words (not one
    word, not the item's text), or the user decides it with `flowstate approve <id>` in their
    terminal. Don't run that for them: it asks for their `y` on the terminal and refuses piped
-   input.
+   input. When the user asks to see what's waiting, call `manage_review(action="walk")`: in
+   apps that show MCP form dialogs (Claude Code, Cursor, VS Code) FlowState asks the user about
+   each item itself and acts only on their answer in that box; elsewhere you get the list and
+   the links (`review_page` on this computer, `phone` with the relay) to show the user. Never
+   approve or reject them yourself afterwards. The brief's review-queue line carries the same
+   links.
 7. The **review mode** (`off`, `auto_only` default, `types`, `everything`; shown in the brief)
    decides what else waits for review. Only call `manage_review(action="set_mode")` when the
    user asks for that change in the chat, quoting their words in `user_request`; every change
@@ -428,6 +434,7 @@ The same guidance is available as the MCP prompt `flowstate-start`.
 | `FLOWSTATE_STALE_DAYS` | 60 | facts not checked for this many days are listed for re-checking |
 | `FLOWSTATE_MODEL` | | stdio: the model name to record when the app passes none (set it only if you know it) |
 | `FLOWSTATE_WORKSPACE` | this computer's name | stdio: the machine / workspace name recorded with each change |
+| `FLOWSTATE_REVIEW_PORT` | 8770 | the review page FlowState starts on 127.0.0.1 when a link is needed (taken: any free port; `0` any free port; `off` no page or link) |
 | `FLOWSTATE_CONFIG_DIR` | Windows `%APPDATA%\flowstate`, macOS `~/Library/Application Support/flowstate`, Linux `~/.config/flowstate` | FlowState settings (off-site repo name; never secrets) |
 
 ## Working on this repo
@@ -454,7 +461,8 @@ The same guidance is available as the MCP prompt `flowstate-start`.
   `who.py`, `claims.py`, `conflicts.py`, `backup.py`, `offsite.py`, `scheduler.py`, `cli.py`, `cli_more.py`,
   `cli_review.py` (the user's `review` / `approve` / `reject` / `approvals`), `approvals.py` (opt-in
   user-only approvals, phone grants, pinned `FSA_PUBLIC_KEYS`), `popup.py` (MCP elicitation),
-  `approve_page.py` (the phone page at `/approve/<item>`), `connections.py`, `http_app.py`; the optional
+  `approve_page.py` (the phone page at `/approve/<item>`), `review_phone.py` (the phone review list at
+  `/review`), `waiting.py` (the chat walk, the local review link and the page started on first need), `connections.py`, `http_app.py`; the optional
   relay agent in `relay/`, wire protocol in `docs/relay-protocol.md`). Schema:
   `database/schema.sql` (base) plus numbered migrations in `mcp-server/flowstate/migrations/`
   (new tables only, or `ADD COLUMN ... DEFAULT NULL` on FlowState's own v2 tables as in 012;

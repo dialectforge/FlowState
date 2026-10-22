@@ -224,8 +224,9 @@ prompt `flowstate-start`.
   project, sent to the review queue as suggestions. Nothing moves until you approve.
 
 **Your controls (command line and browser)**
-- **Local review page**: `flowstate review-page` opens a small page in your browser (this
-  computer only, one-time link): review queue, review mode, pause apps, "Who did what".
+- **Local review page**: a small page in your browser, on this computer only: review queue,
+  review mode, pause apps, "Who did what". Click the link in your AI's answer (see "Where to see
+  what's waiting for you"), or run `flowstate review-page` (one-time link).
 - **Per-app activity log and pause**: see which app did what (`flowstate apps list` /
   `apps activity`) and pause one app's writes (`apps pause --app NAME`). A paused app can still read.
 - **Markdown export and import**: `export-md` writes a readable copy of a project; `import-md`
@@ -294,6 +295,44 @@ The v1.1 desktop GUI was an unfinished experiment and has been removed. v2 is us
 
 ---
 
+## Where to see what's waiting for you
+
+Some things wait for your OK: session summaries FlowState wrote on its own, records an AI
+suggested, clean-up ideas, "did you say this yourself?" checks, and (with approvals on) an AI's
+deletes. You don't need a terminal to see and decide them. Nothing pops up unless you ask, or
+you have turned approvals on.
+
+1. **In the chat (everyone).** Ask your AI "show me what's waiting for me". It calls
+   `manage_review(action="walk")`. In Claude Code, Cursor and VS Code (the apps FlowState knows
+   show a real dialog, the same list as the approvals popup), each item comes up one at a time
+   as a box: tick **Approve** and submit to approve, submit it unticked to reject (the optional
+   note is the reason), decline to skip it, close the box to stop. FlowState acts only on your
+   answer in that box; your AI can't answer for you. This works with approvals off too, because
+   you asked. In other apps the AI gets the list in plain words and the links below to show you.
+2. **A link to the review page on this computer (everyone).** When something waits, the brief
+   your AI reads, and the walk's answer, include a link like `http://127.0.0.1:8770/`. Click it
+   and the review page opens; no command needed. FlowState starts the page itself the first
+   time a link is needed, one per computer (another FlowState on the same computer reuses it),
+   on 127.0.0.1 only; if 8770 is taken it picks a free port. `FLOWSTATE_REVIEW_PORT` sets the
+   port (`0` any free one, `off` no page or link). `flowstate review-page` still works as before.
+3. **On your phone (relay users).** If the relay agent is set up, the brief and the walk's
+   answer also have `https://flowstatemcp.com/review/<handle>?n=<code>`. The site signs you in,
+   checks the computer is yours, and sends your phone to your own FlowState
+   (`https://<handle>.fsmcp.com/review`) with a 5-minute signed pass. Your FlowState checks it
+   with the site's pinned public key, uses up the one-time code, and shows the whole list with
+   Approve / Reject on each item (a 15-minute session). The site never sees what's in it.
+   `flowstate approvals phone off` turns phone links off.
+
+Who gets which: without the relay, 1 and 2; with the relay, 1, 2 and 3. Every decision made in
+the chat walk or on the phone list is logged with how it was made (`chat` or `phone`); see
+`manage_history(action="list")`.
+
+Honest limit: the review page answers only on 127.0.0.1 and only to same-origin form posts
+carrying the page's CSRF token, so other websites can't use it. But a program on your own
+computer (an AI that runs commands or drives your browser) can open
+`http://127.0.0.1:<port>/` too, just as it could run `flowstate approve`. And the chat walk's
+boxes are only as trustworthy as the app that shows them.
+
 ## Commands for you (not the AI)
 
 Run with the venv Python: `<venv python> -m flowstate <command>` (or `flowstate <command>` with
@@ -304,7 +343,7 @@ the venv active). Add `-h` to any command for its options.
 | `review [--project NAME]` | List what waits in the review queue |
 | `approve ID [ID ...]` / `reject ID [--reason TEXT]` | Decide review items; asks you to type `y` in this terminal (piped input doesn't count) |
 | `approvals [on\|off] [--project P]` | Opt-in approvals (off by default). `on`: an AI's deletes and turning review off wait for you. Turning them `off` asks for `y` in this terminal. Also `approvals phone on\|off` and `approvals popup add\|remove NAME` |
-| `review-page` | Review page in your browser (127.0.0.1 only): approve / edit / reject, review mode, pause apps, "Who did what" (with undo) |
+| `review-page` | Review page in your browser (127.0.0.1 only): approve / edit / reject, review mode, pause apps, "Who did what" (with undo). You can also just click the link in your AI's answer (see "Where to see what's waiting for you") |
 | `keys add --name N [--read-only] [--workspace W]` / `keys list` / `keys revoke --id ID` (or `--name N`) | Per-app keys for the local/LAN HTTP server; the key is shown once, only a hash is kept; a revoked key stops at once |
 | `apps list` / `apps activity` / `apps pause --app NAME` / `apps resume --app NAME` | Which app did what; stop one app from writing |
 | `backup [--offsite]` / `restore <file> [--to <new file>]` | Back up now / restore into a new, verified file |
@@ -332,7 +371,7 @@ the venv active). Add `-h` to any command for its options.
 | `search` | Find records by words (and by meaning, if set up); `answer=true` answers a plain question from your records with their ids; no query lists the newest records (`since_hours`) |
 | `manage_todos` | list, next, update (done / cancelled), block / unblock; add for subtasks, blockers and due dates; claim / renew / release / handoff so several agents don't do the same todo |
 | `manage_problems` | list, tree, add_attempt, end_attempt, solve |
-| `manage_review` | The review queue and review mode: list, get_mode; approve, reject, set_mode only when you ask |
+| `manage_review` | The review queue and review mode: list, get_mode; walk (when you ask to see what's waiting: you decide each item in a box, or you get the links); approve, reject, set_mode only when you ask |
 | `manage_handoffs` | Leave / list / pick up "where I was, next step" notes |
 | `manage_rules` | A project's hard rules |
 | `manage_links` | Link projects, shared components, records and URLs |
@@ -428,10 +467,13 @@ protocol is in [docs/relay-protocol.md](docs/relay-protocol.md).
   FlowState; an AI that controls your own logged-in browser or your terminal window could still
   get through, and the popup is only as trustworthy as the app that shows it. Hard rules are
   shown first in every brief; FlowState can't stop an AI from doing something outside FlowState.
-- **Phone approvals wait for the site's keys.** This release pins flowstatemcp.com's public keys
-  as a placeholder, so phone links stay off (popup and terminal work) until a release ships them.
-  The site vouches for who signed in but can't read anything; a leaked site key still can't
-  approve without the one-use code on your computer and your tap on your own FlowState's page.
+- **Phone approvals trust flowstatemcp.com's sign-in.** This release pins the site's two public
+  keys (`fsa-1`, `fsa-2`). The site vouches for who signed in but can't read anything; a leaked
+  site key still can't approve without the one-use code on your computer and your tap on your
+  own FlowState's page.
+- **The local review page has no password.** It answers only on 127.0.0.1, checks the Host and
+  Origin headers and needs the page's CSRF token for every change, so websites can't use it; a
+  program running on your computer can still open it (see "Where to see what's waiting for you").
 - **Answers are extractive** (`search` with `answer=true`): it quotes the best-matching sentences of your records; it doesn't write new answers.
 - **Tested mainly on Windows and macOS.** Linux should work but is less tested.
 - **Remote access is optional and takes setup**: your own domain on Cloudflare, `cloudflared`

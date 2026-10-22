@@ -3,7 +3,36 @@
 Approvals are opt-in (`flowstate approvals on`); off, FlowState asks the user nothing and
 deletes are undone with `manage_history`. With them on, an agent's delete and turning review
 off wait for the user's own click or key: popup, phone, or terminal (see `approvals.py`).
-This page is the phone part, which needs the site.
+This page is the phone part, which needs the site: the approve link for one item (sections
+1-4) and the review list of everything waiting (section 5).
+
+## Where the user sees what's waiting (no terminal needed)
+
+Whatever the approvals setting, the user can see and decide the whole review queue three ways
+(`waiting.py`). Nothing is shown unless the user asks, or has approvals on.
+
+- **Chat walk:** `manage_review(action="walk")`, called when the user asks. On apps on the
+  popup allowlist that declared form elicitation (`approvals.popup_allowed`: Claude Code,
+  Cursor, VS Code; never claude.ai / Anthropic), FlowState sends one form per item: a required
+  boolean `approve` (ticked = approve, unticked = reject), an optional note (the reject reason)
+  and, for a project delete, the project's name. Decline skips the item; cancel, no answer
+  within 120 s or a failure stops the walk. Each decision goes through `popup.as_user` with the
+  label `chat (<app>)`. Read-only apps and other apps get the list in plain words and the
+  links. Nothing the calling app passes (`user_request`, extra arguments) is an answer.
+- **Local link:** `http://127.0.0.1:<port>/`, the review page (`review_page.py`) started inside
+  the FlowState process the first time a link is needed: one per computer and database (a
+  state file under the data folder names the port; another process pings `/ping` and reuses
+  it), bound to 127.0.0.1 only, port `FLOWSTATE_REVIEW_PORT` (default 8770, any free port if
+  taken). A visit starts a browser session at once (no key; the link is meant to be clicked).
+  Every change needs that session's cookie (HttpOnly, SameSite=Strict), its CSRF token, the
+  Host 127.0.0.1/localhost and a same-origin `Origin` header. `flowstate review-page` keeps its
+  one-time key.
+- **Phone list (relay users):** section 5.
+
+Decisions in the chat walk and on the phone list are all logged in `approval_log` (path `chat`
+or `phone`), user-only items or not. Honest limit: a program on the user's computer (an agent
+that runs commands or drives the user's browser) can reach the 127.0.0.1 page, as it could run
+`flowstate approve`.
 
 ## "The user said so" is always user-only
 
@@ -72,9 +101,9 @@ Payload:
 Keys: private key only as the Worker secret `FSA_SIGNING_KEY` (JWK). Public JWKs
 (`{"kty": "EC", "crv": "P-256", "x": ..., "y": ...}`, kid `fsa-1` active, `fsa-2` backup)
 published at `https://flowstatemcp.com/.well-known/flowstate-approval-keys.json` and pinned in
-`mcp-server/flowstate/approvals.py` as `FSA_PUBLIC_KEYS`. **In this release both are a marked
-placeholder (`None`): every grant is refused and no phone link is shown until a release pins
-the keys the web task produces.** Rotation: sign with `fsa-2` once a release pinning it is out.
+`mcp-server/flowstate/approvals.py` as `FSA_PUBLIC_KEYS` (this release pins both). A kid that
+maps to `None` is refused; if both were `None`, no phone link would be shown and every grant
+refused. Rotation: sign with `fsa-2` once a release pinning it is out.
 
 ## 4. What FlowState does with it
 
@@ -99,3 +128,45 @@ Errors are JSON `{"error", "message"}` with status 403 (`phone_approvals_unavail
 Limit: a leaked site key still can't approve without the one-use code on the user's computer
 and a tap on their own FlowState's page; an agent that controls the user's own logged-in browser
 could.
+
+## 5. The review list (everything waiting, one link)
+
+The link FlowState gives (in the brief's review-queue line and in the walk's plain answer):
+
+`https://flowstatemcp.com/review/<handle>?n=<nonce>`
+
+- Shown only when the relay agent is enrolled and on, phone links are on (`flowstate approvals
+  phone on|off`) and the release pins at least one key: the same conditions as section 1.
+- `nonce`: 43 url-safe characters, made on this computer (`review_open_nonces`, migration 021),
+  bound to the action `open_review` and an expiry (7 days). The open one is reused until it is
+  used; it is used up when a grant carrying it opens the list, and a fresh one is made the
+  next time a link is shown.
+
+What the site does: require sign-in, check `<handle>` is on the account, then `303` to
+`https://<handle>.fsmcp.com/review#g=<grant>`.
+
+The grant: exactly as section 3 (header, ES256, keys, `iss`, `aud`, `sub`, `handle`, `nonce`
+format, `iat` / `exp` with `exp = iat + 300`), except `"action": "open_review"` and
+`"item": 0` (a JSON integer). FlowState checks every claim the same way, then uses up the nonce
+(one UPDATE that only succeeds while it is unused and unexpired).
+
+What FlowState does (`review_phone.py`, on the HTTP app, so the relay reaches it):
+
+- `GET /review`: an empty page, the same headers as `/approve` (CSP `default-src 'none';
+  script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'`,
+  `X-Frame-Options: DENY`, `Cache-Control: no-store`, no referrer). Its script reads `#g=`,
+  removes it from the address bar (`history.replaceState`) and posts it.
+- `POST /review/open` `{"grant"}` (JSON, same origin): checks the grant and uses up the nonce;
+  starts a session: cookie `fs_review_phone` (HttpOnly, Secure, SameSite=Strict, Max-Age 900,
+  Path `/review`) plus a page token in the answer; answers with the waiting items (all
+  projects, oldest first, up to 50) from the local database.
+- `POST /review/decide` `{"token", "item_id", "decision": "approve" | "reject",
+  "confirm_name"?, "reason"?}` (JSON, same origin): the cookie and the page token must match a
+  live session. Approve or Reject goes through the same user-only path as the approve page
+  (`popup.as_user`, label `phone (<handle>)`) and is logged (`approval_log`, path `phone`).
+  Answers with the updated list.
+
+Errors are JSON `{"error", "message"}` with status 403 (`phone_approvals_unavailable`,
+`relay_not_enrolled`, `bad_grant`, `unknown_key`, `bad_signature`, `grant_expired`,
+`wrong_device`, `wrong_item`, `grant_used`, `bad_token`, `bad_request`); a decision FlowState
+refuses (for example a project delete without its exact name) is 409.
