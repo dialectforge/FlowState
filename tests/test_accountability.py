@@ -221,7 +221,8 @@ def test_auto_session_summary_is_marked_for_its_app(seeded_db, tmp_path):
     from flowstate.autosession import AutoSessions
     t = AutoSessions(seeded_db)
     with identity.use(identity.Identity("Someone Else", "m", "elsewhere", "app_key")):
-        t.touch("Session App", 1, "read:start_here")
+        sid = t.touch("Session App", 1, "read:start_here")
+        t.note(sid, "learning: a real save (a session with none files no item)")
         t.close_instance("shutdown")
     assert _q(seeded_db, "SELECT app, model, machine, identity_source FROM review_items "
                          "WHERE kind = 'session_summary'") == [("Session App", None, None, "self_reported")]

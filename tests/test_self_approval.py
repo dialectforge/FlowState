@@ -80,6 +80,7 @@ def test_another_app_relaying_the_user_is_unchanged(backend):
 def test_own_session_summary_counts_as_own(backend):
     S = backend
     call(S, "start_here", {"project": "Alpha"}, app="Cursor")
+    call(S, "log_work", {"project": "Alpha", "kind": "learning", "summary": "a real save"}, app="Cursor")
     S.backend.tracker.close_instance("shutdown")
     conn = sqlite3.connect(S.backend.db_path)
     item = conn.execute("SELECT id FROM review_items WHERE kind = 'session_summary'").fetchone()[0]
