@@ -46,6 +46,24 @@ Closed: the "user-gated hard delete" follow-on. Deletes ship as user-approved re
   as tests/conin_typist.py does, gets through, just as one that opens a pseudo-terminal does
   on macOS / Linux. Documented in cli_review.py; the popup and phone paths don't have it.
 
+## From "only the user sets user_stated" (task 30, branch `release/2.4-trust`)
+
+- **Delete and log again.** With approvals off an agent's delete goes through at once, so an
+  agent could delete another app's `ai_inferred` record and log the same words as
+  `user_stated`: the duplicate check finds nothing to match. It shows (the brief's "Deleted in
+  the last 7 days" line, `(user, via <app>)` on the new record, undo brings the old one back),
+  but it isn't refused. With approvals on, the delete waits for the user. A fix could keep
+  deleted records' texts in the duplicate check for a while.
+- **App names on stdio and the shared token are the app's own say-so.** "Another app" (rule 5)
+  and the `via <app>` stamp use identity.py's app name; an app can claim another's name
+  unless it uses a per-app key, remote token or OAuth. Same limit as every other "who" field.
+- **Paraphrases.** The duplicate check is cleanup's word match (same words, or Jaccard 0.8+
+  on 3+ words). A reworded copy of a guess is saved `user_stated`, shown with the app's name.
+- **Docs say the phone keys are placeholders; the code pins two.** CHANGELOG 2.4.0 ("Not in
+  this release yet: flowstatemcp.com's signing keys") and docs/APPROVALS.md section 3 say
+  `FSA_PUBLIC_KEYS` is `None`; `approvals.py` now pins `fsa-1` and `fsa-2` (Oct 21, 2026).
+  Found, not changed, in task 30: correct the two docs once the site's keys are confirmed live.
+
 ## From one commit per save (task 29, branch `release/2.4-trust`)
 
 Closed: "Save latency on Windows" (task 28). A save now commits once (`saves.py`,

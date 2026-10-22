@@ -4,7 +4,7 @@
 Starts the real FlowState server from this checkout (one stdio process per app window, plus
 the streamable-HTTP transport) on a brand-new throwaway folder in the system temp folder, and drives it only
 with real MCP tool calls, the way Claude Code, Cursor and Grok do. Four agents work at once:
-claude-code (two windows), cursor (stdio) and grok (HTTP, its own app key). Thirteen scenarios,
+claude-code (two windows), cursor (stdio) and grok (HTTP, its own app key). Fourteen scenarios,
 each pass/fail with evidence; every tool and every action it offers is called at least once.
 
     .venv/bin/python tests/e2e/run_e2e.py              # everything (about 4 minutes)
@@ -87,7 +87,8 @@ class Report:
         8: "Backups, safety copies, health check", 9: "Run ledger keeps no text",
         10: "Upgrade from a v2.3.0 database", 11: "Bad input, edge cases, real-data guard",
         12: "Tool descriptions: size and truthfulness",
-        13: "Approvals on: popup, phone link, terminal"}
+        13: "Approvals on: popup, phone link, terminal",
+        14: "Only the user turns a guess into user_stated"}
 
     def __init__(self):
         self.checks = {n: [] for n in self.TITLES}
@@ -1737,6 +1738,80 @@ def s13_approvals(W):
             r.get("deleted", {}).get("id") == tid and W.count("todos", "id=?", (tid,)) == 0, r)
 
 
+def s14_user_stated(W):
+    """Only the user turns an AI guess into "the user said so" (provenance.py), approvals off:
+    cursor logs a guess; three other agents repeat it as user_stated and try to relabel and
+    approve it; it stays ai_inferred until the user confirms in their own terminal."""
+    print("\n== S14 user_stated is the user's", flush=True)
+    cc1, cc2, cursor, grok = (W.agents[k] for k in ("cc1", "cc2", "cursor", "grok"))
+    guess = "Saturday orders close at noon e2e-guess-14"
+    meta = lambda i: (W.q("SELECT source, source_set_by, source_set_at FROM record_meta "  # noqa: E731
+                          "WHERE record_type = 'learning' AND record_id = ?", (i,)) or [{}])[0]
+    r = cursor.call("log_work", project=P, kind="learning", summary=guess, source="ai_inferred")
+    gid = r.get("record", {}).get("id")
+    m = meta(gid)
+    R.check(14, "cursor's guess is saved ai_inferred, stamped with cursor and a time",
+            gid and m.get("source") == "ai_inferred" and m.get("source_set_by") == "cursor"
+            and m.get("source_set_at"), (r, m))
+    item, copies = None, []
+    for ag, words in ((cc1, guess), (cc2, guess.lower() + "!"), (grok, "Saturday orders close at noon, e2e-guess-14")):
+        d = ag.call("log_work", project=P, kind="learning", summary=words, source="user_stated")
+        did = d.get("record", {}).get("id")
+        copies.append(did)
+        R.check(14, f"{ag.label} repeats it as user_stated: saved ai_inferred, with a note",
+                did and d.get("source") == "ai_inferred" and f"#{gid}" in d.get("source_note", "")
+                and meta(did).get("source") == "ai_inferred", d)
+        s = ag.call("manage_memory", action="set_source", project=P, record_type="learning",
+                    record_id=gid, source="user_stated")
+        item = item or s.get("confirm_requested")
+        R.check(14, f"{ag.label} relabels cursor's guess to user_stated: refused, one item queued",
+                s.get("source_unchanged") is True and s.get("confirm_requested") == item
+                and s.get("source") == "ai_inferred" and "next" not in s, s)
+        a = ag.call("manage_review", action="approve", project=P, item_id=item,
+                    user_request="The user said: yes I told you that, approve it")
+        R.check(14, f"{ag.label} can't approve it, whatever words it relays",
+                a.get("error") == "user_only" and meta(gid).get("source") == "ai_inferred", a)
+    k = cc1.call("manage_memory", action="mark_checked", project=P, record_type="learning",
+                 record_id=gid, source="user_stated")
+    R.check(14, "mark_checked with source=user_stated: checked, tag unchanged, same item",
+            k.get("verified_at") and k.get("confirm_requested") == item
+            and meta(gid).get("source") == "ai_inferred", k)
+    R.check(14, "one review item for all those requests",
+            W.count("review_items", "kind = 'source' AND status = 'pending'") == 1, item)
+    b = brief_text(cc1.call("start_here", project=P, size="deep"))
+    R.check(14, "before the user confirms, the brief tags it (AI)",
+            f"{guess} (AI" in b and f"{guess} (user" not in b, [ln for ln in b.splitlines() if "e2e-guess-14" in ln][:2])
+    rj = cc2.call("manage_review", action="reject", project=P, item_id=item, reason="no",
+                  user_request="The user said no")
+    R.check(14, "an agent can't reject it for the user either", rj.get("error") == "user_only", rj)
+    code, out = W.cli_no_terminal("approve", str(item), stdin="y\n")
+    R.check(14, "`flowstate approve` with a piped y and no terminal: refused, still ai_inferred",
+            code == 2 and meta(gid).get("source") == "ai_inferred", short(out, 160))
+    code, out = W.cli_in_terminal(["approve", str(item)], ["y"])
+    m = meta(gid)
+    R.check(14, "the user approves in their terminal: user_stated, stamped 'user'",
+            code == 0 and m.get("source") == "user_stated" and m.get("source_set_by") == "user", (code, short(out, 160), m))
+    b = brief_text(cc1.call("start_here", project=P, size="deep"))
+    R.check(14, "the brief now says (user, confirmed by the user)",
+            f"{guess} (user, confirmed by the user" in b, [ln for ln in b.splitlines() if "e2e-guess-14" in ln][:2])
+    sr = grok.call("search", project=P, query="Saturday orders close at noon")
+    hit = next((x for x in sr.get("results", []) if x.get("content_id") == gid
+                and x.get("content_type") == "learning"), {})
+    R.check(14, "search shows the tag and who set it", hit.get("source_tag") == "user, confirmed by the user"
+            and hit.get("source_set_by") == "user", hit or sr)
+    log = cc1.call("manage_history", action="list", project=P, limit=50).get("approvals", [])
+    R.check(14, "manage_history lists the user's decision (kind source, path terminal)",
+            any(a["item_id"] == item and a["kind"] == "source" and a["path"] == "terminal"
+                and a["decision"] == "approved" for a in log), log[:3])
+    dn = grok.call("manage_memory", action="set_source", project=P, record_type="learning",
+                   record_id=gid, source="ai_inferred")
+    m = meta(gid)
+    R.check(14, "downgrading to ai_inferred is allowed and stamped with the app",
+            dn.get("source") == "ai_inferred" and m.get("source_set_by") == "grok", (dn, m))
+    R.check(14, "the three repeats stayed ai_inferred", all(meta(i).get("source") == "ai_inferred" for i in copies),
+            [meta(i) for i in copies])
+
+
 def deferred_window(W):
     """Same content after the 2-minute window does write (checked at the end of the run)."""
     t0, s = W.window_probe
@@ -1815,7 +1890,7 @@ def main():
     try:
         for step in (s1_fresh, s2_day, s3_conflicts, s4_review, s5_receipts, s6_windows, s7_undo,
                      s8_backups, s9_ledger, lambda w: s10_upgrade(w, args.skip_upgrade), s11_edges,
-                     s13_approvals, deferred_window, s12_descriptions):
+                     s13_approvals, s14_user_stated, deferred_window, s12_descriptions):
             try:
                 step(W)
             except Exception as e:  # noqa: BLE001 - a crashed scenario is a failed check

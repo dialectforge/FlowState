@@ -334,3 +334,12 @@ def test_search_and_history_show_who_set_the_tag(backend):
     assert hist and hist[0]["source_tag"] == "user, via Claude Code"
     ans = call(S, "search", {"project": "Alpha", "query": "plain language reports", "answer": True})
     assert "user, via Claude Code" in ans["answer"]
+
+
+def test_the_note_names_the_original_guess_when_copies_exist(backend):
+    S = backend
+    old = guess(S)
+    for app in ("Claude Code", "Windsurf", "Grok"):
+        r = call(S, "log_work", {"project": "Alpha", "kind": "learning", "source": "user_stated",
+                                 "summary": "Deploys go out on Fridays only"}, app=app)
+        assert r["source"] == "ai_inferred" and f"repeats learning #{old}," in r["source_note"]

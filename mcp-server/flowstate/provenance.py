@@ -255,7 +255,8 @@ _DUP_TEXT = {"learning": "SELECT insight FROM learnings WHERE id = ? AND project
 def user_stated_dup(db_path: Path, pid: int, kind: str, summary: str,
                     app: Optional[str]) -> Optional[int]:
     """The id of an ai_inferred record of this kind in this project, tagged by another app (or
-    by one not recorded), that `summary` duplicates (cleanup.is_duplicate); else None."""
+    by one not recorded), that `summary` duplicates (cleanup.is_duplicate), oldest first; else
+    None."""
     if kind not in _DUP_TEXT:
         return None
     from .cleanup import is_duplicate
@@ -266,7 +267,7 @@ def user_stated_dup(db_path: Path, pid: int, kind: str, summary: str,
         by = "source_set_by" if stamped(conn) else "NULL"
         for rid, set_by in conn.execute(
                 f"SELECT record_id, {by} FROM record_meta WHERE record_type = ? "
-                f"AND source = 'ai_inferred' ORDER BY record_id DESC", (kind,)).fetchall():
+                f"AND source = 'ai_inferred' ORDER BY record_id", (kind,)).fetchall():
             if app and set_by == app:
                 continue
             row = conn.execute(_DUP_TEXT[kind], (rid, pid)).fetchone()
