@@ -3,9 +3,9 @@
 backup_now: SQLite online backup API from a read-only connection (safe while the
 servers are running), `PRAGMA integrity_check` on the copy, then retention: the newest
 backup of each of the last 14 days that have one, plus the newest of each of the last 8
-ISO weeks. Safety copies (labelled pre-restore, pre-migration or pre-bulk) are also kept for
-at least SAFETY_KEEP_DAYS whatever those limits say, so a later backup the same day can't
-remove the copy taken just before a restore. Only files named like FlowState backups are
+ISO weeks. Safety copies (labelled pre-restore, pre-migration, pre-bulk or pre-update) are
+also kept for at least SAFETY_KEEP_DAYS whatever those limits say, so a later backup the same
+day can't remove the copy taken just before a restore. Only files named like FlowState backups are
 ever deleted.
 
 restore: verify the backup, copy it into a NEW file, verify the result. Writing over an
@@ -23,7 +23,7 @@ from . import paths
 KEEP_DAILY = 14
 KEEP_WEEKLY = 8
 SAFETY_KEEP_DAYS = 7
-SAFETY_LABELS = ("pre-restore", "pre-migration", "pre-bulk")
+SAFETY_LABELS = ("pre-restore", "pre-migration", "pre-bulk", "pre-update")
 PREFIX = "flowstate-"
 _BACKUP_NAME = re.compile(r"^flowstate-(\d{8})-(\d{6})(?:-([a-z0-9-]+))?\.db$")
 

@@ -1,0 +1,12 @@
+# FlowState release signing keys (SSH allowed-signers format, read by `git verify-tag`).
+#
+# `flowstate update` installs a release only if its git tag is signed by a key listed HERE,
+# in the copy that is already installed (it reads this file before it changes anything; the
+# list inside the new release is not trusted). An empty list means every update is refused
+# with "no release signing key is set up yet".
+#
+# One line per key:   <principal> namespaces="git" ssh-ed25519 AAAA... <comment>
+# Public keys only. Never put a private key here. How to make the key and sign a release:
+# docs/RELEASING.md.
+#
+# A new key must arrive in a release signed by a key that is already listed here.

@@ -304,13 +304,26 @@ def maybe_refresh(fetch: Optional[Fetch] = None, path: Optional[Path] = None,
 
 
 # ---------------------------------------------------------------- the brief line
+def restart_line(running_version: str, state: dict) -> Optional[str]:
+    """After `flowstate update`, processes still running the old code say so."""
+    last = state.get("last_update") or {}
+    if last.get("result") == "ok" and newer(last.get("to"), running_version):
+        return (f"FlowState was updated to {last['to']}; this app still runs {running_version}. "
+                f"Ask the user to restart it.")
+    return None
+
+
 def brief_line(running_version: str, path: Optional[Path] = None) -> Optional[str]:
-    """One line when the saved answer names a release newer than the running code, else None.
+    """One line when the saved answer names a release newer than the running code (or when
+    this process runs older code than `flowstate update` installed), else None.
     Reads only update.json. Never raises."""
     try:
+        st = read_state(path)
+        restart = restart_line(running_version, st)
+        if restart:
+            return restart
         if not is_on():
             return None
-        st = read_state(path)
         latest = st.get("latest")
         if not newer(latest, running_version):
             return None

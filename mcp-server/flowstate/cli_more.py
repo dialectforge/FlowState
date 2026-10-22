@@ -9,6 +9,8 @@
     flowstate import-memory  --project P FILE [--source Claude|ChatGPT] [--kind learning]
     flowstate git-capture    enable --project P --repo PATH | disable --project P | status | run [--project P]
     flowstate update         check [on|off|now]   (the daily update check: updates.py)
+    flowstate update         [--dry-run] [--yes --user-said TEXT] [--rollback] [--db FILE] [--app NAME]
+                             (move this install to the newest signed release: selfupdate.py)
 """
 
 from pathlib import Path
@@ -185,9 +187,8 @@ def cmd_update(a) -> int:
     from . import updates
     if a.action == "check":
         return updates.cli_check(a.sub, say)
-    say("Installing a new version: " + updates.MANUAL_STEPS + ". Then quit and reopen your AI apps. "
-        "`flowstate update check` shows whether a newer release is out.")
-    return 1
+    from . import selfupdate
+    return selfupdate.cli(a, say)
 
 
 COMMANDS = ("cleanup", "apps", "meaning", "review-page", "export-md", "import-md", "import-memory",
@@ -250,7 +251,14 @@ def register(sub) -> None:
     p.add_argument("--db")
     p.set_defaults(fn=cmd_git_capture)
 
-    p = sub.add_parser("update", help="the daily update check: flowstate update check [on|off|now]")
+    p = sub.add_parser("update", help="update to the newest signed release (only when the user asks); "
+                                      "`update check [on|off|now]`: the daily update check")
     p.add_argument("action", nargs="?", choices=["check"])
     p.add_argument("sub", nargs="?", choices=["on", "off", "now"])
+    p.add_argument("--dry-run", action="store_true", help="check everything and show the plan; change nothing")
+    p.add_argument("--yes", action="store_true", help="don't ask in the terminal (needs --user-said)")
+    p.add_argument("--user-said", help="the user's own words asking for the update (kept in the history)")
+    p.add_argument("--rollback", action="store_true", help="go back to the version before the last update")
+    p.add_argument("--app", help="the AI app running this for the user (kept in the history)")
+    p.add_argument("--db", help="the database to back up and migrate (default: as the server)")
     p.set_defaults(fn=cmd_update)
