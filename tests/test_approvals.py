@@ -147,6 +147,7 @@ def call_text(S, name, args, app="Cursor"):
 def test_session_summaries_and_suggestions_never_need_the_user_only_step(on):
     S, db = on, on.backend.db_path
     call_text(S, "start_here", {"project": "Alpha"}, app="Cursor")
+    call(S, "log_work", {"project": "Alpha", "kind": "learning", "summary": "a real save"}, app="Cursor")
     S.backend.tracker.close_instance("shutdown")
     summary = _q(db, "SELECT id FROM review_items WHERE kind = 'session_summary'")[0][0]
     sug = call(S, "log_work", {"project": "Alpha", "kind": "todo", "summary": "idea",

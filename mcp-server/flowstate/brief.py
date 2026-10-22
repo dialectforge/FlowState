@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 from . import dbconn
+from .autosession import SKIP_TAG
 
 BRIEF_CAP = 4000
 
@@ -185,11 +186,12 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
                          ORDER BY verified DESC, created_at DESC, id DESC LIMIT ?""", pid, n_learn)
         meta = {k: provenance.get(conn, k, [r["id"] for r in rows]) for k, rows in
                 (("todo", todos), ("change", changes), ("decision", decisions), ("learning", learnings))}
-        # Auto-captured summaries aren't final until the user approves them.
+        # Auto-captured summaries aren't final until the user approves them; a session that
+        # saved nothing new (autosession.SKIP_TAG) isn't worth a line.
         last = q("""SELECT started_at, ended_at, summary FROM sessions
                     WHERE project_id=? AND ended_at IS NOT NULL AND summary IS NOT NULL
-                    AND summary NOT LIKE '[auto-captured%'
-                    ORDER BY ended_at DESC, id DESC LIMIT 1""", pid)
+                    AND summary NOT LIKE '[auto-captured%' AND summary NOT LIKE ?
+                    ORDER BY ended_at DESC, id DESC LIMIT 1""", pid, SKIP_TAG + "%")
         has_queue = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
                                  "AND name='review_items'").fetchone() is not None
         pending = q("SELECT COUNT(*) n FROM review_items WHERE project_id=? AND status='pending'",

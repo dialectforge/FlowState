@@ -48,7 +48,7 @@ from . import secrets_scan
 from .autosession import AutoSessions, ensure_schema
 from .brief import build_brief, candidates_text, resolve_project
 from .database import Database, default_db_path
-from .guard import GuardError, WRITES, check_write, explicit_project, is_write, writes_text
+from .guard import EXEMPT_ACTIONS, GuardError, WRITES, check_write, explicit_project, is_write, writes_text
 
 log = logging.getLogger("flowstate")
 
@@ -344,7 +344,8 @@ def _safe_track(fn, *a):
 
 
 def _label(name: str, args: dict) -> str:
-    what = args.get("kind") or (f"{name}/{args['action']}" if args.get("action") else name)
+    what = (args.get("kind") if name == "log_work" else None) \
+        or (f"{name}/{args['action']}" if args.get("action") else name)   # import_memory: a kind too
     if args.get("suggested"):
         what = f"suggested {what}"
     text = next((args[k] for k in ("summary", "title", "insight", "field_name", "skill", "name",
@@ -506,7 +507,8 @@ def _handle(name: str, args: dict, client: str, meta: dict) -> Any:
     if sid and tracker:
         failed = isinstance(result, dict) and "error" in result
         if pid and not failed:
-            event = _label(name, args) if is_write(name, args) else f"read:{name}"
+            write = is_write(name, args) or (name, args.get("action")) in EXEMPT_ACTIONS
+            event = _label(name, args) if write else f"read:{name}"   # review_mode set: a write
             _safe_track(tracker.note, sid, event)
     return result
 

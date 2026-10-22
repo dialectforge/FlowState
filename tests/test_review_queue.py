@@ -104,6 +104,7 @@ def test_suggested_record_waits_then_edit_and_approve(backend, seeded_db):
 def test_reject_keeps_item_with_reason(backend, seeded_db):
     t = AutoSessions(seeded_db, idle_minutes=60)
     sid = t.touch("Grok", 1)
+    t.note(sid, "learning: something real")
     t.close_instance()
     item = _q(seeded_db, "SELECT id FROM review_items WHERE session_id=?", sid)[0][0]
 

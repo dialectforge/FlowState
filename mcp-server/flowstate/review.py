@@ -17,6 +17,12 @@ from . import identity
 
 AUTO_TAG = "[auto-captured, needs review]"
 RECORD_KINDS = ("decision", "change", "problem", "learning", "todo")
+# What deciding a session summary does (approve() / reject() below), in the user's words, for
+# the review pages, the phone list and the chat walk.
+KEEP_QUESTION = "Keep this session summary?"
+KEEP_HOW = ("Keep saves it as the session's record. Don't keep marks it rejected, and the "
+            "session keeps only a note saying so; nothing is deleted.")
+KEEP, DONT_KEEP = "Keep", "Don't keep"
 
 
 def _now() -> str:

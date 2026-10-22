@@ -33,6 +33,7 @@ CREATE INDEX IF NOT EXISTS idx_auto_sessions_open ON auto_sessions(closed_at, cl
 
 AUTO_TAG = "[auto-captured, needs review]"
 OFF_TAG = "[auto summary, review off]"
+SKIP_TAG = "[auto summary, housekeeping]"   # saved nothing new: not queued
 MAX_EVENTS = 60
 MAX_SUMMARY = 600
 TS_FMT = "%Y-%m-%d %H:%M:%S"
@@ -44,6 +45,15 @@ def _utcnow() -> datetime:
 
 def _ts(dt: datetime) -> str:
     return dt.strftime(TS_FMT)
+
+
+def _add(events: list, event: str) -> list:
+    """`events` plus `event`, at most MAX_EVENTS long: the oldest read goes first, so a long
+    session never loses what it saved to its reads (is_housekeeping, build_summary)."""
+    events = events + [event[:120]]
+    while len(events) > MAX_EVENTS:
+        del events[next((i for i, e in enumerate(events) if e.startswith("read:")), 0)]
+    return events
 
 
 def _parse(ts: str) -> datetime:
@@ -146,8 +156,7 @@ class AutoSessions:
                 events = json.loads(row["events"] or "[]")
                 count = row["call_count"]
             if event:
-                events.append(event[:120])
-                events = events[-MAX_EVENTS:]
+                events = _add(events, event)
             conn.execute(
                 """UPDATE auto_sessions SET last_activity = ?, call_count = ?, events = ?,
                    server_instance = ? WHERE session_id = ?""",
@@ -170,7 +179,7 @@ class AutoSessions:
             row = conn.execute("SELECT events FROM auto_sessions WHERE session_id = ? "
                                "AND closed_at IS NULL", (session_id,)).fetchone()
             if row is not None:
-                events = (json.loads(row["events"] or "[]") + [event[:120]])[-MAX_EVENTS:]
+                events = _add(json.loads(row["events"] or "[]"), event)
                 conn.execute("UPDATE auto_sessions SET events = ? WHERE session_id = ?",
                              (json.dumps(events), session_id))
             conn.commit()
@@ -272,11 +281,23 @@ class AutoSessions:
         opened, last = _parse(row["opened_at"]), _parse(row["last_activity"])
         minutes = max(0, int((last - opened).total_seconds() // 60))
         events = json.loads(row["events"] or "[]")
-        summary = build_summary(row["client"], row["call_count"], minutes, events, reason)
+        # Reads go first when the list is full (_add); a full list without one may have lost
+        # saves, so it counts as work.
+        trimmed = (len(events) >= MAX_EVENTS and row["call_count"] > len(events)
+                   and not any(e.startswith("read:") for e in events))
+        name = conn.execute("SELECT name FROM projects WHERE id = ?",
+                            (row["project_id"],)).fetchone()
+        project = name[0] if name else f"project #{row['project_id']}"
+        summary = build_summary(row["client"], project, events, trimmed)
         outcomes = {"auto_captured": True, "needs_review": True, "close_reason": reason,
                     "client": row["client"], "calls": row["call_count"]}
         from .review_mode import get_with
-        if get_with(conn, row["project_id"])["mode"] == "off":
+        if not trimmed and is_housekeeping(events):
+            # Nothing new was saved (reads, undo, review decisions...): a plain record for
+            # the session's history, but nothing for the user to judge in the queue.
+            summary = SKIP_TAG + summary[len(AUTO_TAG):]
+            outcomes.update({"needs_review": False, "review": "skipped_housekeeping"})
+        elif get_with(conn, row["project_id"])["mode"] == "off":
             # The user turned review off: keep the summary as a normal one, queue nothing.
             summary = OFF_TAG + summary[len(AUTO_TAG):]
             outcomes.update({"needs_review": False, "review": "off"})
@@ -316,29 +337,95 @@ class AutoSessions:
             claims.release_for_session(conn, key["conn_key"], key["app"], project_id, reason)
 
 
-_REASON_TEXT = {"idle": "closed after idle timeout", "shutdown": "client disconnected",
-                "stale": "closed on next activity after idle timeout",
-                "explicit": "ended by agent"}
+# Event labels (server._label: "<kind or tool/action>[: text]", reads "read:<tool>") of
+# calls that save no new work: taking something back, deciding the review queue, picking up
+# a handoff note, adopting the session FlowState opened, holding a todo while working on it
+# (a claim ends with its session). Reads are housekeeping too. Any other write label is
+# real work, so its session keeps its summary (fail safe). Value: the word for the summary.
+HOUSEKEEPING = {
+    "history/undo": "undo",
+    "review_approve": "review decision",
+    "review_reject": "review decision",
+    "handoff/pickup": "handoff picked up",
+    "session/start": None,
+    "todo/claim": "todo claim",
+    "todo/renew": "todo claim",
+    "todo/release": "todo claim",
+}
+
+# Saved records, by the kind their label starts with (log_work kinds and the older tools).
+_SAVED = {"learning": "learning", "log_learning": "learning", "decision": "decision",
+          "session/log_conversation": "decision", "change": "change", "log_change": "change",
+          "problem": "problem", "problem/log": "problem", "todo": "todo", "todo/add": "todo"}
+_KINDS = ("learning", "decision", "change", "problem", "todo")
+# Plain words for the other writes (anything else: its label with spaces).
+_WORDS = {"todo/update": "todo update", "todo/block": "todo blocked",
+          "todo/unblock": "todo unblocked", "todo/handoff": "todo handed off",
+          "problem/solve": "problem solved", "attempt/log": "fix attempt",
+          "attempt/outcome": "fix attempt result", "link/add": "new link",
+          "link/remove": "link removed", "rules/add": "new rule", "rules/remove": "rule removed",
+          "handoff/leave": "handoff note", "verify/mark": "fact checked",
+          "verify/source": "source changed", "review_mode/set": "review mode change",
+          "delete_request/record": "delete", "delete_request/project": "project delete",
+          "delete_request/component": "component delete", "cleanup_suggest": "clean-up ideas",
+          "import_memory": "memory import", "update_project": "project update",
+          "create_component": "new component", "update_component": "component update"}
 
 
-def build_summary(client: str, calls: int, minutes: int, events: list, reason: str) -> str:
-    """Short, factual summary from the event log. Flagged for the user's review."""
-    writes = [e for e in events if not e.startswith("read:")]
-    reads: dict[str, int] = {}
+def _what(event: str) -> str:
+    """The label's kind or tool/action part (before ": <text>")."""
+    return event.split(": ", 1)[0].strip()
+
+
+def is_housekeeping(events: list) -> bool:
+    """True when a session saved nothing new: no events, or only reads and HOUSEKEEPING
+    labels. Such a session files no session_summary review item."""
+    return all(e.startswith("read:") or _what(e) in HOUSEKEEPING for e in events)
+
+
+def _n(count: int, word: str) -> str:
+    return f"{count} {word}{'' if count == 1 else 's'}"
+
+
+def _and(parts: list) -> str:
+    return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
+
+
+def build_summary(client: str, project: str, events: list, trimmed: bool = False) -> str:
+    """Short, plain summary from the event log: what the session saved, counted by kind.
+    Starts with AUTO_TAG (the caller swaps it for OFF_TAG / SKIP_TAG)."""
+    saved, suggested, other, chores = {}, {}, {}, {}
     for e in events:
         if e.startswith("read:"):
-            name = e[5:]
-            reads[name] = reads.get(name, 0) + 1
-    head = (f"{AUTO_TAG} {client}, {calls} call{'s' if calls != 1 else ''} over "
-            f"{minutes} min ({_REASON_TEXT.get(reason, reason)}).")
-    parts = [head]
-    if writes:
-        parts.append(" Logged: " + "; ".join(writes) + ".")
-    else:
-        parts.append(" Nothing was logged.")
-    if reads:
-        parts.append(" Read: " + ", ".join(f"{k} x{v}" for k, v in reads.items()) + ".")
-    text = "".join(parts)
+            continue
+        what = _what(e)
+        if what.startswith("suggested "):
+            kind = _SAVED.get(what[10:])
+            if kind:
+                suggested[kind] = suggested.get(kind, 0) + 1
+                continue
+        if what in _SAVED:
+            saved[_SAVED[what]] = saved.get(_SAVED[what], 0) + 1
+        elif what in HOUSEKEEPING:
+            if HOUSEKEEPING[what]:
+                chores[HOUSEKEEPING[what]] = chores.get(HOUSEKEEPING[what], 0) + 1
+        else:
+            words = _WORDS.get(what) or what.replace("/", " ").replace("_", " ")
+            other[words] = other.get(words, 0) + 1
+    parts = []
+    if saved:
+        parts.append("saved " + _and([_n(saved[k], k) for k in _KINDS if k in saved]))
+    if suggested:
+        parts.append("suggested " + _and([_n(suggested[k], k) for k in _KINDS if k in suggested])
+                     + " for review")
+    if other:
+        parts.append("also " + ", ".join(f"{k} (x{v})" if v > 1 else k for k, v in other.items()))
+    if not parts:
+        parts.append("nothing new saved" + (f" ({_and([_n(v, k) for k, v in chores.items()])})"
+                                            if chores else ""))
+    text = f"{AUTO_TAG} {client} session in {project}: " + "; ".join(parts) + "."
+    if trimmed:
+        text += f" Only its last {MAX_EVENTS} saves were counted."
     if len(text) > MAX_SUMMARY:
         text = text[:MAX_SUMMARY - 3] + "..."
     return text

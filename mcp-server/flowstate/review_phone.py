@@ -124,7 +124,7 @@ JS = r"""(function () {
         card.appendChild(label);
       }
       var row = el("div", "actions");
-      var yes = el("button", "btn", "Approve"), no = el("button", "btn ghost", "Reject");
+      var yes = el("button", "btn", it.yes || "Approve"), no = el("button", "btn ghost", it.no || "Reject");
       yes.type = no.type = "button";
       function decide(decision) {
         yes.disabled = no.disabled = true;
@@ -194,7 +194,7 @@ def items(db_path) -> list:
     for it in review.list_items(db_path, None, "pending", LIST_MAX)["items"]:
         v = view(db_path, it["id"])
         v["kind_label"] = _KIND.get(it["kind"], it["kind"])
-        if it["kind"] not in approvals.USER_ONLY_KINDS + ("cleanup",):   # a record waiting to count
+        if it["kind"] not in approvals.USER_ONLY_KINDS + ("cleanup", "session_summary"):   # a record
             v["question"] = "Approve to keep it; reject to leave it out."
         v["details"] = (v["details"] or "")[:1000]
         out.append(v)
@@ -351,6 +351,8 @@ def routes(db_path_fn):
             return answer({"error": res["error"], "message": res.get("message") or res["error"],
                            "items": listing, "total": total}, 409)
         done = "Approved" if body["decision"] == "approve" else "Rejected"
+        if isinstance(res, dict) and res.get("kind") == "session_summary":
+            done = "Kept" if body["decision"] == "approve" else "Not kept"
         return answer({"ok": True, "message": f"{done} #{item_id}.", "items": listing,
                        "total": total})
 

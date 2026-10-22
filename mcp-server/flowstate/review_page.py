@@ -130,13 +130,13 @@ class Page:
         args = {"item_id": item["id"], "user_request": self.user_words.format(what="Approve"),
                 **{k: form[k] for k in ("summary", "details", "move_to", "confirm_name")
                    if form.get(k, "").strip()}}
-        if args.get("summary") == item["summary"]:
+        if args.get("summary") in (item["summary"], review.strip_tag(item["summary"])):
             args.pop("summary")
         if args.get("details") == (item["details"] or ""):
             args.pop("details")
         res = S._review_decide("review_approve", item["project_id"], args, self.client)
         return res.get("message") if isinstance(res, dict) and "error" in res else \
-            f"Approved #{item['id']}."
+            f"{'Kept' if item['kind'] == 'session_summary' else 'Approved'} #{item['id']}."
 
     def reject(self, form: dict) -> str:
         from . import server as S
@@ -148,7 +148,7 @@ class Page:
                                {"item_id": item["id"], "reason": reason,
                                 "user_request": self.user_words.format(what="Reject")}, self.client)
         return res.get("message") if isinstance(res, dict) and "error" in res else \
-            f"Rejected #{item['id']}."
+            f"{'Not kept' if item['kind'] == 'session_summary' else 'Rejected'} #{item['id']}."
 
     def set_mode(self, form: dict) -> str:
         pid = int(form["project_id"]) if form.get("project_id") else None
@@ -294,15 +294,23 @@ class Page:
                     out.append(f"""<p><strong>{_e(it['summary'])}</strong></p><p class="meta">{_e(it['details'])}</p>
 <form method="post" action="{self.base}/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">{confirm}
 <button>Approve: delete it</button></form>""")
+                elif it["kind"] == "session_summary":   # Keep / Don't keep: what they really do
+                    out.append(f"""<p><strong>{review.KEEP_QUESTION}</strong> {review.KEEP_HOW} You can edit it first.</p>
+<form method="post" action="{self.base}/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
+<textarea name="summary" rows="2">{_e(review.strip_tag(it['summary']))}</textarea><textarea name="details" rows="2" placeholder="details">{_e(it['details'])}</textarea>
+<button>{review.KEEP} (with any edits)</button></form>""")
                 else:
                     out.append(f"""<form method="post" action="{self.base}/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
 <textarea name="summary" rows="2">{_e(it['summary'])}</textarea><textarea name="details" rows="2" placeholder="details">{_e(it['details'])}</textarea>{move}
 <button>Approve (with any edits)</button></form>""")
+                no = (f'<input type="text" name="reason" placeholder="Reason (optional)"><button>{_e(review.DONT_KEEP)}</button>'
+                      if it["kind"] == "session_summary" else
+                      '<input type="text" name="reason" placeholder="Reason for rejecting"><button>Reject</button>')
                 out.append(f"""
 <form method="post" action="{self.base}/reject">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
-<input type="text" name="reason" placeholder="Reason for rejecting"><button>Reject</button></form>""")
+{no}</form>""")
             else:
-                out.append(f"<p>{_e(it['summary'])}</p>"
+                out.append(f"<p>{_e(review.strip_tag(it['summary']))}</p>"
                            + (f"<p class='meta'>Reason: {_e(it['reject_reason'])}</p>" if it.get("reject_reason") else ""))
             out.append("</div>")
         # review mode

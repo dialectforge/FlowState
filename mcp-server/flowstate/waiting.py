@@ -236,7 +236,17 @@ def _plain(it: dict, room: int = LINE_MAX, status: bool = False) -> str:
     """#id (project, kind[, status]): summary, at most `room` characters in the JSON answer."""
     kind = _KIND.get(it["kind"], it["kind"]) + (f", {it['status']}" if status else "")
     head = f"#{it['id']} ({_fit(it['project'], 40)}, {kind}): "
-    return head + _fit(it.get("summary"), max(20, room - (len(json.dumps(head)) - 2)))
+    from .review import strip_tag
+    return head + _fit(strip_tag(it.get("summary")), max(20, room - (len(json.dumps(head)) - 2)))
+
+
+KEEP_NOTE = ('A session summary asks the user "Keep this session summary?": approve keeps it as '
+             "the session's record (edits allowed); reject means don't keep it (the session keeps "
+             "only a note saying so); nothing is deleted.")
+
+
+def _keep_note(items: list) -> dict:
+    return {"session_summary": KEEP_NOTE} if any(it["kind"] == "session_summary" for it in items) else {}
 
 
 def _lines(items: list, status: bool = False) -> list:
@@ -285,7 +295,7 @@ def review_list(args: dict, walk: bool, scopes) -> dict:
         return prepare(out, S.backend.db_path, scopes, pid, after)
     page = _page(out, after, "list")   # one line per item; item_id= for one in full
     return {"total": out["total"], "status": out["status"], **page,
-            "items": _lines(out["items"], out["status"] != "pending"),
+            "items": _lines(out["items"], out["status"] != "pending"), **_keep_note(out["items"]),
             **({"full_item": FULL_ITEM} if out["items"] else {}), "note": out["note"]}
 
 
@@ -313,7 +323,7 @@ def prepare(listing: dict, db_path: Path, scopes, project_id: Optional[int] = No
         return listing   # an error (no queue, unknown project)
     items = listing["items"][:WALK_MAX]
     out = {"waiting": listing["total"], **_page(listing, after, "walk"),
-           "items": _lines(items)}
+           "items": _lines(items), **_keep_note(items)}
     if not items:
         out["note"] = (f"Nothing more is waiting after #{after}." if after
                        else "Nothing is waiting for the user.")
@@ -348,12 +358,17 @@ def _form(it: dict, i: int, n: int) -> tuple[str, dict]:
     details = " ".join(str(it.get("details") or "").split())
     details = details if len(details) <= 600 else details[:597] + "..."
     who = it.get("app") or it.get("source") or "an app"
+    from .review import DONT_KEEP, KEEP, KEEP_HOW, KEEP_QUESTION, strip_tag
+    keep = it["kind"] == "session_summary"   # Keep / Don't keep: what approve / reject do
     msg = (f"Waiting for you ({i} of {n}), {it['project']}, {_KIND.get(it['kind'], it['kind'])} "
-           f"#{it['id']} from {who}:\n{it.get('summary') or ''}" + (f"\n{details}" if details else "")
-           + "\nTick Approve and submit to approve; submit it unticked to reject; decline to skip; "
-             "cancel to stop.")
-    props = {"approve": {"type": "boolean", "title": "Approve",
-                         "description": "Ticked: approve. Unticked: reject."},
+           f"#{it['id']} from {who}:\n{strip_tag(it.get('summary'))}" + (f"\n{details}" if details else "")
+           + (f"\n{KEEP_QUESTION} {KEEP_HOW}\nTick {KEEP} and submit to keep it; submit it unticked "
+              f"for {DONT_KEEP}; decline to skip; cancel to stop." if keep else
+              "\nTick Approve and submit to approve; submit it unticked to reject; decline to skip; "
+              "cancel to stop."))
+    props = {"approve": {"type": "boolean", "title": KEEP if keep else "Approve",
+                         "description": f"Ticked: {KEEP.lower()}. Unticked: {DONT_KEEP.lower()}."
+                         if keep else "Ticked: approve. Unticked: reject."},
              "note": dict(NOTE_FIELD, title="Reason or note (optional)")}
     try:
         p = json.loads(it.get("payload") or "{}")

@@ -163,10 +163,14 @@ def view(db_path, item_id: int) -> dict:
     if item["kind"] == "cleanup":   # FlowState's own idea: one plain question and its reason
         why = p.get("reason") or ""
         question = f"Should FlowState {ask}?" + (f" {why[:1].upper()}{why[1:]}." if why else "")
+    elif item["kind"] == "session_summary":   # what Keep / Don't keep really do
+        question = f"{review.KEEP_QUESTION} {review.KEEP_HOW}"
     else:
         question = f"{app} wants to {ask}."
+    keep = item["kind"] == "session_summary"
     return {"id": item["id"], "project": project, "kind": item["kind"], "question": question,
-            "summary": item.get("summary") or "", "details": item.get("details") or "",
+            "summary": review.strip_tag(item.get("summary") or ""), "details": item.get("details") or "",
+            "yes": review.KEEP if keep else "Approve", "no": review.DONT_KEEP if keep else "Reject",
             "queued_by": app + (f" on {item['machine']}" if item.get("machine") else ""),
             "queued_at": item.get("created_at") or "",
             "needs_name": item["kind"] == "delete" and p.get("record_type") == "project"}
