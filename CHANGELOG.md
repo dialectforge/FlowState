@@ -63,6 +63,16 @@
   - With `flowstate --db <file>`, attachments and data-git used the default folder; they now
     live next to that database. And the test suite's "never touch real data" guard now covers
     every path (see "Working on FlowState").
+- **Windows.** Data-git (`manage_data_git` init / sync / history) timed out after 15 s in
+  the stdio server: git inherited the MCP pipe as its stdin, and on Windows that blocks while
+  the server is reading it. git (data-git, commit capture, off-site backup) now gets no stdin.
+  `flowstate approve` / `reject` / `approvals off` run from an AI app's shell (a hidden console
+  with no window) waited forever for a `y` nobody could type; they now refuse there, as with no
+  terminal, and still work in a console window, Windows Terminal or VS Code's terminal.
+  The relay agent's status file write was refused ("access denied") whenever something was
+  reading it, so `flowstate relay disable` could leave the status at "connected"; it now
+  waits a moment and writes. Relay keys, certificates and the device token were written in
+  text mode (every newline byte became CR LF); they are now written byte for byte.
 - **Wording.** To-do priorities are shown as critical / urgent / normal / low in every answer
   (high and medium are still accepted). An empty database says "no projects yet".
   `manage_history who` shows each row's session. The variables and methods tools say delete is

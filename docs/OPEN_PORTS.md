@@ -34,3 +34,23 @@ Closed: the "user-gated hard delete" follow-on. Deletes ship as user-approved re
   a project delete. Once deletes are used, run only v2.1+ servers against the database.
 - **Plural wording.** Delete request summaries say "1 attempts", "1 links".
 
+## From the Windows fixes (task 28, branch `release/2.4-trust`)
+
+- **Data-git without a git identity.** On a computer with no `user.name` / `user.email` (Git
+  for Windows doesn't guess one), `manage_data_git init` answers `initialized` but its first
+  commit failed silently; `sync` then reports `step: commit, Author identity unknown` (honest,
+  but late). Either say so at init, or commit the data folder with a FlowState identity
+  (`git -c user.name=FlowState -c user.email=...`) when none is set. Not Windows-only.
+- **The terminal step's honest limit, on Windows too.** `flowstate approve` needs a console
+  with a window; an agent that starts a console of its own (hidden window) and types into it,
+  as tests/conin_typist.py does, gets through, just as one that opens a pseudo-terminal does
+  on macOS / Linux. Documented in cli_review.py; the popup and phone paths don't have it.
+- **Save latency on Windows (decision needed).** `tests/test_write_latency.py` fails on
+  Windows (example-host, 2026-10-21): median save 58 ms against the 40 ms bound, bookkeeping
+  8.9 ms against 6 ms; stable over 3 runs. v2.3.0 on the same machine and benchmark: 47.8 ms
+  (also over the bound), so 2.4 adds ~9 ms (+19%, as on macOS: +16%). Cause: about 6 SQLite
+  commits per write in the default rollback-journal mode, each paying Windows' slow
+  FlushFileBuffers (~6.5 ms; macOS fsync is cheap). Options: WAL + synchronous=NORMAL (check
+  data-git, which commits the .db file without its -wal), fewer commits per write (fold the
+  receipt / history / ledger rows into the record's transaction), or a per-OS bound. The
+  bounds were left as they are.
