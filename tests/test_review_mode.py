@@ -105,6 +105,7 @@ def test_off_saves_suggestions_and_keeps_auto_summaries(backend, seeded_db):
     assert r["logged"] == "learning" and "Review mode is off" in r["note"]
     t = AutoSessions(seeded_db, idle_minutes=0.01)
     sid = t.touch("Claude Desktop", 1, "read:start_here")
+    t.note(sid, "learning: real work")   # (joined or fresh, by timing) a read-only one files none
     time.sleep(1.8)
     assert t.close_idle() == [sid]
     assert _q(seeded_db, "SELECT COUNT(*) FROM review_items")[0][0] == 0
