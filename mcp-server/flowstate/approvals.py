@@ -55,11 +55,13 @@ USER_ONLY_KINDS = ("delete", "setting")
 
 # The flowstatemcp.com approval-grant public keys (ES256 / P-256 JWKs), pinned per release:
 # fsa-1 active, fsa-2 backup so the site can rotate without a forced update.
-# PLACEHOLDER: the web task (27) produces the real keys. While a kid maps to None, every grant
-# signed with it is refused; while both do, phone approvals are off entirely.
+# Published at https://flowstatemcp.com/.well-known/flowstate-approval-keys.json (Oct 21, 2026).
+# A kid that maps to None is refused; if every kid is None, phone approvals are off entirely.
 FSA_PUBLIC_KEYS: dict = {
-    "fsa-1": None,   # PLACEHOLDER, replace with {"kty": "EC", "crv": "P-256", "x": ..., "y": ...}
-    "fsa-2": None,   # PLACEHOLDER (backup key)
+    "fsa-1": {"kty": "EC", "crv": "P-256", "x": "eMo3tUoz8rNtqO1UA32Dji_2Zi1gKpZVoGnrj4VZ_Wk",
+              "y": "CW7xH5MZy-iL5ZbCQ2BKDo7okUZtaABnMvcTCYTFhPA"},
+    "fsa-2": {"kty": "EC", "crv": "P-256", "x": "ZFiKJNndjt35qWI3AjmXhKkIQRNlmxhsq8sBlJT-340",
+              "y": "1LTTIZEiA3ehSiDaspCt-hqDETvjktMnZrkGahXPf4o"},
 }
 
 _NONCE_RE = re.compile(r"^[A-Za-z0-9_-]{16,64}$")

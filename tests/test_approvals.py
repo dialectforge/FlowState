@@ -325,8 +325,9 @@ def test_the_link_only_when_the_relay_is_enrolled_and_keys_are_pinned(on, monkey
     assert "flowstatemcp.com" not in out["next"]                   # no relay
     from flowstate.relay.store import RelayStore
     RelayStore().save_enrollment("testbox", "fake-device-token-for-tests")
+    monkeypatch.setattr(approvals, "FSA_PUBLIC_KEYS", {"fsa-1": None, "fsa-2": None})
     out = call(S, "manage_memory", {**DEL_TODO, "record_type": "learning"})
-    assert "flowstatemcp.com" not in out["next"]                   # keys still the placeholder
+    assert "flowstatemcp.com" not in out["next"]                   # no keys pinned
     _key, jwk = make_key()
     monkeypatch.setattr(approvals, "FSA_PUBLIC_KEYS", {"fsa-1": jwk, "fsa-2": None})
     out = call(S, "manage_memory", {**DEL_TODO, "record_type": "change"})
@@ -340,18 +341,20 @@ def test_the_link_only_when_the_relay_is_enrolled_and_keys_are_pinned(on, monkey
     assert "flowstatemcp.com" not in out["next"]
 
 
-def test_the_production_keys_are_a_marked_placeholder_that_refuses_everything(on, tmp_path):
+def test_the_production_keys_are_pinned_and_refuse_a_grant_from_any_other_key(on, tmp_path):
     from flowstate.relay.store import RelayStore
     RelayStore().save_enrollment("testbox", "fake-device-token-for-tests")
     assert set(approvals.FSA_PUBLIC_KEYS) == {"fsa-1", "fsa-2"}
-    assert all(v is None for v in approvals.FSA_PUBLIC_KEYS.values())
+    for v in approvals.FSA_PUBLIC_KEYS.values():
+        assert v["kty"] == "EC" and v["crv"] == "P-256" and "d" not in v
+    assert approvals.keys_ready()
     key, _jwk = make_key()
     db = on.backend.db_path
     item = call(on, "manage_memory", DEL_TODO)["delete_requested"]
     nonce = approvals.nonce_for(db, item)
     with pytest.raises(approvals.ApprovalError) as e:
         approvals.verify_grant(db, sign(key, claims(item, nonce)), item)
-    assert e.value.code == "phone_approvals_unavailable"
+    assert e.value.code != "phone_approvals_unavailable"
 
 
 def _page(S):
