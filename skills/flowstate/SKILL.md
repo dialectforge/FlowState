@@ -92,22 +92,22 @@ never guess or invent one. `manage_history(action="who", ...)` shows who did wha
 - **Never approve or reject review items yourself**, including your own suggestions. Only
   call `manage_review(action="approve")` / `(action="reject")` when the user tells you to in
   this chat, and quote their words in `user_request`. Tell the user when items are waiting; don't ask them to
-  approve in the same breath as creating them. (With review on, FlowState refuses an app
-  deciding what it queued itself, `own_item`, whatever you pass: ask the user to run
-  `flowstate approve <id>` in their own terminal. Don't run it for them.)
+  approve in the same breath as creating them. (An item your own app queued needs the user's
+  own words, `own_item` otherwise; or they run `flowstate approve <id>` in their terminal.
+  Don't run it for them.)
 - **Writes come with a receipt** (`receipt.saved`). If a write times out, don't repeat it:
   the next FlowState answer says whether it saved.
-- **Deleting only asks.** Only when the user wants something gone: `manage_projects(action=
-  "delete" | "delete_component", ...)` or `manage_memory(action="delete", record_type=...,
-  record_id=...)`. That deletes nothing; it queues a request. Tell the user what it would
-  remove (the counts in the answer) and let them decide. Approve it only when they say so in
-  this chat (`manage_review(action="approve", item_id=..., user_request=<their words>)`); for a
-  project they must type its exact name, which you pass as `confirm_name`. Never fill
-  `confirm_name` in yourself. `manage_history(action="undo")` brings a delete back. To retire
-  something without deleting it, use its status (done, cancelled, archived, deprecated).
+- **Delete only when the user wants something gone**: `manage_projects(action="delete" |
+  "delete_component", ...)` or `manage_memory(action="delete", record_type=..., record_id=...)`.
+  It goes through at once after a safety copy; tell the user what went (the counts in the
+  answer) and that the answer's `manage_history(action="undo", ...)` call brings all of it back.
+  If the user turned approvals on, the delete waits for them instead: their app may show a
+  popup, else pass on the answer's `next` line as it is (a phone link or `flowstate approve
+  <id>`). You can't approve it. To retire something without deleting it, use its status (done,
+  cancelled, archived, deprecated).
 - The review mode (shown in the brief) decides what waits for review. **Never change it**
   unless the user asks you to in this chat; then quote them in `user_request`. Never change
-  it to get your own writes saved.
+  it to get your own writes saved. With approvals on, turning it off waits for the user.
 
 ## 6. Check before you contradict
 

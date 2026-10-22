@@ -3,9 +3,11 @@
 ## 2.4.0 - 2026-10-21
 
 ### In short
-- More reliable and easier to trust; no new tools and no new required arguments. With review
-  mode on, an app can't approve or reject what it queued itself: you do that with
-  `flowstate approve <id>` in your own terminal (or on the review page).
+- More reliable and easier to trust; no new tools and no new required arguments. Out of the
+  box FlowState still asks you nothing: an agent's delete goes through at once, after a safety
+  copy, and undo brings all of it back. Opt in with `flowstate approvals on` and only you can
+  approve an agent's deletes or turn review off: in the app's own popup, on your phone, or in
+  your terminal.
 - Writes say what they saved, and a write that timed out is no longer a mystery (or a
   duplicate when the agent tries again).
 - Four bugs fixed: timed-out writes, pre-restore backups pruned the same day, two windows of
@@ -29,13 +31,13 @@
   and one summary. Each connection now gets its own session; the app keeps its name.
 - **Undo.** Creating a record is now recorded in the edit history (with the links and conflict
   flags saved with it), so undo can take a new record back: only for the app that made it, and
-  only while nothing else refers to it (another app's record, or one the user approved, still
-  needs a delete request the user approves). Undo again brings it back with the same id. And
+  only while nothing else refers to it (another app's record, or one the user approved, needs
+  a delete instead). Undo again brings it back with the same id. And
   when only some rows of a change were changed again since, undo now restores the rest and
   returns `skipped: [{record_type, record_id, why}]` instead of refusing all of it; it refuses
   only when nothing could be undone.
 
-- **Found by the end-to-end test** (`tests/e2e/run_e2e.py`, 12 scenarios, four agents):
+- **Found by the end-to-end test** (`tests/e2e/run_e2e.py`, now 13 scenarios, four agents):
   - Window A never heard about window B's work: "Since your last visit" now counts from this
     window's own previous brief, so other windows of the same app count too. A save in the
     same second as a brief is no longer reported again on the next one.
@@ -44,7 +46,8 @@
     pushed: false, offline: true` ("committed locally"). The first sync to a brand-new empty
     remote failed as a "conflict"; now it pushes. Only a real conflict is called one, and the
     rebase is undone so the data folder is left as it was.
-  - An agent could approve its own review item with invented "user words": see below.
+  - An agent could approve its own review item with invented "user words": see "Approvals"
+    below.
   - File search never found anything (also in 2.3): attached text files are now indexed when
     attached, older ones on the first search. No new dependency.
   - A claim outlived its app: when a session ends (quit, ended, idle) its claims are
@@ -74,27 +77,50 @@
   another window or app, or a later repeat is saved as usual. Undo (undo again = redo) and
   claim renewals are never treated as repeats.
 
-### Agents can't decide their own review items; you approve them yourself
-- With review mode on (anything but `off`), `manage_review` approve / reject of an item the
-  calling app queued (same machine, when recorded), including its own session summary and
-  its own delete requests, is refused whatever `user_request` says (`own_item`: "You queued
-  review item #12; only the user can decide it. Ask them to run `flowstate approve 12` (or
-  reject) in their terminal."). Suggestions and session summaries stay that way even if review
-  is turned off later.
-- The user-only step: `flowstate review` lists what waits; `flowstate approve <id> [<id> ...]`
-  and `flowstate reject <id> [--reason ...]` show the items and ask you to type `y`. The answer
-  is read from the terminal itself (`/dev/tty`, the Windows console), never from piped input,
-  so an agent running the command in its own shell can't confirm; with no terminal it refuses.
-  The review page (`flowstate review-page`) also still approves; `--print-url` now shows its
-  one-time link on the terminal only.
-- Another app relaying the user (`user_request` with their words) works as before. With review
-  off nothing changes: an app may decide its own item only with the user's own words.
-- This stops an agent approving its own work through FlowState. An agent with full control of
-  your own terminal window could still type into it.
+### Approvals (opt-in; off by default)
+- **Off (the default, also after upgrading):** FlowState never asks you anything. An agent's
+  delete (`manage_projects` delete / delete_component, `manage_memory` delete, and the
+  variables, methods and files deletes) goes through at once, after a verified safety copy, as
+  one edit: `manage_history(action="undo")` brings back the record and everything removed with
+  it (children, links) exactly. The answer says in one line what went and the undo call, and
+  the brief shows `Deleted in the last 7 days: ... Undo: manage_history(...)` (deleted projects
+  in the project list). Review-mode changes just happen (logged, shown in the brief).
+  Suggestions and session summaries work as before 2.4: the app that queued one decides it only
+  with your own words (not one word, not the item's own text).
+- **On** (`flowstate approvals on`, or `--project P` for one project): an agent's delete and
+  turning review off wait for your own click or key; no app can pass your OK along. Turning
+  approvals on needs nothing; `flowstate approvals off` asks for your `y` in your terminal.
+  FlowState tries, in order:
+  1. **Popup in the app** (MCP elicitation, form mode, with the installed SDK's
+     server-to-client request): `Claude Code wants to delete the todo "Print flyers" from
+     Lakeside Bakery.` with one required checkbox, `approve` (a project also asks for its
+     name). Only for apps on a list known to show a real dialog (Claude Code, Cursor, VS Code;
+     `flowstate approvals popup add|remove NAME`), only when the connection declared it, never
+     claude.ai / Claude Desktop / the Anthropic connector. FlowState waits at most 2 minutes,
+     holding no database lock. Decline, close, unticked or no answer: nothing happens and the
+     item stays queued. The popup is only as trustworthy as the app that shows it.
+  2. **Your phone**, if the relay agent is set up: the answer has one link,
+     `https://flowstatemcp.com/approve/<handle>/<item>?n=<code>`. flowstatemcp.com signs you in
+     and sends your browser to your own FlowState at `https://<handle>.fsmcp.com/approve/<item>`
+     with a 5-minute signed grant; your FlowState checks it with the site's public key pinned in
+     this release, shows the item from your own database and decides on your tap. The site never
+     sees the item. (`flowstate approvals phone off` turns links off.)
+  3. **Your terminal:** `flowstate approve <id>` / `reject <id>` ask for `y` on the terminal
+     itself, never piped input; with no terminal they refuse.
+  The answer to the agent is one short line: the popup's result, else the link, else the
+  command. Every decision is logged with how it was made (popup / phone / terminal / review
+  page), the app and the time; `manage_history(action="list")` shows them under `approvals`.
+- **Not in this release yet:** flowstatemcp.com's signing keys. `FSA_PUBLIC_KEYS` in
+  `approvals.py` is a marked placeholder until the site's task ships them; until then every
+  grant is refused and no phone link is shown, so the popup and the terminal are the paths.
+- **Honest limit:** this stops agents approving their own work through FlowState. An agent that
+  controls your own logged-in browser or your terminal window could still get through.
+- The installed MCP SDK (1.30, protocol up to 2025-11-25) has no support for the 2026-07-28
+  way of asking the user, so only the server-to-client request is used.
 
 ### Safety copies and health check
-- Right before an approved delete, clean-up or markdown edit, FlowState takes a verified
-  `pre-bulk` copy (approvals within a minute share one). If it can't, nothing is changed
+- Right before a delete, or an approved clean-up or markdown edit, FlowState takes a verified
+  `pre-bulk` copy (changes within a minute share one). If it can't, nothing is changed
   (`safety_copy_failed`). This does not depend on nightly backups; FlowState adds no daily or
   nightly copy of its own, so a user who said no to backups gets none.
 - On start, `PRAGMA quick_check`. Only a problem (or a failed migration) is shown, as the first
@@ -116,7 +142,8 @@
 - Measured through the MCP call path on a temp database with 2,000 records (450 saves):
   median save 8.3 ms in 2.3.0, 9.7 ms in 2.4.0; p95 10.2 ms and 11.8 ms. Re-measured after
   the end-to-end fixes on the same Mac (it ran a little slower that day): 8.9 ms for 2.3.0,
-  10.5 ms before the fixes and 10.3 ms after; p95 12.7 ms.
+  10.5 ms before the fixes and 10.3 ms after; p95 12.7 ms. With approvals: 10.0 ms before and
+  10.0-10.1 ms after (p95 12.3-12.4 ms), the same day on the same Mac.
 
 ### Database
 - Migration 015 adds `session_runs` (session -> connection key, app, model, machine,
@@ -126,7 +153,9 @@
   answer, and for a brief the record ids it showed). New tables only; no existing table is
   changed, so a v2.3.0 database upgrades cleanly (tested with a database made by the v2.3.0
   code). A backup is taken first, as for every migration. 018 adds one nullable column,
-  `run_views.upto_write` (the newest save a brief counted).
+  `run_views.upto_write` (the newest save a brief counted). 019 adds `approval_settings`,
+  `approval_requests` (each phone link's one-use code), `approval_grants` (hashes of phone
+  grants seen) and `approval_log` (every user-only decision). No row = approvals off.
 - Edit history rows for created records use the tool names `create/<type>` and
   `approve/<type>`. "Who did what" still lists each creation once.
 

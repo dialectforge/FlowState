@@ -151,9 +151,9 @@ prompt `flowstate-start`.
 
 **You stay in charge**
 - **Review queue**: auto-captured summaries, and anything the AI marks as a suggestion, wait
-  for your OK. Approve, edit or reject them in chat or on the review page. An AI can't decide
-  what its own app queued: it asks you to run `flowstate approve <id>` (or `reject`) in your
-  terminal, which asks you to type `y` there. Another app can still pass on your OK from chat.
+  for your OK. Approve, edit or reject them in chat, on the review page, or with
+  `flowstate approve <id>` in your terminal. The app that queued an item needs your own words
+  to decide it.
 - **Review mode** (yours to set): `off`, `auto_only` (default), chosen record types, or
   `everything`. Set it for the whole install or per project. The AI may change it only when you
   ask in the chat, and every change is logged with your words.
@@ -164,11 +164,15 @@ prompt `flowstate-start`.
   last change to a record (an undo can itself be undone). The app that created a record can
   take it back with undo while nothing refers to it yet. If part of a change was changed again
   since, undo puts back the rest and lists what it skipped and why.
-- **Deletes need your OK**: an AI can only *ask* to delete a project, a component or a record.
-  The request shows what would go (for a project or component, how many todos, decisions,
-  changes, ... go with it) and waits in the review queue; nothing is removed until you
-  approve it, and a project also needs its exact name typed. Reject keeps everything. An
-  approved delete is copied into the edit history first, so undo brings all of it back.
+- **Deletes you can always take back**: out of the box FlowState never interrupts you. When an
+  AI deletes a project, a component or a record, FlowState first takes a safety copy and keeps
+  every removed row (children and links too) in the edit history, so undo brings all of it
+  back exactly. The answer and the brief say in one line what went and how to undo it.
+- **Approvals, if you want them** (`flowstate approvals on`): then an AI's delete, and turning
+  review off, wait for you, and no app can pass your OK along. You decide in the app's own
+  popup (Claude Code, Cursor, VS Code), on your phone through flowstatemcp.com (with the relay;
+  your phone talks to your own FlowState, and the site never sees the item), or with
+  `flowstate approve <id>` in your terminal. Every decision is logged with how it was made.
 - **Superseded decisions**: a new decision can name the one it replaces, so only the current
   one shows in the brief.
 - **Source and last-verified flags**: records can say where they came from (`user_stated`,
@@ -231,7 +235,7 @@ prompt `flowstate-start`.
 - **Nightly backups**: integrity-checked; the newest per day for 14 days and per week for
   8 weeks are kept. Restore always goes to a new file unless you add `--force` (and then the
   current file is backed up first).
-- **Safety copies**: right before an approved delete, clean-up or markdown edit, and before a
+- **Safety copies**: right before a delete, an approved clean-up or markdown edit, and before a
   restore or a migration, FlowState takes a verified copy that is kept at least 7 days whatever
   the limits above say; if it can't, the change isn't made. This doesn't depend on nightly
   backups, and FlowState never adds a daily copy you didn't ask for.
@@ -290,6 +294,7 @@ the venv active). Add `-h` to any command for its options.
 |---|---|
 | `review [--project NAME]` | List what waits in the review queue |
 | `approve ID [ID ...]` / `reject ID [--reason TEXT]` | Decide review items; asks you to type `y` in this terminal (piped input doesn't count) |
+| `approvals [on\|off] [--project P]` | Opt-in approvals (off by default). `on`: an AI's deletes and turning review off wait for you. Turning them `off` asks for `y` in this terminal. Also `approvals phone on\|off` and `approvals popup add\|remove NAME` |
 | `review-page` | Review page in your browser (127.0.0.1 only): approve / edit / reject, review mode, pause apps, "Who did what" (with undo) |
 | `keys add --name N [--read-only] [--workspace W]` / `keys list` / `keys revoke --id ID` (or `--name N`) | Per-app keys for the local/LAN HTTP server; the key is shown once, only a hash is kept; a revoked key stops at once |
 | `apps list` / `apps activity` / `apps pause --app NAME` / `apps resume --app NAME` | Which app did what; stop one app from writing |
@@ -318,13 +323,13 @@ the venv active). Add `-h` to any command for its options.
 | `search` | Find records by words (and by meaning, if set up); `answer=true` answers a plain question from your records with their ids; no query lists the newest records (`since_hours`) |
 | `manage_todos` | list, next, update (done / cancelled), block / unblock; add for subtasks, blockers and due dates; claim / renew / release / handoff so several agents don't do the same todo |
 | `manage_problems` | list, tree, add_attempt, end_attempt, solve |
-| `manage_review` | The review queue and review mode: list, get_mode; approve (also carries out a delete request), reject, set_mode only when you ask |
+| `manage_review` | The review queue and review mode: list, get_mode; approve, reject, set_mode only when you ask |
 | `manage_handoffs` | Leave / list / pick up "where I was, next step" notes |
 | `manage_rules` | A project's hard rules |
 | `manage_links` | Link projects, shared components, records and URLs |
 | `manage_history` | See edits; undo the last change to a record; `action="who"`: who did what (app, model, machine), with filters |
-| `manage_projects` | Projects and components: list, create, update, list_components, add_component, update_component; delete / delete_component only ask (you approve in the review queue) |
-| `manage_memory` | Upkeep: cleanup suggestions and memory imports (to the review queue), stale facts, mark checked, set source; delete asks to delete one record (you approve) |
+| `manage_projects` | Projects and components: list, create, update, list_components, add_component, update_component; delete / delete_component only when you ask (undoable; with approvals on they wait for you) |
+| `manage_memory` | Upkeep: cleanup suggestions and memory imports (to the review queue), stale facts, mark checked, set source; delete one record when you ask (undoable; with approvals on it waits for you) |
 
 With `FLOWSTATE_TOOLS=full` six specialist tools are listed too: `manage_sessions` (sessions
 also run automatically), `manage_files` (file attachments), `manage_data_git` (git for the
@@ -407,13 +412,17 @@ protocol is in [docs/relay-protocol.md](docs/relay-protocol.md).
   are the app's own say-so. Changes recorded before this was added show "not recorded".
 - **"Only when the user asks" is enforced by wording**, not cryptography: approving review items,
   changing the review mode and removing rules require the AI to quote your words, but a
-  misbehaving AI could make them up. Since 2.4, with review mode on, an AI can't approve or
-  reject what its own app queued through FlowState at all, whatever words it passes: you do it
-  with `flowstate approve`, which reads your `y` from the terminal itself, not from piped
-  input. That stops an AI approving its own work through FlowState; an AI with full control of
-  your own terminal window could still type into it, and one that makes up your words could
-  still change the review mode for future writes (logged, and shown in the brief). Hard rules
-  are shown first in every brief; FlowState can't stop an AI from doing something outside FlowState.
+  misbehaving AI could make them up. With approvals off (the default) that includes deletes:
+  they go through at once, and what protects you is the safety copy and undo. With approvals
+  on, an AI's deletes and turning review off need your own click or key (popup, phone or
+  terminal), whatever words it passes. That stops an AI approving its own work through
+  FlowState; an AI that controls your own logged-in browser or your terminal window could still
+  get through, and the popup is only as trustworthy as the app that shows it. Hard rules are
+  shown first in every brief; FlowState can't stop an AI from doing something outside FlowState.
+- **Phone approvals wait for the site's keys.** This release pins flowstatemcp.com's public keys
+  as a placeholder, so phone links stay off (popup and terminal work) until a release ships them.
+  The site vouches for who signed in but can't read anything; a leaked site key still can't
+  approve without the one-use code on your computer and your tap on your own FlowState's page.
 - **Answers are extractive** (`search` with `answer=true`): it quotes the best-matching sentences of your records; it doesn't write new answers.
 - **Tested mainly on Windows and macOS.** Linux should work but is less tested.
 - **Remote access is optional and takes setup**: your own domain on Cloudflare, `cloudflared`
@@ -427,13 +436,13 @@ protocol is in [docs/relay-protocol.md](docs/relay-protocol.md).
   comes from your local backups. Pushing it means your memory leaves your machine, to your private repo.
 - **Undo covers changes made through FlowState.** Creating a record can be undone only by the
   app that made it and only while nothing refers to it (records created before 2.4, projects
-  and components can't; ask for a delete instead). Changes made directly in SQLite aren't tracked.
+  and components can't; delete them instead). Changes made directly in SQLite aren't tracked.
 - **Receipts are per connection.** A repeated write is recognised only from the same app window
   within 2 minutes and while the server keeps running; a late-save notice reaches the
   connection that made the write, not another one.
 - **A delete is recoverable, not an erasure.** The deleted rows stay in the edit history (that is
   what undo uses) and in your backups, so the text is still in the database file. There is no
-  "erase for good" yet. Approving a file attachment's delete keeps the file itself.
+  "erase for good" yet. Deleting a file attachment keeps the file itself.
 - **Not backed up nightly:** the remote-access settings file (`remote-auth.db`). Losing it only
   means approving your apps again.
 

@@ -122,6 +122,7 @@ All commands run with the venv Python: `<venv python> -m flowstate <command>`.
 | set up the off-site copy | `flowstate offsite setup --repo <owner>/<repo>` (refused unless the repo is private) |
 | check off-site without pushing | `flowstate offsite push --dry-run` |
 | restore | `flowstate restore <backup file>` (into a new file, verified; `--to <new file>`) |
+| approvals (user) | `flowstate approvals` shows them; `approvals on [--project P]`: an AI's deletes and turning review off wait for the user (popup, phone link, terminal); `approvals off` asks for `y` on the terminal; `approvals phone on\|off`; `approvals popup add\|remove NAME` |
 | review queue (user) | `flowstate review` lists it; `flowstate approve <id> [<id> ...]` / `flowstate reject <id> [--reason ...]` ask for `y` on the terminal (never piped input; no terminal = refused) |
 | review page (user) | `flowstate review-page` (127.0.0.1:8770 only; opens the browser with a one-time link; includes "Who did what") |
 | per-app keys for the local/LAN HTTP server (user) | `flowstate keys add --name NAME [--read-only] [--workspace W]` (shows the key once) / `keys list` / `keys revoke --id ID` (or `--name NAME`) |
@@ -132,7 +133,7 @@ Backups go to `FLOWSTATE_BACKUP_DIR` or the per-OS default (Windows
 Linux `~/.local/share/flowstate/backups`). Each is integrity-checked; the newest per day for
 14 days and per week for 8 weeks are kept. Restore never replaces an existing database
 unless `--force` is given, and then backs it up first. Copies taken right before a restore, a
-migration or an approved delete / clean-up / markdown edit are labelled `pre-restore`,
+migration or a delete / approved clean-up / markdown edit are labelled `pre-restore`,
 `pre-migration` or `pre-bulk` and kept at least 7 days regardless of those limits. FlowState
 takes them even without nightly backups, and never adds a daily copy of its own. The off-site copy pushes only the
 backup file and a manifest, to its own branch (`flowstate-backup`), after checking the repo
@@ -343,14 +344,15 @@ don't show server instructions:
 6. Auto-captured session summaries, and anything logged with `suggested=true`, wait in the
    review queue (`manage_review(action="list")`). Only call `manage_review` with
    `action="approve"` / `"reject"` when the user explicitly asks in the chat, quoting their
-   words in `user_request`. With review mode on, deciding an item your own app queued is
-   refused (`own_item`) whatever you pass: tell the user to run `flowstate approve <id>` (or
-   `flowstate reject <id>`) in their own terminal. Don't run it for them: it asks for their `y`
-   on the terminal and refuses piped input. (Review off: your own item needs the user's words.)
+   words in `user_request`. An item your own app queued needs the user's own words (not one
+   word, not the item's text), or the user decides it with `flowstate approve <id>` in their
+   terminal. Don't run that for them: it asks for their `y` on the terminal and refuses piped
+   input.
 7. The **review mode** (`off`, `auto_only` default, `types`, `everything`; shown in the brief)
    decides what else waits for review. Only call `manage_review(action="set_mode")` when the
    user asks for that change in the chat, quoting their words in `user_request`; every change
-   is logged. Never change it to get your own writes saved.
+   is logged. Never change it to get your own writes saved. With approvals on (below),
+   turning review off waits for the user like a delete.
 8. Things several projects share live in one project; the others **link** to them
    (`manage_links(action="add", project=..., link_type="uses", target_project=...,
    target_component=...)`). Log changes to a shared component by its name; every linked
@@ -362,13 +364,17 @@ don't show server instructions:
    to a record, or take back a record you created while nothing refers to it; rows changed
    since are skipped and listed), `manage_memory(action="cleanup")` (duplicates / stale / misfiled, as review
    suggestions only), `manage_memory(action="import")` (memory exports into the review queue),
-   `manage_projects` (projects and components). **Deletes only ask:** `manage_projects(action=
-   "delete" / "delete_component")` and `manage_memory(action="delete", record_type=...,
-   record_id=...)` queue a request that shows what would go; tell the user, and only when they
-   say so call `manage_review(action="approve", item_id=..., user_request=<their words>)` (a
-   project also needs `confirm_name=<its exact name, typed by the user>`); with review on, a
-   request your own app made is approved by the user with `flowstate approve <id>`. Undo with
-   `manage_history(action="undo")`. The review page, pausing apps and git commit
+   `manage_projects` (projects and components). **Deletes:** only when the user asks,
+   `manage_projects(action="delete" / "delete_component")` and `manage_memory(action="delete",
+   record_type=..., record_id=...)` delete at once after a safety copy; the answer says what
+   went (children and links too) and gives the `manage_history(action="undo", ...)` call that
+   brings it all back. If the user turned **approvals** on (`flowstate approvals on`), a delete
+   (and turning review off) waits for the user instead: their app may show them a popup, else
+   the answer's `next` line is one sentence to pass on (a flowstatemcp.com link for their
+   phone, or `flowstate approve <id>` for their terminal). Pass it on as it is; you can't
+   approve it, and no app can pass the user's OK along. (Limit: this stops agents approving their
+   own work through FlowState; one that controls the user's own logged-in browser or terminal
+   could still get through.) The review page, pausing apps and git commit
    capture are the user's controls (command line / `flowstate review-page`); there is no tool
    for them.
 
@@ -443,7 +449,9 @@ The same guidance is available as the MCP prompt `flowstate-start`.
   `activity.py`, `review_page.py`, `markdown_io.py`, `memory_import.py`, `git_capture.py`, `deletes.py`,
   `secrets_scan.py`, `secret_store.py`, `remote_auth.py`, `app_keys.py`, `identity.py`,
   `who.py`, `claims.py`, `conflicts.py`, `backup.py`, `offsite.py`, `scheduler.py`, `cli.py`, `cli_more.py`,
-  `cli_review.py` (the user-only `review` / `approve` / `reject`), `connections.py`, `http_app.py`; the optional
+  `cli_review.py` (the user's `review` / `approve` / `reject` / `approvals`), `approvals.py` (opt-in
+  user-only approvals, phone grants, pinned `FSA_PUBLIC_KEYS`), `popup.py` (MCP elicitation),
+  `approve_page.py` (the phone page at `/approve/<item>`), `connections.py`, `http_app.py`; the optional
   relay agent in `relay/`, wire protocol in `docs/relay-protocol.md`). Schema:
   `database/schema.sql` (base) plus numbered migrations in `mcp-server/flowstate/migrations/`
   (new tables only, or `ADD COLUMN ... DEFAULT NULL` on FlowState's own v2 tables as in 012;
