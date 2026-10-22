@@ -176,8 +176,17 @@ prompt `flowstate-start`.
 - **Superseded decisions**: a new decision can name the one it replaces, so only the current
   one shows in the brief.
 - **Source and last-verified flags**: records can say where they came from (`user_stated`,
-  `ai_inferred`, `from_code`). Facts like paths, ports and config not checked for 60 days are
-  listed for re-checking.
+  `ai_inferred`, `from_code`), and FlowState stores who set that tag and when (the app, the
+  model if the app gave it, or "user" when you confirmed it). Facts like paths, ports and config
+  not checked for 60 days are listed for re-checking.
+- **Only you turn a guess into "you said so"**: an app may tag what it writes as
+  `user_stated` when it quotes you, and the brief then says `(user, via <app>)`. Changing an
+  existing record to `user_stated` is yours alone, approvals on or off: the app's request
+  leaves the tag as it is and queues one review item, which you confirm on the review page or
+  with `flowstate approve <id>` (with approvals on, also in the popup or on your phone). No app
+  can confirm it for you. A `user_stated` write that repeats another app's `ai_inferred` record
+  is saved as `ai_inferred`. What this doesn't cover: FlowState can't check that an app
+  quoting you at log time is telling the truth; the tag then names that app.
 
 **Accountability**
 - **Who, model and machine on every change**: edit history, review queue items and decisions,

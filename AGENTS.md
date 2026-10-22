@@ -386,7 +386,9 @@ don't show server instructions:
    visit (...)` says what other sessions saved since this app last read the brief; after a
    long gap, use the `manage_history(action="who", since=...)` call it gives.
 11. Todo priorities are critical / urgent / normal / low (older names high and medium still
-   work). `log_work(source=user_stated|ai_inferred|from_code)` says where a record came from.
+   work). `log_work(source=user_stated|ai_inferred|from_code)` says where a record came from
+   (who set it is stored). Changing an existing record to `user_stated` only queues it for the
+   user to confirm themselves (review page or terminal; approvals on or off); no app can approve it.
    `manage_memory(action="stale")` lists facts (paths, ports, config) not checked for 60 days;
    `manage_memory(action="mark_checked")` after checking one. `search(query=..., answer=true)`
    answers a question from the records, with their ids, and says so when FlowState has nothing

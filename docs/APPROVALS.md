@@ -5,6 +5,31 @@ deletes are undone with `manage_history`. With them on, an agent's delete and tu
 off wait for the user's own click or key: popup, phone, or terminal (see `approvals.py`).
 This page is the phone part, which needs the site.
 
+## "The user said so" is always user-only
+
+One kind of review item is user-only whatever the approvals setting: an app asking to change
+an existing record's source tag to `user_stated` (`manage_memory` `set_source`, or
+`mark_checked` with `source="user_stated"`). What the code enforces (`provenance.py`,
+`server._review_decide`):
+
+- The tag is not changed. One item of kind `source` is queued ("Did you say this yourself?");
+  a repeat for the same record, from any app, gets the same open item back.
+- Approvals off: nothing is shown to the user. The answer tells the agent the record stays as
+  it is until the user confirms on the review page (`flowstate review-page`) or with
+  `flowstate approve <id>`. Approvals on: the same paths as a delete (popup on allowlisted apps,
+  the phone link, the terminal).
+- Any app calling `manage_review` approve or reject on it is refused (`user_only`), whatever
+  `user_request` says; with approvals on, an app's approve gets the "waiting for the user"
+  answer instead. Only a call with no app identity decides it: the terminal command, the review
+  page, the popup's own answer and the phone page. Every decision is logged in `approval_log`.
+- Approving sets the tag to `user_stated` with `source_set_by = 'user'`. Rejecting leaves it.
+- Moving a tag away from `user_stated` needs nothing and is stamped with the app.
+- A `user_stated` `log_work` that the clean-up duplicate check matches with another app's
+  `ai_inferred` record (same kind, same project) is saved as `ai_inferred`.
+
+Not covered: an app tagging a new record `user_stated` at log time. That is allowed (it may be
+quoting the user); FlowState stores and shows which app did it, and can't check it.
+
 ## 1. The link FlowState gives the agent
 
 `https://flowstatemcp.com/approve/<handle>/<item>?n=<nonce>`

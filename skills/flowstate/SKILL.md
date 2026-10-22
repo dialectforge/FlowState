@@ -62,7 +62,9 @@ user switches project mid-chat, say so and switch. Pick the kind:
 
 One fact per record, one short line, details only when useful. Say where it came from
 with `source=`: `user_stated` (the user told you), `ai_inferred` (your own conclusion) or
-`from_code` (you read it in code or commits). Examples: `references/record-types.md`.
+`from_code` (you read it in code or commits). Only the user turns an existing record into
+`user_stated`: asking for it with `manage_memory(action="set_source")` queues it for them.
+Examples: `references/record-types.md`.
 
 ## 3. Shared components: use links
 

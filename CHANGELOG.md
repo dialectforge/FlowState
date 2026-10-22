@@ -135,6 +135,25 @@
 - The installed MCP SDK (1.30, protocol up to 2025-11-25) has no support for the 2026-07-28
   way of asking the user, so only the server-to-client request is used.
 
+### Only you can turn an AI guess into "the user said so"
+- A record's source tag (`user_stated`, `ai_inferred`, `from_code`) now stores who set it and
+  when: the app, the model if the app supplied it, or `user` when you confirmed it yourself.
+- An app may still tag what it is writing (`log_work(source="user_stated")` when it quotes
+  you). But changing an existing record to `user_stated` is yours alone, approvals on or off:
+  `manage_memory` `set_source` / `mark_checked` with `source="user_stated"` from an app leaves
+  the tag as it is and queues one review item ("Did you say this yourself?"; a repeat from any
+  app reuses it). You confirm it on the review page or with `flowstate approve <id>`; with
+  approvals on, also in the app's popup or on your phone, as for deletes. No app can approve or
+  reject it for you, whatever words it relays. Moving a tag away from `user_stated` is allowed
+  and recorded.
+- A `user_stated` write that repeats (same or nearly the same words, the clean-up duplicate
+  check) another app's `ai_inferred` record of the same kind in the same project is saved as
+  `ai_inferred`, with a note saying how to ask you.
+- The brief shows `(user, via Cursor)` or `(user, confirmed by the user)`; `search` and
+  `manage_history` results carry `source_tag`, `source_set_by` and `source_set_at`.
+- Limit: a tag set at log time is the app's own say-so (shown with its name); FlowState can't
+  check that you really said it. Tags set before 2.4.0 have no "who" and show as before.
+
 ### Safety copies and health check
 - Right before a delete, or an approved clean-up or markdown edit, FlowState takes a verified
   `pre-bulk` copy (changes within a minute share one). If it can't, nothing is changed
@@ -173,6 +192,8 @@
   `run_views.upto_write` (the newest save a brief counted). 019 adds `approval_settings`,
   `approval_requests` (each phone link's one-use code), `approval_grants` (hashes of phone
   grants seen) and `approval_log` (every user-only decision). No row = approvals off.
+  020 adds three nullable columns to `record_meta` (`source_set_by`, `source_set_model`,
+  `source_set_at`: who set a source tag); older rows keep NULL.
 - Edit history rows for created records use the tool names `create/<type>` and
   `approve/<type>`. "Who did what" still lists each creation once.
 
