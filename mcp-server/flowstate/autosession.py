@@ -14,6 +14,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
+from . import dbconn
+
 # Kept identical to the v2 block at the end of database/schema.sql (a test checks it).
 AUTO_SESSIONS_DDL = """CREATE TABLE IF NOT EXISTS auto_sessions (
     session_id INTEGER PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
@@ -57,7 +59,7 @@ def idle_minutes_from_env() -> float:
 
 def ensure_schema(db_path: Path) -> None:
     """Additive migration: create auto_sessions if missing. Never alters existing data."""
-    conn = sqlite3.connect(str(db_path), timeout=5.0)
+    conn = dbconn.connect(str(db_path), timeout=5.0)
     try:
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.executescript(AUTO_SESSIONS_DDL)
@@ -93,7 +95,7 @@ class AutoSessions:
         self._last: dict = {}   # conn_key -> the session it touched last (this process)
 
     def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.db_path), timeout=5.0)
+        conn = dbconn.connect(str(self.db_path), timeout=5.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.execute("PRAGMA foreign_keys = ON")
@@ -152,7 +154,7 @@ class AutoSessions:
                 (_ts(now), count + 1, json.dumps(events), self.instance, sid))
             conn.commit()
             if conn_key:
-                self._last[conn_key] = sid
+                dbconn.after(self.db_path, lambda ok: ok and self._last.__setitem__(conn_key, sid))
             return sid
         except Exception:
             conn.rollback()

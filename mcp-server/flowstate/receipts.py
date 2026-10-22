@@ -30,6 +30,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from . import dbconn
+
 WINDOW_SECONDS = 120
 NOT_REPEATS = {("history", "undo"), ("todo", "renew"), ("review_approve", None),
                ("review_reject", None)}   # asking the user again (approvals.py) is not a repeat
@@ -52,7 +54,7 @@ def _now() -> str:
 
 
 def _conn(db_path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(db_path), timeout=5.0)
+    conn = dbconn.connect(str(db_path), timeout=5.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 5000")
     return conn
@@ -178,7 +180,9 @@ def finish(db_path: Path, p: Pending, result, project_id: Optional[int],
            session_id: Optional[int], ident, created: Optional[tuple] = None,
            client: str = "unknown") -> Optional[dict]:
     """Record how the write ended, in one transaction with the created record's history
-    row (if any); returns the receipt for a saved write (else None)."""
+    row (if any); returns the receipt for a saved write (else None). Inside a save
+    (saves.run) that is the save's own transaction, and errors are raised so the
+    whole save is rolled back."""
     receipt = None
     try:
         failed = result is None or (isinstance(result, dict) and "error" in result)
@@ -208,18 +212,23 @@ def finish(db_path: Path, p: Pending, result, project_id: Optional[int],
             return receipt
         finally:
             conn.close()
-    finally:
-        with _lock:
-            if receipt is not None and p.conn_key:
-                now = time.monotonic()
-                _recent[(p.conn_key, p.hash)] = (now, receipt, p.started)
-                if len(_recent) > 500:   # forget what is past the window
-                    for k in [k for k, v in _recent.items() if now - v[0] >= WINDOW_SECONDS]:
-                        _recent.pop(k, None)
-            if p.event is not None:
-                _inflight.pop((p.conn_key, p.hash), None)
+    finally:   # in a save (dbconn.py): once it has committed; a rolled-back one saved nothing
+        dbconn.after(db_path, lambda ok: _ended(p, receipt if ok else None))
+
+
+def _ended(p: Pending, receipt: Optional[dict]) -> None:
+    """The write has ended: remember a saved one for repeats; release any waiting repeat."""
+    with _lock:
+        if receipt is not None and p.conn_key:
+            now = time.monotonic()
+            _recent[(p.conn_key, p.hash)] = (now, receipt, p.started)
+            if len(_recent) > 500:   # forget what is past the window
+                for k in [k for k, v in _recent.items() if now - v[0] >= WINDOW_SECONDS]:
+                    _recent.pop(k, None)
         if p.event is not None:
-            p.event.set()
+            _inflight.pop((p.conn_key, p.hash), None)
+    if p.event is not None:
+        p.event.set()
 
 
 _TYPE_OF_TABLE = None

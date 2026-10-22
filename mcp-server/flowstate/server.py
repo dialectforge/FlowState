@@ -39,6 +39,7 @@ from . import links
 from . import review
 from . import review_mode
 from . import safety
+from . import saves
 from . import tasks
 from . import extras
 from . import priority
@@ -243,6 +244,9 @@ async def _call_internal(name: str, arguments: dict, shown: str = "") -> types.C
     meta: dict = {}
     t0 = time.monotonic()
     out = None
+    if write:   # its activity-log row goes into the save itself (handle_call)
+        meta["activity"] = {"app": app, "tool": name, "caller": who, "t0": t0}
+    timed_out = False
     id_token = identity.set_current(ident)   # read by every recording path (identity.py)
     try:
         session_obj = server.request_context.session
@@ -265,6 +269,7 @@ async def _call_internal(name: str, arguments: dict, shown: str = "") -> types.C
                 result = await ask_user(result, session_obj, client)
                 deadline = time.monotonic() + call_timeout()
         except asyncio.TimeoutError:
+            meta["gave_up"] = timed_out = True
             receipts.timed_out(conn_key, change, shown or name)
             out = _error("flowstate_timeout", f"FlowState took longer than {call_timeout():g}s. "
                          + (TIMED_OUT_WRITE if write else "Carry on with the task."))
@@ -293,10 +298,13 @@ async def _call_internal(name: str, arguments: dict, shown: str = "") -> types.C
             except (ValueError, AttributeError, IndexError):
                 err = "error"
         try:
-            await _bounded(deadline, activity.record, backend.db_path, app, name,
-                           (arguments or {}).get("action"), meta.get("project_id"), write,
-                           out is not None and not out.isError, err,
-                           int((time.monotonic() - t0) * 1000), who, meta.get("record"))
+            saved = (meta.get("activity_saved") and not timed_out and out is not None
+                     and err == meta.get("activity_error"))   # handle_call wrote this row
+            if not saved:
+                await _bounded(deadline, activity.record, backend.db_path, app, name,
+                               (arguments or {}).get("action"), meta.get("project_id"), write,
+                               out is not None and not out.isError, err,
+                               int((time.monotonic() - t0) * 1000), who, meta.get("record"))
         finally:
             identity.reset_call(call_token)
             identity.reset(id_token)
@@ -360,17 +368,17 @@ def handle_call(name: str, args: dict, client: str = "unknown", meta: Optional[d
         if change else (None, None)
     if reply is not None:
         return reply
-    result = receipt = None
-    try:
-        result = _handle(name, args, client, meta)
-    finally:   # a created record goes into the edit history (undo takes it back)
-        if pending is not None:
-            receipt = _safe_call(receipts.finish, backend.db_path, pending, result,
-                                 meta.get("project_id"), meta.get("session_id"),
-                                 identity.current(), meta.get("record"), client)
-        elif meta.get("record"):
-            _safe_call(history.record_created, backend.db_path, *meta["record"], "create", client)
-    return receipts.attach(result, receipt)
+    return saves.run(backend.db_path, _handle, name, args, client, meta, pending,
+                     _one_commit(name, args))
+
+
+def _one_commit(name: str, args: dict) -> bool:
+    """A write saves with one commit (saves.py), except git, deletes and approvals (a
+    safety copy first) and undo (it restores with foreign-key checks off)."""
+    key = (name, args.get("action"))
+    return writes_text(name, args) and not (
+        name in receipts.NO_RECEIPT or name in ("delete_request", "review_approve")
+        or key in _DELETE_ACTIONS or key == ("history", "undo"))
 
 
 def _handle(name: str, args: dict, client: str, meta: dict) -> Any:
