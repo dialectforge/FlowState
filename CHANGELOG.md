@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.4.0 - unreleased
+## 2.4.0 - 2026-10-23
 
 ### In short
 - More reliable and easier to trust; no new tools and no new required arguments. Out of the
