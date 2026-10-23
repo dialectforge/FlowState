@@ -132,6 +132,33 @@ JS = r"""(function () {
     $("who").textContent = "Asked by " + it.queued_by + ", " + it.queued_at + " UTC";
     $("name-row").hidden = !needsName;
     $("item").hidden = false;
+    if (it.card && it.card.sides) {
+      var box = document.querySelector(".actions");
+      $("approve").hidden = $("reject").hidden = true;
+      $("summary").textContent = "";
+      [["keep_a", "Keep A", "btn"], ["keep_b", "Keep B", "btn ghost"],
+       ["keep_both", "Keep both", "btn ghost"], ["dismiss", "Dismiss", "btn ghost"]].forEach(function (b) {
+        var btn = document.createElement("button");
+        btn.className = b[2];
+        btn.type = "button";
+        btn.textContent = b[1];
+        btn.addEventListener("click", function () { decide(b[0]); });
+        box.appendChild(btn);
+      });
+      var sides = document.createElement("div");
+      it.card.sides.forEach(function (s) {
+        var node = document.createElement("p");
+        var ev = (s.evidence || []).map(function (e) {
+          return (e.label || "") + (e.excerpt ? " — " + e.excerpt : "");
+        }).filter(Boolean).join("; ");
+        node.textContent = "Claim " + (s.mark || "") + " (" + (s.who || "Unknown") +
+          (s.when ? ", " + s.when : "") + "): " + (s.claim || "") +
+          " Evidence: " + (ev || "none");
+        sides.appendChild(node);
+      });
+      $("details").textContent = "";
+      $("details").appendChild(sides);
+    }
     $("approve").addEventListener("click", function () { decide("approve"); });
     $("reject").addEventListener("click", function () { decide("reject"); });
   }, function () { say("Can't show this request", "Your FlowState didn't answer.", true); });
@@ -160,20 +187,35 @@ def view(db_path, item_id: int) -> dict:
     p = json.loads(item.get("payload") or "{}")
     app = item.get("app") or item.get("source") or "An app"
     ask = approvals.describe(item, project, db_path)
+    card = None
+    summary = review.strip_tag(item.get("summary") or "")
+    details = item.get("details") or ""
     if item["kind"] == "cleanup":   # FlowState's own idea: one plain question and its reason
         why = p.get("reason") or ""
         question = f"Should FlowState {ask}?" + (f" {why[:1].upper()}{why[1:]}." if why else "")
     elif item["kind"] == "session_summary":   # what Keep / Don't keep really do
         question = f"{review.KEEP_QUESTION} {review.KEEP_HOW}"
+    elif item["kind"] == "delete":   # the rows the database says will go, not the agent's words
+        from . import deletes
+        got = deletes.preview(db_path, item)
+        question, summary, details = got["headline"], got["root_line"], got["details"]
+    elif item["kind"] == "disagreement":
+        from . import conflict_cards
+        card = conflict_cards.phone_card(db_path, item)
+        question = (card or {}).get("headline") or "Two AIs disagree."
+        summary, details = "", ""
     else:
         question = f"{app} wants to {ask}."
     keep = item["kind"] == "session_summary"
-    return {"id": item["id"], "project": project, "kind": item["kind"], "question": question,
-            "summary": review.strip_tag(item.get("summary") or ""), "details": item.get("details") or "",
-            "yes": review.KEEP if keep else "Approve", "no": review.DONT_KEEP if keep else "Reject",
-            "queued_by": app + (f" on {item['machine']}" if item.get("machine") else ""),
-            "queued_at": item.get("created_at") or "",
-            "needs_name": item["kind"] == "delete" and p.get("record_type") == "project"}
+    out = {"id": item["id"], "project": project, "kind": item["kind"], "question": question,
+           "summary": summary, "details": details,
+           "yes": review.KEEP if keep else "Approve", "no": review.DONT_KEEP if keep else "Reject",
+           "queued_by": app + (f" on {item['machine']}" if item.get("machine") else ""),
+           "queued_at": item.get("created_at") or "",
+           "needs_name": item["kind"] == "delete" and p.get("record_type") == "project"}
+    if card:
+        out["card"] = card
+    return out
 
 
 def _same_origin(request) -> bool:
@@ -250,7 +292,8 @@ def routes(db_path_fn):
         db = db_path_fn()
         try:
             body = await _body(request)
-            if body.get("decision") not in ("approve", "reject"):
+            if body.get("decision") not in ("approve", "reject", "keep_a", "keep_b", "keep_both",
+                                             "dismiss"):
                 raise approvals.ApprovalError("bad_request", "Choose Approve or Reject.")
             claims = await asyncio.to_thread(approvals.verify_grant, db, body["grant"], item_id)
             token = body.get("token")
@@ -264,9 +307,13 @@ def routes(db_path_fn):
             return refuse(e)
         from .popup import as_user
         label = f"phone ({claims.get('handle')})"
-        if body["decision"] == "approve":
+        keep = {"keep_a": "a", "keep_b": "b", "keep_both": "both"}.get(body["decision"])
+        if body["decision"] == "approve" or keep:
             args = {"item_id": item_id, "confirm_name": body.get("confirm_name"),
                     "user_request": "The user approved this on their phone (flowstatemcp.com)."}
+            if keep:
+                args["keep"] = keep
+                args["user_request"] = "The user tapped a button on their phone (flowstatemcp.com)."
             res = await asyncio.to_thread(as_user, "review_approve", args, label)
         else:
             args = {"item_id": item_id, "reason": "rejected on the user's phone",
@@ -274,7 +321,9 @@ def routes(db_path_fn):
             res = await asyncio.to_thread(as_user, "review_reject", args, label)
         if isinstance(res, dict) and "error" in res:
             return answer({"error": res["error"], "message": res.get("message") or res["error"]}, 409)
-        done = "Approved" if body["decision"] == "approve" else "Rejected"
+        done = {"approve": "Approved", "keep_a": "Kept the older entry",
+                "keep_b": "Kept the newer entry", "keep_both": "Kept both",
+                "dismiss": "Dismissed"}.get(body["decision"], "Rejected")
         extra = " It can be undone from the chat (manage_history undo)." \
             if body["decision"] == "approve" and isinstance(res, dict) and res.get("undo") else ""
         return answer({"ok": True, "message": f"{done}. You can close this page.{extra}"})

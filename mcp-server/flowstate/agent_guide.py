@@ -17,8 +17,7 @@ INSTRUCTIONS = """FlowState is the user's project memory (todos, changes, decisi
 START_HERE_DESCRIPTION = (
     "CALL THIS FIRST in every conversation about a project. Returns the brief as text: hard "
     "rules, a handoff note if any, review mode, possible conflicts, open todos (and claims) "
-    "and problems, recent changes, decisions and learnings, facts to re-check, linked "
-    "projects. No project: lists projects. size=deep: full working context. "
+    "and problems, recent changes, decisions and learnings. No project: lists projects. "
     "Side effects: opens or reuses the automatic session, notes when you looked, runs the "
     "user's opt-in git capture."
 )
@@ -28,17 +27,15 @@ LOG_WORK_DESCRIPTION = (
     "blocker), learning (reusable lesson) or todo in a project. To update todos or problems: "
     "manage_todos / manage_problems. Only adds. Review mode or suggested=true may queue it for "
     "the user. A change on a shared component alerts linked projects. A decision close to a "
-    "current one gets a possible-conflict note; act on it. Secrets are refused. Returns "
-    "{logged, record, note} or {queued_for_review}."
+    "current one gets a possible-conflict note; act on it. conflicts_with opens a disagreement "
+    "card. Secrets are refused. Returns {logged, record, note} or {queued_for_review}."
 )
 
 SEARCH_DESCRIPTION = (
     "Find stored todos, decisions, changes, learnings, problems and solutions. query: ranked "
-    "matches (word endings match; by meaning too if a local model is installed). query + "
-    "answer=true: a short quoted answer with record ids, also from hard rules and handoffs, "
-    "or says FlowState has nothing; check it before contradicting a decision. No query: the "
-    "newest records (since_hours, content_types). Read-only. Overview: start_here; edit "
-    "trail: manage_history. Returns {results, count} or {answer, sources}."
+    "matches. query + answer=true: a short quoted answer with record ids, or says FlowState "
+    "has nothing. No query: the newest records. Read-only. Overview: start_here. "
+    "Returns {results, count} or {answer, sources}."
 )
 
 TODOS_DESCRIPTION = (
@@ -67,7 +64,7 @@ REVIEW_DESCRIPTION = (
     "The user's review queue and mode: summaries, suggestions, imports, clean-ups, deletes, "
     "conflicts. list (a line each; item_id: one in full), get_mode: read-only. walk: when "
     "the user asks what's waiting (boxes or links). approve: make it a record (edit / "
-    "move_to first), delete (project: confirm_name), confirm a conflict. set_mode: which "
+    "move_to first), delete (confirm_name), confirm a conflict (keep=a|b|both). set_mode: which "
     "new records wait." + _USER_ONLY +
     " Returns {items, total}, the mode, or the result."
 )
@@ -94,7 +91,8 @@ LINKS_DESCRIPTION = (
     "a change or decision logged on the shared component (log_work component=<name>) gives "
     "each linked project an update todo and a 'changed since' line; FlowState never edits "
     "other projects. remove: by link_id or the add fields; kept as removed (manage_history "
-    "undo, record_type=link). list: read-only. Requires project. Returns the link or {links}."
+    "undo, record_type=link). flag_conflict: two records disagree (topic, evidence); the user "
+    "keeps one. list: read-only. Requires project. Returns the link, the card, or {links}."
 )
 
 HISTORY_DESCRIPTION = (
@@ -180,7 +178,7 @@ SKILLS_DESCRIPTION = (
 
 MODEL_PROPERTY = {
     "type": "string",
-    "description": "Your model name if you know it. Never guess.",
+    "description": "Model name if known. Never guess.",
 }
 
 PROJECT_PROPERTY = {
@@ -195,6 +193,42 @@ USER_REQUEST_PROPERTY = {
 
 PROMPT_NAME = "flowstate-start"
 PROMPT_DESCRIPTION = "Load FlowState project memory and work with it for this conversation."
+
+
+def register_prompts(server) -> None:
+    """The flowstate-start prompt. Lives here so server.py stays a thin router."""
+    import asyncio
+
+    from mcp import types
+    from mcp.types import TextContent
+
+    @server.list_prompts()
+    async def list_prompts():
+        return [types.Prompt(
+            name=PROMPT_NAME, description=PROMPT_DESCRIPTION,
+            arguments=[types.PromptArgument(name="project", description="Project name (optional)",
+                                            required=False)])]
+
+    @server.get_prompt()
+    async def get_prompt(name: str, arguments):
+        if name != PROMPT_NAME:
+            raise ValueError(f"Unknown prompt: {name}")
+        project = (arguments or {}).get("project") or ""
+        brief = ""
+        if project:
+            from . import server as flow
+            if not flow.backend.error:
+                try:
+                    text = await asyncio.wait_for(
+                        asyncio.to_thread(flow._start_here, {"project": project}, flow._client_name()),
+                        timeout=flow.call_timeout())
+                    brief = text if isinstance(text, str) and text.startswith("FlowState brief:") else ""
+                except Exception:  # noqa: BLE001 - the prompt still works without the brief
+                    brief = ""
+        return types.GetPromptResult(
+            description=PROMPT_DESCRIPTION,
+            messages=[types.PromptMessage(role="user", content=TextContent(
+                type="text", text=prompt_text(project, brief)))])
 
 
 def prompt_text(project: str = "", brief: str = "") -> str:

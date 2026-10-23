@@ -55,7 +55,18 @@ h1{font-size:1.4rem}h2{font-size:1.1rem;margin-top:2rem;border-bottom:1px solid 
 .meta{color:#666;font-size:.85rem}textarea,input[type=text],select{width:100%;box-sizing:border-box;margin:.2rem 0}
 button{padding:.35rem .9rem;margin:.3rem .4rem 0 0}.ok{color:#0a6b0a}.err{color:#b00020}
 table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #eee;padding:.25rem;text-align:left;font-size:.9rem}
-.row{display:flex;gap:1rem}.row>*{flex:1}"""
+.row{display:flex;gap:1rem}.row>*{flex:1}
+.disagree,.delcard{background:#fbfaf7;border:1px solid #e7e4dd;border-radius:12px;padding:14px 16px;margin:.4rem 0}
+.disagree h3,.delcard .headline{font-family:ui-serif,Georgia,serif;font-weight:500;font-size:1.35rem;margin:.2rem 0 .8rem}
+.sides{display:flex;flex-direction:column;gap:12px}
+.side{border:1px solid #e7e4dd;border-radius:12px;padding:12px 14px;background:#fff}
+.mark{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:#1f5f5b;margin:0 0 4px}
+.who{color:#62656b;font-size:.9rem;margin:0 0 8px}.claim{margin:0 0 8px;overflow-wrap:anywhere}
+.ev{color:#62656b;font-size:.9rem;margin:.2rem 0;overflow-wrap:anywhere}
+.keep-row form{display:block;margin:.35rem 0}.keep-row button,.delcard+form button{min-height:44px;border-radius:999px;padding:.6rem 1rem}
+.done{color:#1f5f5b}.ainote{color:#62656b;font-size:.95rem}
+.kids,.fields{margin:.3rem 0 .6rem;padding-left:1.2rem}
+@media (min-width:800px){.sides{flex-direction:row;align-items:stretch}.side{flex:1}}"""
 
 
 def _e(v) -> str:
@@ -128,15 +139,19 @@ class Page:
         if not item:
             return "That item no longer exists."
         args = {"item_id": item["id"], "user_request": self.user_words.format(what="Approve"),
-                **{k: form[k] for k in ("summary", "details", "move_to", "confirm_name")
-                   if form.get(k, "").strip()}}
+                **{k: form[k] for k in ("summary", "details", "move_to", "confirm_name", "keep")
+                   if str(form.get(k, "")).strip()}}
         if args.get("summary") in (item["summary"], review.strip_tag(item["summary"])):
             args.pop("summary")
         if args.get("details") == (item["details"] or ""):
             args.pop("details")
         res = S._review_decide("review_approve", item["project_id"], args, self.client)
-        return res.get("message") if isinstance(res, dict) and "error" in res else \
-            f"{'Kept' if item['kind'] == 'session_summary' else 'Approved'} #{item['id']}."
+        if isinstance(res, dict) and "error" in res:
+            return res.get("message") or res["error"]
+        if item["kind"] == "disagreement":
+            return {"a": "Kept the older entry.", "b": "Kept the newer entry.",
+                    "both": "Kept both."}.get(form.get("keep"), "Saved.")
+        return f"{'Kept' if item['kind'] == 'session_summary' else 'Approved'} #{item['id']}."
 
     def reject(self, form: dict) -> str:
         from . import server as S
@@ -286,13 +301,17 @@ class Page:
                     out.append(f"""<p><strong>{_e(it['summary'])}</strong></p><p class="meta">{_e(it['details'])}</p>
 <form method="post" action="{self.base}/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
 <button>Approve: I said this</button></form>""")
+                elif it["kind"] == "disagreement":
+                    from . import conflict_cards
+                    out.append(conflict_cards.html_block(self.db_path, it, hidden, self.base, True))
                 elif it["kind"] == "delete":   # nothing to edit; a project needs its name typed
+                    from . import deletes
                     confirm = ""
                     if '"record_type": "project"' in (it.get("payload") or ""):
                         confirm = ('<label>Type the project name to confirm '
                                    '<input type="text" name="confirm_name" autocomplete="off"></label>')
-                    out.append(f"""<p><strong>{_e(it['summary'])}</strong></p><p class="meta">{_e(it['details'])}</p>
-<form method="post" action="{self.base}/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">{confirm}
+                    out.append(deletes.html_for(self.db_path, it))
+                    out.append(f"""<form method="post" action="{self.base}/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">{confirm}
 <button>Approve: delete it</button></form>""")
                 elif it["kind"] == "session_summary":   # Keep / Don't keep: what they really do
                     out.append(f"""<p><strong>{review.KEEP_QUESTION}</strong> {review.KEEP_HOW} You can edit it first.</p>
@@ -305,13 +324,23 @@ class Page:
 <button>Approve (with any edits)</button></form>""")
                 no = (f'<input type="text" name="reason" placeholder="Reason (optional)"><button>{_e(review.DONT_KEEP)}</button>'
                       if it["kind"] == "session_summary" else
+                      '<input type="text" name="reason" placeholder="Reason for dismissing"><button>Dismiss</button>'
+                      if it["kind"] == "disagreement" else
                       '<input type="text" name="reason" placeholder="Reason for rejecting"><button>Reject</button>')
                 out.append(f"""
 <form method="post" action="{self.base}/reject">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
 {no}</form>""")
             else:
-                out.append(f"<p>{_e(review.strip_tag(it['summary']))}</p>"
-                           + (f"<p class='meta'>Reason: {_e(it['reject_reason'])}</p>" if it.get("reject_reason") else ""))
+                if it["kind"] == "disagreement":
+                    from . import conflict_cards
+                    out.append(conflict_cards.html_block(self.db_path, it, hidden, self.base, False))
+                elif it["kind"] == "delete":
+                    from . import deletes
+                    out.append(deletes.html_for(self.db_path, it))
+                else:
+                    out.append(f"<p>{_e(review.strip_tag(it['summary']))}</p>")
+                if it.get("reject_reason"):
+                    out.append(f"<p class='meta'>Reason: {_e(it['reject_reason'])}</p>")
             out.append("</div>")
         # review mode
         m = review_mode.get(self.db_path, None)

@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+- Disagreement cards. When two entries disagree, FlowState queues a review item (kind
+  `disagreement`) the user settles by keeping the older entry, the newer one, or both, or by
+  dismissing the card. The loser is marked superseded, not deleted. An agent flags a pair with
+  `log_work(..., conflicts_with=<id>, topic="...", evidence=[...])` or
+  `manage_links(action="flag_conflict", topic="...", item_id=..., target_id=..., evidence=[...])`.
+  Evidence is at most two short snippets (`file:line`, `file:line — excerpt`, or `output: excerpt`).
+  A new decision on the same component that the existing possible-conflict check already treats
+  as a same-component hit also opens a card; unrelated decisions on that component do not. The
+  review page shows claim A and claim B (stacked on a narrow screen, side by side on a wide
+  one) with who wrote each, when, and the evidence. The tool reply includes that same card as
+  plain text, plus the review link. Hosts that support MCP Apps (spec 2026-01-26) also get an
+  in-chat card (`ui://flowstate/conflict-card.html`); its buttons call `resolve_conflict_card`,
+  which is hidden from the model (`visibility: ["app"]`). Approving through any model-visible
+  tool still follows chat approvals (off by default: refused, with the review link). Every
+  resolution is audited with its path (`card`, `review page`, `chat`, or `automatic` when a
+  later `replaces=` or a dismissed possible-conflict closes the card). Card taps are not
+  cryptographically proven to be a person yet; that check is a known follow-up.
+- Queued deletes (opt-in approvals, 2.4.0) now show the exact rows the database will remove:
+  type, name, project and key fields, and for a project or component the count and the named
+  child records. That list is read from the database when the page or the tool reply is built.
+  An agent-written sentence is shown only as a secondary line, "AI's note".
+
 ## 2.4.2 - 2026-10-23
 
 - Changed, please read: after updating, an AI connected through the relay (claude.ai, ChatGPT

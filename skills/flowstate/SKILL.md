@@ -56,6 +56,11 @@ user switches project mid-chat, say so and switch. Pick the kind:
   earlier decision, pass `replaces=<that decision's id>` so only the current one shows.
   If the answer says "Possible conflict with D12 ...", decide: if yours replaces it, link
   them with `manage_links(link_type="supersedes", ...)` as the note says; otherwise tell the user.
+  To flag two entries that disagree, pass `conflicts_with=<id>`, a short `topic`, and up to two
+  `evidence` snippets (`file:line`, `file:line — excerpt`, or `output: excerpt`), or call
+  `manage_links(action="flag_conflict", ...)`. The user keeps the older, the newer, or both on
+  the review page (or in chat only when chat approvals are on). Show them the card text and the
+  review link from the answer. Don't resolve it yourself.
 - something changed in code or setup: `change`
 - something broke: `problem`
 - a lesson worth reusing: `learning`
@@ -120,9 +125,11 @@ never guess or invent one. `manage_history(action="who", ...)` shows who did wha
   "delete_component", ...)` or `manage_memory(action="delete", record_type=..., record_id=...)`.
   It goes through at once after a safety copy; tell the user what went (the counts in the
   answer) and that the answer's `manage_history(action="undo", ...)` call brings all of it back.
-  If the user turned approvals on, the delete waits for them instead: their app may show a
-  popup, else pass on the answer's `next` line as it is (a phone link or `flowstate approve
-  <id>`). You can't approve it. To retire something without deleting it, use its status (done,
+  If the user turned approvals on, the delete waits for them instead: the answer names the
+  exact rows the database will remove (type, name, project, key fields, and for a project or
+  component the child records). Pass that list on. A line labeled "AI's note" is only the
+  agent's own sentence. Their app may show a popup, else pass on the answer's `next` line as
+  it is (a phone link or `flowstate approve <id>`). You can't approve it. To retire something without deleting it, use its status (done,
   cancelled, archived, deprecated).
 - The review mode (shown in the brief) decides what waits for review. **Never change it**
   unless the user asks you to in this chat; then quote them in `user_request`. Never change

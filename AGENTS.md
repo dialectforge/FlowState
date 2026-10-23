@@ -439,6 +439,15 @@ don't show server instructions:
    target_type="decision", target_id=12)`; next time log with `replaces=12` up front); if both
    can stand, or you're not sure, tell the user. Only the user dismisses one (review item kind
    `conflict`: reject = compatible, approve = they really conflict).
+   To flag two entries that disagree, pass `conflicts_with=<id>` and a short `topic` on
+   `log_work` (and up to two `evidence` snippets: `file:line`, `file:line — excerpt`, or
+   `output: excerpt`), or call `manage_links(action="flag_conflict", topic=..., item_id=...,
+   target_id=...)`. That queues a disagreement card. The user keeps the older (`keep="a"`),
+   the newer (`keep="b"`) or both; dismissing it is `manage_review` reject. Do not approve it
+   unless the user asks, and through the relay only when chat approvals are on. The reply
+   includes the card as plain text and the review link. A queued delete (approvals on) lists
+   the exact rows the database will remove; show that list, and treat any "AI's note" line as
+   the agent's words, not as the list of what goes.
 14. 12 tools are listed by default (`FLOWSTATE_TOOLS=core` lists 6, `full` lists 18). The
    v2.0 tool names (`todo`, `link`, `handoff`, `review_approve`, `list_projects`, ...) still
    work when called, with a one-line pointer to the new name; see

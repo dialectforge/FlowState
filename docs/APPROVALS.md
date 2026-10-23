@@ -106,6 +106,25 @@ chat by default. What the code enforces (`waiting.phone_only`, called first in
   "did you say this?" items (`user_only`).
 - Not affected: stdio, the LAN listener and the public (own tunnel) listener; the phone page,
   the phone review list and the popup (they decide as the user, with no app identity).
+- A disagreement card is the same rule when an agent uses `manage_review` approve / reject:
+  chat approvals off means `phone_only` and the review link; on means the agent may pass
+  `keep="a"`, `"b"` or `"both"` with the user's words. The in-chat card's buttons call
+  `resolve_conflict_card` instead. That tool is app-only (`_meta.ui.visibility` is `["app"]`,
+  so it is left off the model's tool list unless the host advertises MCP Apps) and it refuses
+  `user_request`, `message`, `text` and `reason`. Its audit path is `card`. The review page
+  and the phone page audit as `review page`; an agent quoting the user audits as `chat`. A
+  card closed because a decision was replaced, or because the user said the old possible-conflict
+  pair fits together, is audited as `automatic`. Card taps are not cryptographically proven to
+  be a person yet. That check is a known follow-up; a host that lets the model call the
+  app-only tool by name can still save a resolution.
+
+## What a queued delete shows
+
+With approvals on, a delete stays in the queue until the user approves it. The review page,
+the phone page and `manage_review` list build the list of rows from the database at the moment
+they answer: the record's type, name, project and key fields, and for a project or component
+the count and the named child records that go with it. The agent's own sentence is not that
+list. If one was stored, it appears only as a secondary line, "AI's note".
 
 ## "The user said so" is always user-only
 

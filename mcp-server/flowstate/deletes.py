@@ -209,6 +209,238 @@ def undo_call(project: str, rtype: str, rid: int) -> str:
             f'record_id={rid})')
 
 
+# Key fields shown with a row. Anything not on the row is skipped.
+_KEY_FIELDS = {
+    "projects": ("description", "status"),
+    "components": ("description", "status"),
+    "todos": ("status", "priority"),
+    "problems": ("status", "severity"),
+    "changes": ("change_type",),
+    "learnings": ("category",),
+    "solution_attempts": ("outcome",),
+    "handoff_notes": ("next_step",),
+}
+# Counted, but not named: they move on their own and are not the user's records.
+_UNNAMED = {"sessions", "review_items"}
+_NAMED = {"components": "component", "conversations": "decision", "changes": "change",
+          "learnings": "learning", "todos": "todo", "problems": "problem",
+          "solution_attempts": "attempt", "solutions": "solution", "project_rules": "rule",
+          "handoff_notes": "handoff", "record_links": "link", "project_variables": "variable",
+          "project_methods": "method", "attachments": "attachment", "learned_skills": "skill"}
+_CHILD_CAP = 60
+
+
+def _row_name(table: str, row: dict) -> str:
+    if table == "conversations":
+        text = row.get("key_decisions") or row.get("user_prompt_summary") or ""
+        if isinstance(text, str) and text.startswith("["):
+            try:
+                items = json.loads(text)
+                text = str(items[0]) if items else ""
+            except (ValueError, TypeError):
+                pass
+        text = str(text)
+        if text.startswith("Decision:"):
+            text = text[len("Decision:"):].strip()
+        return _one_line(text, 80)
+    if table == "record_links":
+        return _one_line(row.get("link_type") or "link", 80)
+    for key in ("name", "title", "insight", "field_name", "rule", "where_i_was", "description",
+                "file_name"):
+        if row.get(key):
+            return _one_line(row[key], 80)
+    return ""
+
+
+def _fields_of(table: str, row: dict) -> dict:
+    return {k: _one_line(row.get(k), 80) for k in _KEY_FIELDS.get(table, ())
+            if row.get(k) not in (None, "")}
+
+
+def _named_row(table: str, key, row: dict, project: str) -> dict:
+    return {"type": _NAMED.get(table, history.TYPE_OF.get(table, table)), "id": key,
+            "name": _row_name(table, row), "project": project, "fields": _fields_of(table, row)}
+
+
+def _inventory(rtype: str, rid: int, title: str, project: str, gone: dict, root: tuple) -> dict:
+    """The exact rows a delete removes, from the plan, not from anything an agent wrote."""
+    root_table = TYPES[rtype][0]
+    root_row = gone.get(root) or {}
+    children, unnamed = [], 0
+    for (table, key) in sorted(gone, key=lambda tk: (tk[0], tk[1] if isinstance(tk[1], int) else 0)):
+        if (table, key) == root:
+            continue
+        if table in _UNNAMED or table not in _NAMED:
+            unnamed += 1
+            continue
+        children.append(_named_row(table, key, gone[(table, key)], project))
+    return {"record_type": rtype, "id": rid, "title": title, "project": project,
+            "fields": _fields_of(root_table, root_row), "children": children[:_CHILD_CAP],
+            "children_more": max(0, len(children) - _CHILD_CAP), "unnamed": unnamed}
+
+
+def agent_note(item: dict) -> Optional[str]:
+    """Agent-written wording, if it isn't the server's own 'Delete …' / 'Deletes …' line."""
+    try:
+        payload = json.loads(item.get("payload") or "{}")
+    except ValueError:
+        payload = {}
+    raw = payload.get("agent_note")
+    if raw:
+        return _one_line(raw, 400)
+    summary = " ".join(str(item.get("summary") or "").split())
+    if summary and not summary.startswith("Delete "):
+        return _one_line(summary, 400)
+    details = " ".join(str(item.get("details") or "").split())
+    if details and not details.startswith("Deletes "):
+        return _one_line(details, 400)
+    return None
+
+
+def _field_text(fields: dict) -> str:
+    return ", ".join(f"{k}: {v}" for k, v in fields.items())
+
+
+def _root_line(inv: dict) -> str:
+    name = inv["title"] or "(untitled)"
+    line = f'{inv["record_type"].capitalize()} "{name}" in {inv["project"]}'
+    extra = _field_text(inv["fields"])
+    return line + (f" ({extra})" if extra else "")
+
+
+def _child_line(row: dict) -> str:
+    name = f' "{row["name"]}"' if row.get("name") else ""
+    extra = _field_text(row.get("fields") or {})
+    return f'{row["type"].capitalize()} #{row["id"]}{name}' + (f" ({extra})" if extra else "")
+
+
+def _body(inv: dict, with_: dict, undo: str) -> str:
+    lines = [_root_line(inv)]
+    if with_:
+        lines.append("Also deletes " + ", ".join(f"{n} {k}" for k, n in with_.items()) + ":")
+    shown = inv["children"]
+    lines.extend("- " + _child_line(c) for c in shown)
+    if inv.get("children_more"):
+        lines.append(f"- and {inv['children_more']} more")
+    if inv.get("unnamed") and not with_:
+        lines.append(f"Also {inv['unnamed']} bookkeeping rows (sessions or review items).")
+    if undo:
+        lines.append(f"Undo after it is deleted: {undo}")
+    return "\n".join(lines)
+
+
+def preview(db_path: Path, item: dict) -> dict:
+    """Live inventory for a queued delete. Missing when the record is already gone."""
+    try:
+        payload = json.loads(item.get("payload") or "{}")
+    except ValueError:
+        payload = {}
+    rtype, rid = payload.get("record_type"), payload.get("record_id")
+    note = agent_note(item)
+    project = payload.get("project_name") or ""
+    if rtype not in TYPES or rid is None:
+        return {"missing": True, "headline": "This delete request is incomplete.",
+                "root_line": "", "details": "", "plain": "This delete request is incomplete.",
+                "ai_note": note, "would_delete": None}
+    conn = connect(db_path)
+    try:
+        if not project:
+            row = conn.execute("SELECT name FROM projects WHERE id = ?",
+                               (item.get("project_id"),)).fetchone()
+            project = row[0] if row else ""
+        title = _title(conn, rtype, int(rid))
+        try:
+            gone, changed = plan(conn, TYPES[rtype][0], int(rid))
+        except DeleteError:
+            text = f'{rtype.capitalize()} "{title or rid}" is already gone. Nothing will be deleted.'
+            return {"missing": True, "headline": text, "root_line": text, "details": "",
+                    "plain": text, "ai_note": note, "would_delete": None}
+        with_ = counts(gone, (TYPES[rtype][0], int(rid)))
+        inv = _inventory(rtype, int(rid), title, project, gone, (TYPES[rtype][0], int(rid)))
+        undo = undo_call(project, rtype, int(rid))
+        body = _body(inv, with_, undo)
+        headline = f"These records will be deleted from {project}" if with_ else \
+            f"This record will be deleted from {project}"
+        plain = headline + "\n" + body
+        if note:
+            plain += f"\nAI's note: {note}"
+        would = {"record_type": rtype, "id": int(rid), "title": title, "project": project,
+                 "fields": inv["fields"], "with": with_, "children": inv["children"]}
+        if inv["children_more"]:
+            would["children_more"] = inv["children_more"]
+        return {"missing": False, "headline": headline, "root_line": _root_line(inv),
+                "details": body + (f"\nAI's note: {note}" if note else ""),
+                "plain": plain, "ai_note": note, "would_delete": would, "changed_rows": len(changed)}
+    finally:
+        conn.close()
+
+
+def question(db_path: Path, item: dict, project: str) -> Optional[str]:
+    """One sentence for the approval question, naming the record and the children."""
+    got = preview(db_path, item)
+    w = got.get("would_delete")
+    if not w:
+        return None
+    title = w["title"] or ""
+    if w["record_type"] == "project":
+        what = f'delete the whole project "{project}"'
+    else:
+        what = f'delete the {w["record_type"]} "{title}" from {project}' if title else \
+            f'delete {w["record_type"]} #{w["id"]} from {project}'
+    names = [c["name"] or f'#{c["id"]}' for c in (w.get("children") or [])[:8]]
+    extra = ", ".join(f"{n} {k}" for k, n in (w.get("with") or {}).items())
+    if names:
+        more = w.get("children_more") or 0
+        tail = ", ".join(f'"{n}"' for n in names)
+        if more:
+            tail += f", and {more} more"
+        return what + (f" (with {extra}: {tail})" if extra else f" (with {tail})")
+    return what + (f" (with {extra})" if extra else "")
+
+
+def list_line(db_path: Path, it: dict, status: bool = False) -> str:
+    """The review-list line: the database inventory, never the agent's summary."""
+    got = preview(db_path, it)
+    kind = "delete request" + (f", {it['status']}" if status else "")
+    head = f"#{it['id']} ({it.get('project') or ''}, {kind}): "
+    text = " ".join(got["plain"].split())
+    if len(text) > 1500:
+        text = text[:1497] + "..."
+    return head + text
+
+
+def html_for(db_path: Path, it: dict) -> str:
+    """Escaped inventory for the review page. The agent's words are only 'AI's note'."""
+    import html as _html
+
+    def e(v) -> str:
+        return _html.escape("" if v is None else str(v), quote=True)
+
+    got = preview(db_path, it)
+    if got.get("missing") or not got.get("would_delete"):
+        note = f"<p class='ainote'><b>AI's note: </b>{e(got.get('ai_note'))}</p>" \
+            if got.get("ai_note") else ""
+        return f"<div class='delcard'><p><strong>{e(got.get('headline'))}</strong></p>{note}</div>"
+    w = got["would_delete"]
+    fields = "".join(f"<li>{e(k)}: {e(v)}</li>" for k, v in (w.get("fields") or {}).items())
+    kids = []
+    for c in w.get("children") or []:
+        extra = ", ".join(f"{e(k)}: {e(v)}" for k, v in (c.get("fields") or {}).items())
+        name = f' "{e(c["name"])}"' if c.get("name") else ""
+        kids.append(f"<li>{e(c['type'].capitalize())} #{e(c['id'])}{name}"
+                    + (f" <span class='meta'>({extra})</span>" if extra else "") + "</li>")
+    if w.get("children_more"):
+        kids.append(f"<li>and {e(w['children_more'])} more</li>")
+    counts = ", ".join(f"{n} {e(k)}" for k, n in (w.get("with") or {}).items())
+    note = f"<p class='ainote'><b>AI's note: </b>{e(got['ai_note'])}</p>" if got.get("ai_note") else ""
+    listed = f"<p>Also deletes {counts}:</p><ul class='kids'>{''.join(kids)}</ul>" if kids or counts else ""
+    field_list = f"<ul class='fields'>{fields}</ul>" if fields else ""
+    return (f"<div class='delcard'><p class='headline'>{e(got['headline'])}</p>"
+            f"<p><strong>{e(got['root_line'])}</strong></p>{field_list}{listed}"
+            f"<p class='meta'>Undo after it is deleted: {e(undo_call(w['project'], w['record_type'], w['id']))}</p>"
+            f"{note}</div>")
+
+
 def request(db_path: Path, project_id: int, rtype: str, rid, client: str = "unknown",
             options: Optional[dict] = None) -> dict:
     """Queue a delete request for the user. Deletes nothing."""
@@ -238,7 +470,8 @@ def request(db_path: Path, project_id: int, rtype: str, rid, client: str = "unkn
                                            (project_id,)).fetchall():
             p = json.loads(payload or "{}")
             if p.get("record_type") == rtype and p.get("record_id") == rid:
-                return _request_reply(iid, rtype, rid, title, with_, pname, already=True)
+                inv = _inventory(rtype, rid, title, pname, gone, (table, rid))
+                return _request_reply(iid, rtype, rid, title, with_, pname, inv, already=True)
     finally:
         conn.close()
     what = f'{rtype} #{rid} "{_one_line(title, 60)}"'
@@ -254,18 +487,24 @@ def request(db_path: Path, project_id: int, rtype: str, rid, client: str = "unkn
                "changed_rows": len(changed), "project_name": pname, **(options or {})}
     item = review.add_item(db_path, project_id, "delete", f"Delete {what}"[:300], details, payload,
                            client)
-    return _request_reply(item, rtype, rid, title, with_, pname)
+    inv = _inventory(rtype, rid, title, pname, gone, (table, rid))
+    return _request_reply(item, rtype, rid, title, with_, pname, inv)
 
 
 def _request_reply(item: int, rtype: str, rid: int, title: str, with_: dict, pname: str,
-                   already: bool = False) -> dict:
+                   inv: Optional[dict] = None, already: bool = False) -> dict:
     approve = (f'manage_review(action="approve", project="{pname}", item_id={item}, '
                f'user_request="<their words>"' +
                (', confirm_name="<the project name, typed by the user>"' if rtype == "project"
                 else "") + ")")
     return {"delete_requested": item, "status": "waiting for the user's approval",
             "already_requested": already or None,
-            "would_delete": {"record_type": rtype, "id": rid, "title": title, "with": with_},
+            "would_delete": {"record_type": rtype, "id": rid, "title": title, "with": with_,
+                             "project": pname,
+                             "fields": (inv or {}).get("fields") or {},
+                             "children": (inv or {}).get("children") or [],
+                             **({"children_more": inv["children_more"]}
+                                if inv and inv.get("children_more") else {})},
             "note": (f"Nothing was deleted. Ask the user whether to delete this; only if they say "
                      f"so in this chat, call {approve}, or they approve it on the review page. "
                      f"Rejecting keeps everything.")}

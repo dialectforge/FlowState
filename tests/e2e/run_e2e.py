@@ -1468,6 +1468,22 @@ def s12_descriptions(W):
     for name in ("manage_variables", "manage_methods"):
         d = next(t for t in full if t["name"] == name)["description"]
         R.check(12, f"{name} says delete is refused for HTTP app keys", "refused for HTTP app keys" in d, d)
+    # a disagreement between two decisions already in the project, then dismissed,
+    # so flag_conflict is exercised and does not stay in the queue
+    if getattr(W, "d_slots", None) and getattr(W, "d_stripe", None):
+        flagged = W.agents["cursor"].call(
+            "manage_links", action="flag_conflict", project=P, topic="API sessions",
+            item_type="decision", item_id=W.d_slots, target_type="decision", target_id=W.d_stripe,
+            evidence=["src/auth.py:42"])
+        card_id = None
+        if isinstance(flagged, dict):
+            got = flagged.get("conflict_cards") or []
+            if got:
+                card_id = got[0].get("review_item_id")
+        if card_id:
+            cc1.call("manage_review", action="reject", project=P, item_id=card_id,
+                     reason="both can stand",
+                     user_request="User: these two can both stand, dismiss the card")
     # coverage: every tool and every action / kind / size
     expected = set()
     for t in full:

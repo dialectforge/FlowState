@@ -46,6 +46,8 @@ WRITES = {
     ("review_approve", None): "item_id",
     ("review_reject", None): "item_id",
     ("link", "add"): None,
+    ("link", "flag_conflict"): None,
+    ("resolve_conflict_card", None): "item_id",
     ("todo", "block"): "todo_id",
     ("todo", "unblock"): "todo_id",
     ("todo", "claim"): "todo_id",       # claims.py: who is working on it, until when

@@ -208,8 +208,8 @@ ELSEWHERE = ("on the computer where FlowState runs (the FlowState review shortcu
 
 # ---------------------------------------------------------------- 1. the chat walk
 _KIND = {"session_summary": "session summary", "cleanup": "clean-up idea", "edit": "markdown edit",
-         "conflict": "possible conflict", "setting": "review setting", "source": "said by you?",
-         "delete": "delete request"}
+         "conflict": "possible conflict", "disagreement": "disagreement",
+         "setting": "review setting", "source": "said by you?", "delete": "delete request"}
 
 
 LINE_MAX = 160          # one item's line, as the app reads it in the JSON answer
@@ -249,9 +249,24 @@ def _keep_note(items: list) -> dict:
     return {"session_summary": KEEP_NOTE} if any(it["kind"] == "session_summary" for it in items) else {}
 
 
-def _lines(items: list, status: bool = False) -> list:
+def _lines(items: list, status: bool = False, db_path: Optional[Path] = None) -> list:
+    """One line each. A disagreement or a delete is the server's own text (the card, or the
+    rows that would go), not a 160-character cut of whatever an agent wrote."""
+    from . import conflict_cards, deletes
     room = min(LINE_MAX, LIST_BUDGET // max(1, len(items)))
-    return [_plain(it, room, status) for it in items]
+    out = []
+    for it in items:
+        try:
+            if db_path is not None and it.get("kind") == "disagreement":
+                out.append(conflict_cards.list_line(db_path, it, status))
+                continue
+            if db_path is not None and it.get("kind") == "delete":
+                out.append(deletes.list_line(db_path, it, status))
+                continue
+        except Exception:  # noqa: BLE001 - a list line must not fail the whole answer
+            log.warning("review line for #%s skipped", it.get("id"))
+        out.append(_plain(it, room, status))
+    return out
 
 
 def _page(listing: dict, after: Optional[int], action: str) -> dict:
@@ -294,9 +309,31 @@ def review_list(args: dict, walk: bool, scopes) -> dict:
     if walk:
         return prepare(out, S.backend.db_path, scopes, pid, after)
     page = _page(out, after, "list")   # one line per item; item_id= for one in full
-    return {"total": out["total"], "status": out["status"], **page,
-            "items": _lines(out["items"], out["status"] != "pending"), **_keep_note(out["items"]),
-            **({"full_item": FULL_ITEM} if out["items"] else {}), "note": out["note"]}
+    db = S.backend.db_path
+    result = {"total": out["total"], "status": out["status"], **page,
+              "items": _lines(out["items"], out["status"] != "pending", db),
+              **_keep_note(out["items"]),
+              **({"full_item": FULL_ITEM} if out["items"] else {}), "note": out["note"]}
+    cards = []
+    for it in out["items"]:
+        if it.get("kind") != "disagreement":
+            continue
+        packed = _safe_card(db, it)
+        if packed:
+            cards.append({"review_item_id": packed["review_item_id"], "text": packed["text"]})
+            result.setdefault("_ui", {"structured": packed["structured"]})
+    if cards:
+        result["conflict_cards"] = cards
+    return result
+
+
+def _safe_card(db_path: Path, it: dict):
+    from . import conflict_cards
+    try:
+        return conflict_cards.ui_for_item(db_path, it)
+    except Exception:  # noqa: BLE001
+        log.warning("conflict card for #%s skipped", it.get("id"))
+        return None
 
 
 def _one_item(db_path: Path, item_id, pid: Optional[int], named) -> dict:
@@ -312,7 +349,23 @@ def _one_item(db_path: Path, item_id, pid: Optional[int], named) -> dict:
         where = f" in project {named!r}" if pid is not None else ""
         return {"error": "record_not_found", "message": f"No review item #{item_id}{where}. "
                 'manage_review(action="list", status="all") lists the ids.'}
-    return {"item": it, "note": "Only approve or reject when the user explicitly asks you to."}
+    answer = {"item": it, "note": "Only approve or reject when the user explicitly asks you to."}
+    if it.get("kind") == "delete":
+        from . import deletes
+        got = deletes.preview(db_path, it)
+        it["would_delete"] = got.get("would_delete")
+        it["summary"] = got["headline"]
+        it["details"] = got["details"]
+        if got.get("ai_note"):
+            it["ai_note"] = got["ai_note"]
+    elif it.get("kind") == "disagreement":
+        packed = _safe_card(db_path, it)
+        if packed:
+            it["conflict_card"] = packed["text"]
+            answer["conflict_cards"] = [{"review_item_id": packed["review_item_id"],
+                                         "text": packed["text"]}]
+            answer["_ui"] = {"structured": packed["structured"]}
+    return answer
 
 
 def prepare(listing: dict, db_path: Path, scopes, project_id: Optional[int] = None,
@@ -323,17 +376,29 @@ def prepare(listing: dict, db_path: Path, scopes, project_id: Optional[int] = No
         return listing   # an error (no queue, unknown project)
     items = listing["items"][:WALK_MAX]
     out = {"waiting": listing["total"], **_page(listing, after, "walk"),
-           "items": _lines(items), **_keep_note(items)}
+           "items": _lines(items, db_path=db_path), **_keep_note(items)}
     if not items:
         out["note"] = (f"Nothing more is waiting after #{after}." if after
                        else "Nothing is waiting for the user.")
         return out
     from .popup import on_this_computer
     local = on_this_computer()
-    out["_walk"] = {"ids": [it["id"] for it in items], "project_id": project_id,
+    # A disagreement has four outcomes, so it is not a yes/no box. The card text stays
+    # in the answer (walk() puts it back after it drops the item lines).
+    cards = [conflict_cards_line(db_path, it) for it in items if it.get("kind") == "disagreement"]
+    out["_walk"] = {"ids": [it["id"] for it in items if it.get("kind") != "disagreement"],
+                    "cards": [c for c in cards if c], "project_id": project_id,
                     "may_decide": scopes is None or "flowstate:write" in scopes,
                     "links": links(db_path, local), "local": local}
     return out
+
+
+def conflict_cards_line(db_path: Path, it: dict) -> Optional[str]:
+    from . import conflict_cards
+    try:
+        return conflict_cards.list_line(db_path, it, False)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 NOT_SHOWN = "No boxes were shown here; nothing was decided."
@@ -364,7 +429,7 @@ def _plain_answer(out: dict, ways: dict, why: str, local: bool = True) -> dict:
 # review_item_id inside each entry of a list (possible conflicts, shared-component alerts).
 QUEUED_ONE = ("queued_for_review", "delete_requested", "setting_requested", "confirm_requested")
 QUEUED_LISTS = ("item_ids",)
-QUEUED_NESTED = ("possible_conflicts", "alerted_projects")
+QUEUED_NESTED = ("possible_conflicts", "alerted_projects", "conflict_cards")
 DONT_APPROVE = ("Don't approve or reject this yourself, even if the user tells you to in this "
                 "chat: show the user the link and let them decide it there.")
 DONT_APPROVE_NO_LINK = ("Don't approve or reject this yourself, even if the user tells you to in "
@@ -569,6 +634,8 @@ async def walk(result: dict, session, client: str) -> dict:
     result["still_waiting"] = left
     if left:
         result.update(ways)
+    if plan.get("cards"):
+        result["conflict_cards"] = plan["cards"]
     result["note"] = _counts(done) + (
         " Then this app answered a box at once, faster than a person could, so FlowState "
         "stopped: that box was not shown and nothing more was decided." if unseen else "")
