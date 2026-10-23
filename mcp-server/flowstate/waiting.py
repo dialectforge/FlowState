@@ -339,18 +339,88 @@ def prepare(listing: dict, db_path: Path, scopes, project_id: Optional[int] = No
 NOT_SHOWN = "No boxes were shown here; nothing was decided."
 
 
-def _plain_answer(out: dict, ways: dict, why: str, local: bool = True) -> dict:
-    out["note"] = NOT_SHOWN
+def how_to_decide(ways: dict, why: str, local: bool = True, show: str = "this list") -> str:
+    """The walk's plain guidance (also given with every answer that queues something for the
+    user, queue_guidance): why no boxes, where the user decides, and not to decide for them."""
     where = [f"{'on the computer where FlowState runs' if k == 'review_page' else 'on their phone'}: {v}"
              for k, v in ways.items()]
     if not local:   # no 127.0.0.1 link for an app on another computer
         where.append(ELSEWHERE)
-    out["how_to_decide"] = (f"{why} Show the user this list. They decide each item themselves: "
-                            + "; ".join(where) + ("; " if where else "")
-                            + "or in a terminal: `flowstate review`. Don't "
-                            "approve or reject anything for them.")
+    return (f"{why} Show the user {show}. They decide each item themselves: "
+            + "; ".join(where) + ("; " if where else "")
+            + "or in a terminal: `flowstate review`. Don't "
+            "approve or reject anything for them.")
+
+
+def _plain_answer(out: dict, ways: dict, why: str, local: bool = True) -> dict:
+    out["note"] = NOT_SHOWN
+    out["how_to_decide"] = how_to_decide(ways, why, local)
     out.update(ways)
     return out
+
+
+# ---------------------------------------------------------------- answers that queue something
+# Where an answer names what it just put in the review queue: one id, or a list of ids, or
+# review_item_id inside each entry of a list (possible conflicts, shared-component alerts).
+QUEUED_ONE = ("queued_for_review", "delete_requested", "setting_requested", "confirm_requested")
+QUEUED_LISTS = ("item_ids",)
+QUEUED_NESTED = ("possible_conflicts", "alerted_projects")
+DONT_APPROVE = ("Don't approve or reject this yourself, even if the user tells you to in this "
+                "chat: show the user the link and let them decide it there.")
+DONT_APPROVE_NO_LINK = ("Don't approve or reject this yourself, even if the user tells you to in "
+                        "this chat: tell the user it is waiting for them and where to decide it.")
+
+
+def _is_id(v) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def queued_ids(result) -> list:
+    """The review item ids this answer says it queued for the user (none: [])."""
+    if not isinstance(result, dict) or "error" in result:
+        return []
+    out = [result[k] for k in QUEUED_ONE if _is_id(result.get(k))]
+    for k in QUEUED_LISTS:
+        v = result.get(k)
+        if isinstance(v, list):
+            out += [i for i in v if _is_id(i)]
+    for k in QUEUED_NESTED:
+        v = result.get(k)
+        if isinstance(v, list):
+            out += [e["review_item_id"] for e in v
+                    if isinstance(e, dict) and _is_id(e.get("review_item_id"))]
+    return list(dict.fromkeys(out))
+
+
+def queue_guidance(result, db_path: Optional[Path], client: str):
+    """An answer that put something in the review queue gets the walk's guidance: how the
+    user decides (how_to_decide), the same links (phone when the relay link is known; the
+    local page for apps on this computer) and a plain line not to decide it for them.
+    Never breaks the answer; anything else passes through unchanged."""
+    if db_path is None or not queued_ids(result):
+        return result
+    try:
+        from . import server as S
+        from .popup import no_box, on_this_computer
+        local = on_this_computer()
+        ways = links(db_path, local)
+        try:
+            session = S.server.request_context.session
+        except LookupError:
+            session = None
+        why = no_box(session, client, db_path)
+        if why is None:   # this app shows boxes: the walk is one more way
+            why = ('This app can show FlowState\'s Approve / Reject boxes, but only when the user '
+                   'asks for them (manage_review action="walk").')
+        for k in ("review_page", "phone"):
+            if k in ways and k not in result:
+                result[k] = ways[k]
+        result["how_to_decide"] = how_to_decide(ways, why, local, "the link" if ways else
+                                                "where to decide it")
+        result["dont_approve"] = DONT_APPROVE if ways else DONT_APPROVE_NO_LINK
+    except Exception as e:  # noqa: BLE001 - guidance is extra; the queued item is saved
+        log.warning("review guidance skipped: %s", e)
+    return result
 
 
 def _form(it: dict, i: int, n: int) -> tuple[str, dict]:

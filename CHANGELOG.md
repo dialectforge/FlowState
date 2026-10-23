@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Fixed: an answer that puts something in the review queue (log_work suggested or held by
+  review mode, manage_memory import / cleanup / delete, manage_projects delete with approvals
+  on, turning review off with approvals on, possible conflicts, shared-component alert todos,
+  "did you say this?" checks) now says how the user decides it, the same way
+  manage_review(action="walk") does: `how_to_decide`, the phone link (`phone`) when the relay
+  link is known, the local page (`review_page`) for apps on this computer, and `dont_approve`,
+  a plain line telling the AI not to approve it itself but to show the user the link. Before,
+  through the relay the answer had no link, so an AI offered to approve the item in the chat.
+  Approving and rejecting work as before.
+
 ## 2.4.1 - 2026-10-23
 
 - Fixed: installing with plain pip (`pip install mcp-server`, not `-e`, or from a built wheel)

@@ -369,8 +369,10 @@ def handle_call(name: str, args: dict, client: str = "unknown", meta: Optional[d
         if change else (None, None)
     if reply is not None:
         return reply
-    return saves.run(backend.db_path, _handle, name, args, client, meta, pending,
-                     _one_commit(name, args))
+    result = saves.run(backend.db_path, _handle, name, args, client, meta, pending,
+                       _one_commit(name, args))
+    # something now waits in the review queue: say how the user decides it (after the save)
+    return waiting.queue_guidance(result, backend.db_path, client)
 
 
 def _one_commit(name: str, args: dict) -> bool:
