@@ -714,6 +714,49 @@ def test_a_leftover_that_wont_stop_rolls_back(world):
     _rolled_back(w, up, head, branch, ["still running: 21"])
 
 
+
+def test_update_never_stops_itself_or_the_launcher_that_started_it(world):
+    """Found on a real Windows run (t43): `flowstate update` runs as the child of the .venv's
+    python.exe launcher; the leftover check took that launcher for a leftover server and
+    `taskkill /T` stopped the update itself, with the services already stopped."""
+    w = world
+    w.release("2.5.0")
+    py = w.install / ".venv" / "Scripts" / "python.exe"
+    me = os.getpid()
+    procs = [{"pid": 900, "ppid": 1, "exe": str(py), "cmd": f'"{py}" -m flowstate update --yes --user-said "go"'},
+             {"pid": me, "ppid": 900, "exe": r"C:\Python313\python.exe",
+              "cmd": f'"{py}" -m flowstate update --yes --user-said "go"'}]
+    up = make(w, processes=FakeProcesses(procs))
+    assert up.run(yes=True, user_said="update please") == 0, text(w)
+    assert up.processes.killed == []
+
+
+def test_leftover_children_and_dotted_launch_paths_are_found(world):
+    """start-flowstate-http.cmd starts `<folder>\\scripts\\windows\\..\\..\\.venv\\Scripts\\python.exe`;
+    that launcher's child is the base Python, whose own path doesn't name the .venv. Seen for
+    real: `schtasks /End` ends cmd.exe and leaves both running."""
+    w = world
+    w.release("2.5.0")
+    dotted = f'"{w.install}\\scripts\\windows\\..\\..\\.venv\\Scripts\\python.exe" -m flowstate --transport http --port 8766'
+    procs = [{"pid": 31, "ppid": 30, "exe": str(w.install / ".venv" / "Scripts" / "python.exe"), "cmd": dotted},
+             {"pid": 32, "ppid": 31, "exe": r"C:\Python313\python.exe", "cmd": dotted},
+             {"pid": 33, "ppid": 999, "exe": r"C:\Python313\python.exe", "cmd": dotted},
+             {"pid": 34, "ppid": 32, "exe": r"C:\Windows\System32\conhost.exe", "cmd": "conhost.exe 0x4"},
+             {"pid": 35, "ppid": 1, "exe": r"C:\Python313\python.exe", "cmd": "python other.py"}]
+    up = make(w, processes=FakeProcesses(procs))
+    assert up.run(yes=True, user_said="update please") == 0, text(w)
+    assert sorted(up.processes.killed) == [31, 32, 33, 34]
+
+
+def test_collapse_dots_and_ancestry():
+    assert SU._collapse_dots(r'"C:\FS\scripts\windows\..\..\.venv\Scripts\python.exe" -m flowstate') == \
+        r'"C:\FS\.venv\Scripts\python.exe" -m flowstate'
+    assert SU._collapse_dots("/home/u/FS/scripts/../.venv/bin/python") == "/home/u/FS/.venv/bin/python"
+    assert SU._collapse_dots(r"..\..\x") == r"..\..\x"
+    procs = [{"pid": 5, "ppid": 4}, {"pid": 4, "ppid": 1}, {"pid": 1, "ppid": 0}, {"pid": 7, "ppid": 4}]
+    assert SU._ancestry(procs, 5) == {5, 4, 1}
+
+
 # ---------------------------------------------------------------- service discovery
 def test_mentions_matches_only_this_folder():
     live, dev = Path(r"C:\FlowState\FlowState-2.4"), Path(r"C:\FlowState\FlowState-2.4-dev")

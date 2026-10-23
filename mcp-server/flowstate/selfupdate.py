@@ -213,23 +213,25 @@ class Services:
 
 
 class Processes:
-    """Running processes: [{"pid", "exe", "cmd"}]; kill(pid) stops one (and its children)."""
+    """Running processes: [{"pid", "ppid", "exe", "cmd"}]; kill(pid) stops one (and its children)."""
 
     def list(self) -> list:
         if os.name == "nt":
-            ps = ("Get-CimInstance Win32_Process | Select-Object ProcessId,ExecutablePath,CommandLine "
-                  "| ConvertTo-Json -Compress")
+            ps = ("Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,ExecutablePath,"
+                  "CommandLine | ConvertTo-Json -Compress")
             r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
                                capture_output=True, text=True, timeout=60)
             rows = json.loads(r.stdout or "[]") if r.returncode == 0 else []
-            return [{"pid": int(x["ProcessId"]), "exe": x.get("ExecutablePath") or "",
-                     "cmd": x.get("CommandLine") or ""} for x in (rows if isinstance(rows, list) else [rows])]
-        r = subprocess.run(["ps", "-eo", "pid=,args="], capture_output=True, text=True, timeout=60)
+            return [{"pid": int(x["ProcessId"]), "ppid": int(x.get("ParentProcessId") or 0),
+                     "exe": x.get("ExecutablePath") or "", "cmd": x.get("CommandLine") or ""}
+                    for x in (rows if isinstance(rows, list) else [rows])]
+        r = subprocess.run(["ps", "-eo", "pid=,ppid=,args="], capture_output=True, text=True, timeout=60)
         out = []
         for line in r.stdout.splitlines():
-            pid, _, cmd = line.strip().partition(" ")
-            if pid.isdigit():
-                out.append({"pid": int(pid), "exe": cmd.split(" ", 1)[0], "cmd": cmd})
+            parts = line.split(None, 2)
+            if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+                cmd = parts[2] if len(parts) == 3 else ""
+                out.append({"pid": int(parts[0]), "ppid": int(parts[1]), "exe": cmd.split(" ", 1)[0], "cmd": cmd})
         return out
 
     def kill(self, pid: int) -> None:
@@ -537,9 +539,20 @@ class Updater:
 
     # ------------------------------------------------------------ processes
     def _venv_procs(self) -> list:
-        v = self.venv
-        return [p for p in self.processes.list() if p["pid"] != os.getpid()
-                and (mentions(p.get("exe") or "", v) or mentions(p.get("cmd") or "", v))]
+        """Processes running from this folder's .venv, and their children (a Windows venv
+        python.exe is a launcher whose child, the base Python, may not name the .venv). Never
+        this command itself or the processes that started it: on Windows `flowstate update`
+        runs as the child of the .venv's own launcher, and stopping that would stop the update."""
+        v, procs = self.venv, self.processes.list()
+        mine = _ancestry(procs, os.getpid())
+        hits = {p["pid"] for p in procs if p["pid"] not in mine
+                and (mentions(p.get("exe") or "", v) or mentions(_collapse_dots(p.get("cmd") or ""), v))}
+        grew = True
+        while grew:                         # children of a hit are hits too
+            more = {p["pid"] for p in procs if p.get("ppid") in hits and p["pid"] not in hits | mine}
+            hits |= more
+            grew = bool(more)
+        return [p for p in procs if p["pid"] in hits]
 
     @staticmethod
     def _is_app(p: dict) -> bool:
@@ -916,6 +929,26 @@ class Updater:
             return 1
         self.say(f"Done. FlowState {to} is back. Quit and reopen your AI apps so they use it.")
         return 0
+
+
+def _ancestry(procs: list, pid: int) -> set:
+    """pid and the processes that started it (parent, grandparent, ...)."""
+    parent = {p["pid"]: p.get("ppid") for p in procs}
+    out = set()
+    while pid and pid not in out:
+        out.add(pid)
+        pid = parent.get(pid)
+    return out
+
+
+def _collapse_dots(text: str) -> str:
+    """`C:\\FS\\scripts\\windows\\..\\..\\.venv` -> `C:\\FS\\.venv` (start-flowstate-*.cmd starts the
+    .venv's python through such a path, so a process's command line may name it that way)."""
+    pat = re.compile(r"(?:(?<=[\\/])|(?<=^))(?!\.\.[\\/])[^\\/:\"'\s]+[\\/]\.\.(?:[\\/]|(?=[\s\"']|$))")
+    prev = None
+    while prev != text:
+        prev, text = text, pat.sub("", text)
+    return text
 
 
 def _last(text: str) -> str:
