@@ -7,15 +7,17 @@ use the same memory of your projects: todos, changes, decisions, problems and le
 Your AI reads a short brief when it starts work on a project and writes down what happens as it
 goes. The next chat (or the next app) picks up where the last one stopped.
 
-Everything lives in one SQLite file on your computer. Nothing is sent anywhere unless you turn
-on an optional feature that does so (an off-site backup to your own private GitHub repo, or remote
-access through your own Cloudflare Tunnel).
+Everything lives in one SQLite file on your computer. Your memory is not sent anywhere unless you
+turn on an optional feature that does so (an off-site backup to your own private GitHub repo,
+remote access through your own Cloudflare Tunnel, or the optional relay). FlowState itself makes
+one network call: once a day it asks GitHub whether a newer release is out. It sends nothing
+about you or your projects, and `flowstate update check off` turns it off (see "Upgrading").
 
 If FlowState saves you some re-explaining, a [star on GitHub](https://github.com/dialectforge/FlowState) helps others find it.
 
 ## Many AIs, one memory, at the same time
 
-Claude, ChatGPT, Cursor and Grok can all use FlowState at once, on your computer, across your network, or from your phone. When one AI logs a decision or a change, the others see it the next time they check. Hard rules and handoff notes reach every AI, and every change records which AI made it, so you always know who did what. Work across projects is linked too, so a change to something shared shows up in every project that uses it.
+Claude, ChatGPT, Cursor and Grok can all use FlowState at once, on your computer, across your network, or from your phone (through the optional relay or your own tunnel). When one AI logs a decision or a change, the others see it the next time they check. Hard rules and handoff notes reach every AI, and every change records which AI made it, so you always know who did what. Work across projects is linked too, so a change to something shared shows up in every project that uses it.
 
 ### Several agents at once
 
@@ -25,7 +27,8 @@ and quietly do the same work. So an agent claims a todo before it starts
 hands it off with a note, when it stops. Other agents see the claim in their brief
 (`#4 Fix login (claimed by cursor on mac-mini, expires in 9m)`), `next` skips it and lists it
 at the end, and a second claim is refused with the holder's name. Nothing is hidden or locked:
-a claim simply runs out if the agent goes away, and anyone (you included) can still update or
+a claim simply runs out if the agent goes away, and it is released when that app's session
+ends (quit, ended or idle; the same app reconnecting may take its claim back). Anyone (you included) can still update or
 finish a claimed todo; they just get a warning, and `manage_history(action="who")` shows it.
 
 A decision that reads like a current one (and doesn't say it replaces it) is still saved, but
@@ -80,7 +83,11 @@ for anything already set up). In order, it:
 6. with `--schedule-backups`, adds a nightly local backup to your OS scheduler (Windows Task
    Scheduler, macOS launchd, Linux systemd user timer or cron), at 02:30 unless you pass `--backup-time HH:MM`;
 7. with `--install-skill`, installs the FlowState skill (see below; `--no-skill` skips the question);
-8. with `--verify`, starts the server the way your app will and calls `start_here` to check it answers.
+8. puts a "FlowState review" shortcut on your desktop that opens the review page
+   (`flowstate review-page`, this computer only). It never replaces a file of that name it didn't make;
+9. with `--verify`, starts the server the way your app will and calls `start_here` to check it answers.
+
+At the end it tells you about the daily update check and how to turn it off.
 
 Useful flags: `--dry-run` (show what would change, change nothing), `--help`,
 `--clients auto|all|none|<list>` (`claude-desktop`, `cursor`, `windsurf`, `claude-code`,
@@ -106,8 +113,9 @@ python setup_flowstate.py --clients claude-desktop --schedule-backups --no-offsi
 `setup_flowstate.py` installs into `.venv` itself, so the `pip install` lines are only needed
 if you want the test tools or manage the venv yourself (then add `--skip-install`). A plain,
 non-editable `pip install mcp-server` (or of a built wheel) works too from 2.4.1 on; in 2.4.0 it
-left out the database schema, so every FlowState call failed. `flowstate update` needs the git
-clone set up by `setup_flowstate.py`. Config
+left out the database schema, so every FlowState call failed, and the failed start left an empty
+database file behind. 2.4.1 sets up such an empty file as a new database, so reinstalling is
+enough. `flowstate update` needs the git clone set up by `setup_flowstate.py`. Config
 snippets for every app, if you'd rather edit configs by hand, are in [AGENTS.md](AGENTS.md#manual-config-if-you-cant-run-the-script).
 
 ---
@@ -149,8 +157,8 @@ prompt `flowstate-start`.
   of saving a copy.
 - **Automatic sessions**: a session opens on the first call for a project (one per app window
   or connection) and closes after 2 hours idle (or when the app quits), with a short summary
-  marked `[auto-captured, needs review]`. A small housekeeping session (only reads, undo or
-  review decisions) isn't queued for review. FlowState keeps a lean record of each session's
+  marked `[auto-captured, needs review]`. A small housekeeping session (only reads, undo,
+  review decisions, a handoff pickup or todo claims) isn't queued for review. FlowState keeps a lean record of each session's
   reads and writes (record ids and hashes, never the text).
 
 **You stay in charge**
@@ -160,7 +168,8 @@ prompt `flowstate-start`.
   to decide it.
 - **Review mode** (yours to set): `off`, `auto_only` (default), chosen record types, or
   `everything`. Set it for the whole install or per project. The AI may change it only when you
-  ask in the chat, and every change is logged with your words.
+  ask in the chat, and every change is logged with your words. With approvals on, turning review
+  off also waits for your own click or key.
 - **Hard rules**: "never do this" rules per project, always shown in full at the top of the brief.
 - **Handoff notes**: an AI that has to stop mid-task leaves "where I was / next step"; the next
   AI sees it first until it picks it up.
@@ -172,11 +181,14 @@ prompt `flowstate-start`.
   AI deletes a project, a component or a record, FlowState first takes a safety copy and keeps
   every removed row (children and links too) in the edit history, so undo brings all of it
   back exactly. The answer and the brief say in one line what went and how to undo it.
-- **Approvals, if you want them** (`flowstate approvals on`): then an AI's delete, and turning
-  review off, wait for you, and no app can pass your OK along. You decide in the app's own
-  popup (Claude Code, Cursor, VS Code), on your phone through flowstatemcp.com (with the relay;
-  your phone talks to your own FlowState, and the site never sees the item), or with
-  `flowstate approve <id>` in your terminal. Every decision is logged with how it was made.
+- **Approvals, if you want them** (`flowstate approvals on`; off by default, also after an
+  upgrade): then an AI's delete, and turning review off, wait for you, and no app can pass your
+  OK along. You decide in the app's own popup (Claude Code, Cursor, VS Code, when they connect
+  directly and not through the relay or the internet), on your phone (only if you use the
+  optional FlowStateMCP hosted relay: you sign in at flowstatemcp.com, your phone talks to your
+  own FlowState, and the site never sees the item), or with `flowstate approve <id>` in your
+  terminal. Every decision is logged with how it was made. With approvals off, an AI can delete
+  without asking you; the safety copy and undo are what protect you then.
 - **Superseded decisions**: a new decision can name the one it replaces, so only the current
   one shows in the brief.
 - **Source and last-verified flags**: records can say where they came from (`user_stated`,
@@ -184,7 +196,9 @@ prompt `flowstate-start`.
   model if the app gave it, or "user" when you confirmed it). Facts like paths, ports and config
   not checked for 60 days are listed for re-checking.
 - **Only you turn a guess into "you said so"**: an app may tag what it writes as
-  `user_stated` when it quotes you, and the brief then says `(user, via <app>)`. Changing an
+  `user_stated` when it quotes you, and the brief then says `(user, via <app>)`: that is the
+  app's claim. Once you confirm it yourself it says `(user, confirmed by the user)`, and
+  `search` and `manage_history` show who set the tag and when. Changing an
   existing record to `user_stated` is yours alone, approvals on or off: the app's request
   leaves the tag as it is and queues one review item, which you confirm on the review page or
   with `flowstate approve <id>` (with approvals on, also in the popup or on your phone). No app
@@ -227,7 +241,8 @@ prompt `flowstate-start`.
 - **Clean-up suggestions**: duplicate and stale todos, and records filed under the wrong
   project, sent to the review queue as one plain question each (`Move learning "..." from A to
   B? It mentions B.`). It only suggests a move when the record names the other project or one
-  of its parts, never a guess it isn't sure of. Nothing moves until you approve.
+  of its parts, never a guess it isn't sure of. Unsure move ideas left over from older versions
+  are withdrawn (no record moves). Nothing moves until you approve.
 
 **Your controls (command line and browser)**
 - **Local review page**: a small page in your browser, on this computer only: review queue,
@@ -462,7 +477,8 @@ run `flowstate relay enroll --code <code>`. The relay is in a 10-spot beta. Step
 **Local FlowState stays free and MIT-licensed. It needs no account.** Local FlowState makes one
 network call: once a day it asks GitHub whether there is a newer release. It sends nothing about
 you or your projects (only what any web request reveals: your IP address). Turn it off with
-`flowstate update check off`. The relay is off by default. Nothing in it runs until you enroll.
+`flowstate update check off` (or `FLOWSTATE_UPDATE_CHECK=0`); off means no request at all. The
+relay is off by default. Nothing in it runs until you enroll.
 
 ### How the relay works
 
@@ -500,8 +516,8 @@ protocol is in [docs/relay-protocol.md](docs/relay-protocol.md).
 
 ## Honest limits
 
-- **Search by meaning needs a model download.** FlowState never downloads a model or calls a
-  cloud API. You install `sentence-transformers` into the venv, put a model (default
+- **Search by meaning needs a model download.** For this, FlowState never downloads a model or
+  calls a cloud API. You install `sentence-transformers` into the venv, put a model (default
   `all-MiniLM-L6-v2`) on disk, set `FLOWSTATE_MEANING_MODEL`, and run `flowstate meaning index`.
   Without it, search (also with `answer=true`) matches words only, so a reworded question can miss.
 - **Model names are recorded only when the app supplies them** (the tool's `model` argument,
@@ -523,10 +539,22 @@ protocol is in [docs/relay-protocol.md](docs/relay-protocol.md).
   FlowState; an AI that controls your own logged-in browser or your terminal window could still
   get through, and the popup is only as trustworthy as the app that shows it. Hard rules are
   shown first in every brief; FlowState can't stop an AI from doing something outside FlowState.
-- **Phone approvals trust flowstatemcp.com's sign-in.** This release pins the site's two public
-  keys (`fsa-1`, `fsa-2`). The site vouches for who signed in but can't read anything; a leaked
-  site key still can't approve without the one-use code on your computer and your tap on your
-  own FlowState's page.
+- **Phone approvals and the phone list need the relay and trust flowstatemcp.com's sign-in.**
+  They only exist if you use the optional FlowStateMCP hosted relay. This release pins the
+  site's two public keys (`fsa-1`, `fsa-2`). The site vouches for who signed in but never sees
+  the items. If the site's signing key ever leaked, someone could open your waiting list (with
+  its Approve and Reject buttons) on a reachable computer; approving a single item from its own
+  link would still need that item's one-use code from your computer. `flowstate approvals phone
+  off` turns the phone links off.
+- **The daily update check is a network call.** It asks api.github.com, with no login, and sends
+  nothing about you or your projects, but GitHub sees your IP address. `flowstate update check
+  off` or `FLOWSTATE_UPDATE_CHECK=0` stops it. Nothing updates on its own: `flowstate update`
+  runs only when you start it (or your AI does, after you asked).
+- **`flowstate update` is careful, so it often says no.** It needs a plain clone with no local
+  changes and a real `.venv`, and `ssh-keygen` to check the release signature. On Windows a
+  release that changes the Python packages is refused; update that one by hand.
+- **Long details are refused, not cut.** `log_work` details over 10,000 characters get a clear
+  `too_long` answer and nothing is saved.
 - **The local review page has no password.** It answers only on 127.0.0.1, checks the Host and
   Origin headers and needs the page's CSRF token for every change, so websites can't use it; a
   program running on your computer can still open it (see "Where to see what's waiting for you").
@@ -571,6 +599,8 @@ FlowState/
 │       ├── brief.py, autosession.py, guard.py, review.py, review_mode.py, links.py, ...
 │       ├── backup.py, offsite.py, scheduler.py, secrets_scan.py, secret_store.py, remote_auth.py
 │       ├── app_keys.py, identity.py, who.py # per-app keys, who/model/machine, "Who did what"
+│       ├── approvals.py    # opt-in approvals (off by default)
+│       ├── updates.py, selfupdate.py # daily update check, `flowstate update`
 │       ├── cli.py, cli_more.py # `flowstate <command>`
 │       ├── migrations/     # numbered, additive database migrations
 │       ├── schema.sql      # the base schema the code reads (same as database/schema.sql)
@@ -604,7 +634,7 @@ plan, then `<venv python> -m flowstate update --yes --user-said "<your words>"`.
    with no commits of your own, with one worktree and a real `.venv` folder;
 2. downloads only the newest release's tag and checks that it is signed with a FlowState release
    key listed in the copy you already have (`mcp-server/flowstate/release_signers`). An unsigned
-   tag, an unknown key or any check error: nothing is changed;
+   tag, an unknown key, a missing `ssh-keygen` or any check error: nothing is changed;
 3. backs up your database (labelled `pre-update`, kept at least 7 days);
 4. stops this folder's FlowState services (scheduled tasks, LaunchAgents or systemd user units
    that run from this folder; your AI apps are listed, not stopped), moves the code to the new
@@ -626,7 +656,8 @@ FlowState's `config.json` (or a `.flowstate-no-self-update` file in the folder).
 `python setup_flowstate.py --clients <your apps> --verify` with the same options as when you
 set it up, then quit and reopen your AI apps. 2.4.0, the first release that has
 `flowstate update`, has to be installed this way; if you don't have 2.4.0 yet, install the
-newest release (2.4.1) the same way. (If your folder is at a release tag instead
+newest release (2.4.1) the same way. From 2.4.0 to 2.4.1 `flowstate update` works, on Windows
+too (2.4.1 needs no new `.venv`). (If your folder is at a release tag instead
 of `main`, `git pull` says you are not on a branch: run `git fetch --tags` and
 `git checkout v2.4.1` instead.)
 
