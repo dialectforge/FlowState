@@ -855,3 +855,21 @@ def test_brief_says_run_flowstate_update_now_and_restart_after(tmp_path, monkeyp
 def test_pre_update_is_a_safety_label():
     assert "pre-update" in B.SAFETY_LABELS
     assert B.is_safety_copy(Path("flowstate-20261022-120000-pre-update.db"))
+
+
+RELEASE_KEY_FINGERPRINT = "SHA256:UJVoMdG58pnUO86XMZLuV2Yv21S+4WW24U4GlP2mrIQ"
+
+
+def test_shipped_release_signers_lists_the_release_key(tmp_path):
+    """The release_signers that ships lists exactly the FlowState release key, in the
+    allowed-signers form `git verify-tag` reads (principal, namespaces="git", public key)."""
+    text = (Path(SU.__file__).parent / "release_signers").read_text(encoding="utf-8")
+    assert "PRIVATE KEY" not in text
+    lines = [l.strip() for l in text.splitlines() if l.strip() and not l.strip().startswith("#")]
+    assert len(lines) == 1
+    principal, opts, kind, blob, *_ = lines[0].split()
+    assert (principal, opts, kind) == ("flowstate-release", 'namespaces="git"', "ssh-ed25519")
+    pub = tmp_path / "release.pub"
+    pub.write_text(f"{kind} {blob}\n", encoding="utf-8")
+    r = subprocess.run([SSH_KEYGEN, "-l", "-f", str(pub)], capture_output=True, text=True)
+    assert r.returncode == 0 and RELEASE_KEY_FINGERPRINT in r.stdout

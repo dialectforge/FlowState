@@ -10,3 +10,5 @@
 # docs/RELEASING.md.
 #
 # A new key must arrive in a release signed by a key that is already listed here.
+
+flowstate-release namespaces="git" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINf+AAXZ7rFWujAfR8ZbwJt4qFHFDPBndgHn/p+S7HD6 DialectForge FlowState release
