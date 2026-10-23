@@ -1,7 +1,10 @@
 # Changelog
 
-## Unreleased
+## 2.4.3 - 2026-10-23
 
+- No new dependencies. One additive database migration (023: three new tables for
+  disagreement cards; a backup is taken first and existing rows are not changed).
+  `flowstate update` from 2.4.0, 2.4.1 or 2.4.2 needs no new `.venv`.
 - Disagreement cards. When two entries disagree, FlowState queues a review item (kind
   `disagreement`) the user settles by keeping the older entry, the newer one, or both, or by
   dismissing the card. The loser is marked superseded, not deleted. An agent flags a pair with
@@ -24,6 +27,9 @@
   type, name, project and key fields, and for a project or component the count and the named
   child records. That list is read from the database when the page or the tool reply is built.
   An agent-written sentence is shown only as a secondary line, "AI's note".
+- Tests: tool calls in the test suite get a 120-second time budget
+  (`FLOWSTATE_CALL_TIMEOUT`), so slow CI runners no longer fail with `flowstate_timeout`.
+  Nothing changes for users.
 
 ## 2.4.2 - 2026-10-23
 
