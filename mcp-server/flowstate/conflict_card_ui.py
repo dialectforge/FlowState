@@ -55,7 +55,8 @@ button:disabled{opacity:.5;cursor:default}
 <script>
 (function () {
   "use strict";
-  var seq = 0;
+  var INIT_ID = 1;
+  var seq = INIT_ID;   // tool calls use 2, 3, ...: id 1 is ui/initialize's answer
   var state = null;
   var project = "";
 
@@ -138,9 +139,10 @@ button:disabled{opacity:.5;cursor:default}
     if (payload.structuredContent) { render(payload.structuredContent); }
   }
   window.addEventListener("message", function (ev) {
+    if (ev.source !== window.parent) { return; }   // only the host talks to the card
     var msg = ev.data;
     if (!msg || msg.jsonrpc !== "2.0") { return; }
-    if (msg.id === 1 && msg.result) {
+    if (msg.id === INIT_ID && msg.result) {
       send("ui/notifications/initialized");
       return;
     }
@@ -156,7 +158,7 @@ button:disabled{opacity:.5;cursor:default}
     protocolVersion: "2026-01-26",
     appInfo: {name: "flowstate-conflict-card", version: "1.0.0"},
     appCapabilities: {availableDisplayModes: ["inline"]}
-  }, 1);
+  }, INIT_ID);
 })();
 </script>
 </body>

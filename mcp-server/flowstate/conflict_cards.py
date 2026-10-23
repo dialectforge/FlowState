@@ -5,7 +5,8 @@ saved on the same component as a similar current decision opens a card too (the 
 pairs the possible-conflict check already trusts; nothing fuzzier). The user keeps the
 older, the newer, or both, or dismisses the card. The loser is marked superseded, not
 deleted. Chat approvals still gate the model-visible review tools. The in-chat card's
-buttons call resolve_conflict_card, which is app-only.
+buttons call resolve_conflict_card, which is app-only, refused for clients without MCP Apps,
+and phone only through the relay unless chat approvals are on.
 
 Card taps are not cryptographically proven to be a person. The tool is hidden from the
 model's list and refuses chat-text fields; a host that lets the model call it anyway
@@ -516,7 +517,9 @@ def decision_path(client: str) -> str:
 
 def resolve_card(db_path: Path, args: dict, client: str) -> dict:
     """The in-chat card's button. Not a chat sentence: user_request, message, text and reason
-    are refused. Chat approvals do not apply; the path is recorded as card."""
+    are refused, and so is a client that can't show MCP Apps (no card there to tap). Through
+    the relay with chat approvals off (the default) it is phone only, like manage_review.
+    Otherwise the user's own words aren't needed; the path is recorded as card."""
     for key in ("user_request", "message", "text", "reason"):
         if args.get(key) not in (None, ""):
             return {"error": "not_a_card_tap", "message": "A disagreement card is resolved by "
@@ -526,6 +529,13 @@ def resolve_card(db_path: Path, args: dict, client: str) -> dict:
         return bad
     if args.get("item_id") is None:
         return {"error": "item_id_required", "message": "Name the review item (item_id)."}
+    if not client_has_ui():   # no MCP Apps host, no card: the call can only be the model's
+        return {"error": "not_a_card_tap", "message": "This app can't show the disagreement "
+                "card. The user decides it on the review page or their phone."}
+    from . import waiting
+    no = waiting.phone_only(db_path, args["item_id"])   # relay: the same phone-only rule
+    if no:
+        return no
     item = review.get_item(db_path, int(args["item_id"]))
     if not item or item.get("kind") != "disagreement":
         return {"error": "record_not_found", "message": "No disagreement card with that id."}

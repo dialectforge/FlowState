@@ -308,8 +308,9 @@ def test_app_tool_is_hidden_unless_the_host_advertises_ui(backend, monkeypatch):
     assert "model" not in ui["visibility"]
 
 
-def test_card_tap_resolves_and_refuses_chat_text(backend, seeded_db):
+def test_card_tap_resolves_and_refuses_chat_text(backend, seeded_db, monkeypatch):
     S = backend
+    monkeypatch.setattr(conflict_cards, "client_has_ui", lambda: True)
     a = decide(S, "Use JWT tokens for API auth", app="Claude")["record"]["id"]
     b = decide(S, "Use session cookies for API auth", app="Cursor")["record"]["id"]
     item = ok(call(S, "manage_links", {
@@ -328,6 +329,33 @@ def test_card_tap_resolves_and_refuses_chat_text(backend, seeded_db):
     assert rows(seeded_db, "SELECT path, decision FROM approval_log WHERE item_id = ?", item) == \
         [("card", "kept_a")]
     assert rows(seeded_db, "SELECT status FROM review_items WHERE id = ?", item)[0][0] == "approved"
+
+
+def test_card_tap_needs_an_mcp_apps_client_and_is_phone_only_through_the_relay(
+        backend, seeded_db, relay, monkeypatch):
+    S = backend
+    a = decide(S, "Use JWT tokens for API auth", app="Claude")["record"]["id"]
+    b = decide(S, "Use session cookies for API auth", app="Cursor")["record"]["id"]
+    item = ok(call(S, "manage_links", {
+        "action": "flag_conflict", "project": "Alpha", "topic": "API sessions",
+        "item_id": a, "target_id": b}))["flagged"]
+    tap = {"item_id": item, "keep": "a", "project": "Alpha"}
+    _r, body = call(S, "resolve_conflict_card", tap)   # no MCP Apps: no card to tap
+    assert body["error"] == "not_a_card_tap"
+    monkeypatch.setattr(conflict_cards, "client_has_ui", lambda: True)
+    _r, body = call(S, "resolve_conflict_card", tap)   # relay, chat approvals off
+    assert body["error"] == "phone_only"
+    assert f"https://flowstatemcp.com/approve/testbox/{item}?n=" in json.dumps(body)
+    assert rows(seeded_db, "SELECT status FROM review_items WHERE id = ?", item)[0][0] == "pending"
+    approvals.set_relay_chat(seeded_db, True)
+    assert ok(call(S, "resolve_conflict_card", tap))["resolved"] == item
+
+
+def test_card_tool_calls_do_not_reuse_the_initialize_id():
+    """The answer to id 1 is taken as ui/initialize's: a tap sent as id 1 was never shown."""
+    assert "var seq = INIT_ID;" in CARD_HTML and "++seq" in CARD_HTML
+    assert "}, INIT_ID);" in CARD_HTML
+    assert "ev.source !== window.parent" in CARD_HTML
 
 
 def test_card_html_is_self_contained_and_escaped_on_the_review_page(backend, seeded_db):

@@ -14,7 +14,8 @@
   one) with who wrote each, when, and the evidence. The tool reply includes that same card as
   plain text, plus the review link. Hosts that support MCP Apps (spec 2026-01-26) also get an
   in-chat card (`ui://flowstate/conflict-card.html`); its buttons call `resolve_conflict_card`,
-  which is hidden from the model (`visibility: ["app"]`). Approving through any model-visible
+  which is hidden from the model (`visibility: ["app"]`), refused for apps that don't support
+  MCP Apps, and phone only through the relay unless `flowstate relay chat-approvals on`. Approving through any model-visible
   tool still follows chat approvals (off by default: refused, with the review link). Every
   resolution is audited with its path (`card`, `review page`, `chat`, or `automatic` when a
   later `replaces=` or a dismissed possible-conflict closes the card). Card taps are not
