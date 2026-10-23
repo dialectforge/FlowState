@@ -68,8 +68,10 @@ honest limits and docs/APPROVALS.md section 3 now say what `approvals.py` does: 
 Open (need John or a spare machine; none can be closed from a test):
 - **No release signing key yet.** `mcp-server/flowstate/release_signers` ships empty, so every
   `flowstate update` is refused ("no release signing key is set up yet"). John: make the key,
-  list it, add it to GitHub as a signing key, turn on immutable releases, sign the 2.5.0 tag
-  (`docs/RELEASING.md`). 2.5.0 itself is installed by hand by everyone (trust on first use).
+  list it, add it to GitHub as a signing key, turn on immutable releases, sign the 2.4.0 tag
+  (`docs/RELEASING.md`). 2.4.0 itself is installed by hand by everyone (trust on first use), so
+  its `release_signers` must list the key before v2.4.0 is tagged, or no 2.4.0 install can use
+  `flowstate update` until another release is installed by hand.
 - **Real service stop/start never ran.** `Services` (Get-ScheduledTask + `schtasks /End` /
   `/Run`, `launchctl bootout` / `bootstrap`, `systemctl --user stop` / `start`) and `Processes`
   (Get-CimInstance / `ps`, `taskkill /T /F`) are only exercised with fakes. To check on a spare
@@ -84,7 +86,7 @@ Open (need John or a spare machine; none can be closed from a test):
   with the base Python).
 - **Real dependency-change path never ran.** A fresh `.venv` with real pip (`Pip`), and Windows
   refusing to rename a `.venv` in use, are covered by fakes only.
-- **Developer-install opt-out.** When 2.5 lands, add `"self_update": false` to the host PC's FlowState
+- **Developer-install opt-out.** When 2.4.0 lands, add `"self_update": false` to the host PC's FlowState
   `config.json` (belt and braces; the updater already refuses its layout four times over).
 - **A disabled public listener task** on the host PC still points at an old
   install folder (seen in task 40; not touched).

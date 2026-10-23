@@ -1,4 +1,4 @@
-"""`flowstate update` (2.5.0): move this install to the newest signed release, only when asked.
+"""`flowstate update` (2.4.0): move this install to the newest signed release, only when asked.
 
     flowstate update --dry-run                      check everything, change nothing, show the plan
     flowstate update                                do it; asks for "y" in your own terminal

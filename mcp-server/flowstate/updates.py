@@ -1,4 +1,4 @@
-"""The quiet daily update check (2.4.1). Standard library only.
+"""The quiet daily update check (2.4.0). Standard library only.
 
 Once a day, lazily from start_here, ONE background thread asks GitHub for the newest FlowState
 release and writes the answer to `update.json` in the FlowState data folder. The brief then

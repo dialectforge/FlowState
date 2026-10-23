@@ -1,8 +1,49 @@
 # Changelog
 
-## 2.5.0 - unreleased
+## 2.4.0 - unreleased
 
-### Added
+### In short
+- More reliable and easier to trust; no new tools and no new required arguments. Out of the
+  box FlowState still asks you nothing: an agent's delete goes through at once, after a safety
+  copy, and undo brings all of it back. Opt in with `flowstate approvals on` and only you can
+  approve an agent's deletes or turn review off: in the app's own popup, on your phone, or in
+  your terminal.
+- Writes say what they saved, and a write that timed out is no longer a mystery (or a
+  duplicate when the agent tries again).
+- See and decide what's waiting for you without a terminal: in the chat, from a link to the
+  review page on your computer or the "FlowState review" shortcut on your desktop, (with the
+  relay) on your phone, or (with your own tunnel) on a passphrase page at
+  `https://<tunnel>/review/tunnel`. Nothing pops up unless you ask.
+- Fewer review items: a session that saved nothing new (only reads, undo or review
+  decisions) isn't queued, and the summaries that are say plainly what was saved.
+- Four bugs fixed: timed-out writes, pre-restore backups pruned the same day, two windows of
+  one app sharing a session, and undo that couldn't take back a new record or refused a
+  whole change over one row. Then 14 more found by an end-to-end mock-project test (below).
+- The first release that can update itself. A quiet daily check says when a newer release is
+  out, and `flowstate update` (only when you ask) installs a signed release and rolls back on
+  its own if anything fails. 2.4.0 itself is installed by hand by everyone (`git pull`, then
+  `setup_flowstate.py --verify`); later releases can use `flowstate update`.
+
+### Update check
+- **A quiet daily update check.** Once a day, the first `start_here` starts one background
+  check that asks GitHub for the newest FlowState release (`GET
+  api.github.com/repos/dialectforge/FlowState/releases/latest`, 5 s timeout, no login, no
+  `Authorization` header, `User-Agent: FlowState-update-check` without a version). The answer
+  is saved in `update.json` in the FlowState data folder; the brief only reads that file, so it
+  never waits for the network. When a newer release is out, one line goes on top of the brief:
+  `FlowState 2.4.1 is out (this computer has 2.4.0). Tell the user once; ...`. Offline, a
+  `403` / `429` or an odd answer is stored as the last error and tried again after 6 hours.
+  Only exact `vX.Y.Z` tags of published, non-pre-release releases of this repository count.
+- `flowstate update check` (show the last result), `flowstate update check on|off|now`.
+- Local FlowState makes one network call: once a day it asks GitHub whether there is a newer
+  release. It sends nothing about you or your projects (only what any web request reveals:
+  your IP address). Turn it off with `flowstate update check off`, or with the environment
+  `FLOWSTATE_UPDATE_CHECK=0` (CI, air-gapped machines). Off means no request at all.
+  The README, AGENTS.md, llms.txt, the skill and setup's closing output say so.
+- Tests: the check is off in every test run and in the e2e harness, and the test guard refuses
+  any lookup of `api.github.com`.
+
+### `flowstate update`
 - **`flowstate update`: update to the newest release when you ask, and roll back on its own if
   anything fails.** `flowstate update --dry-run` checks everything and shows the plan without
   changing anything; `flowstate update` asks you to type `y` in your own terminal; an AI app runs
@@ -29,55 +70,10 @@
   changes (the command runs from the `.venv` it would have to replace); update that one by hand.
 - An app still running the old code after an update says in its brief: `FlowState was updated
   to X; this app still runs Y. Ask the user to restart it.`
-
-### Changed
-- The update-check line now says "run flowstate update --dry-run" when the installed copy has
-  that command and the computer isn't opted out; otherwise it still gives the manual steps.
+- The update-check line says "run flowstate update --dry-run" when the installed copy has
+  that command and the computer isn't opted out; otherwise it gives the manual steps.
 - README "Upgrading", AGENTS.md, the skill and the server instructions: update only when the
   user asks; dry run first.
-
-## 2.4.1 - unreleased
-
-### Added
-- **A quiet daily update check.** Once a day, the first `start_here` starts one background
-  check that asks GitHub for the newest FlowState release (`GET
-  api.github.com/repos/dialectforge/FlowState/releases/latest`, 5 s timeout, no login, no
-  `Authorization` header, `User-Agent: FlowState-update-check` without a version). The answer
-  is saved in `update.json` in the FlowState data folder; the brief only reads that file, so it
-  never waits for the network. When a newer release is out, one line goes on top of the brief:
-  `FlowState 2.5.0 is out (this computer has 2.4.1). Tell the user once; ...`. Offline, a
-  `403` / `429` or an odd answer is stored as the last error and tried again after 6 hours.
-  Only exact `vX.Y.Z` tags of published, non-pre-release releases of this repository count.
-- `flowstate update check` (show the last result), `flowstate update check on|off|now`.
-
-### Changed
-- Local FlowState makes one network call: once a day it asks GitHub whether there is a newer
-  release. It sends nothing about you or your projects (only what any web request reveals:
-  your IP address). Turn it off with `flowstate update check off`, or with the environment
-  `FLOWSTATE_UPDATE_CHECK=0` (CI, air-gapped machines). Off means no request at all.
-  The README, AGENTS.md, llms.txt, the skill and setup's closing output say so.
-- Tests: the check is off in every test run and in the e2e harness, and the test guard refuses
-  any lookup of `api.github.com`.
-
-## 2.4.0 - 2026-10-21
-
-### In short
-- More reliable and easier to trust; no new tools and no new required arguments. Out of the
-  box FlowState still asks you nothing: an agent's delete goes through at once, after a safety
-  copy, and undo brings all of it back. Opt in with `flowstate approvals on` and only you can
-  approve an agent's deletes or turn review off: in the app's own popup, on your phone, or in
-  your terminal.
-- Writes say what they saved, and a write that timed out is no longer a mystery (or a
-  duplicate when the agent tries again).
-- See and decide what's waiting for you without a terminal: in the chat, from a link to the
-  review page on your computer or the "FlowState review" shortcut on your desktop, (with the
-  relay) on your phone, or (with your own tunnel) on a passphrase page at
-  `https://<tunnel>/review/tunnel`. Nothing pops up unless you ask.
-- Fewer review items: a session that saved nothing new (only reads, undo or review
-  decisions) isn't queued, and the summaries that are say plainly what was saved.
-- Four bugs fixed: timed-out writes, pre-restore backups pruned the same day, two windows of
-  one app sharing a session, and undo that couldn't take back a new record or refused a
-  whole change over one row. Then 14 more found by an end-to-end mock-project test (below).
 
 ### Fixed
 - **Timed-out writes.** A write that hit the call timeout usually still saved a moment later,

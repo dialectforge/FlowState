@@ -1,4 +1,4 @@
-"""`flowstate update` (selfupdate.py, 2.5.0). Every test builds throwaway git repos in TEMP: a
+"""`flowstate update` (selfupdate.py, 2.4.0). Every test builds throwaway git repos in TEMP: a
 bare repo plays `origin`, a clone plays the install, and a throwaway ed25519 key made with
 ssh-keygen in TEMP signs the test tags. Real git and real ssh-keygen; fakes for the services,
 processes, pip, the health checks, migrations and GitHub's answer. Nothing here touches a real

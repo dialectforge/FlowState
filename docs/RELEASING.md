@@ -1,6 +1,6 @@
 # Releasing FlowState (signed tags)
 
-`flowstate update` (2.5.0 and later) installs a release only if its git tag is **signed with an SSH
+`flowstate update` (2.4.0 and later) installs a release only if its git tag is **signed with an SSH
 key listed in `mcp-server/flowstate/release_signers` of the copy the user already has**. It reads
 that list before it changes anything, so a tag signed by anyone else (or not signed) is refused.
 Until a key is listed there, every `flowstate update` is refused with "no release signing key is
@@ -10,7 +10,7 @@ by you.
 
 ## Two rules to keep in mind
 
-1. **Trust on first use.** The first release that contains `flowstate update` (2.5.0) has to be
+1. **Trust on first use.** The first release that contains `flowstate update` (2.4.0) has to be
    installed by hand by everyone (`git pull`, then `setup_flowstate.py --verify`). The
    `release_signers` list in that release is the one later updates trust.
 2. **A release must be signed by a key listed in the PREVIOUS release** (the one installed on

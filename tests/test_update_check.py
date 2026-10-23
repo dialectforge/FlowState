@@ -1,4 +1,4 @@
-"""The quiet daily update check (updates.py, 2.4.1): the request, the cache, the timing, the
+"""The quiet daily update check (updates.py, 2.4.0): the request, the cache, the timing, the
 off switches and the one brief line. A fake fetcher stands in for GitHub everywhere; the
 test guard (guard_site) refuses any lookup of api.github.com, and one test proves it."""
 

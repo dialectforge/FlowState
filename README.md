@@ -587,7 +587,7 @@ Linux `~/.local/share/flowstate/flowstate.db`. More settings are listed in [AGEN
 FlowState checks once a day whether a newer release is out and, if so, puts one line on top of
 the brief; your AI tells you once. Nothing updates on its own.
 
-**From 2.5 on: `flowstate update`.** Ask your AI to "update FlowState". It runs
+**From 2.4.0 on: `flowstate update`.** Ask your AI to "update FlowState". It runs
 `<venv python> -m flowstate update --dry-run` in a terminal on this computer and shows you the
 plan, then `<venv python> -m flowstate update --yes --user-said "<your words>"`. Or run
 `<venv python> -m flowstate update` yourself: it asks you to type `y` in your terminal. It:
@@ -615,10 +615,10 @@ A developer setup (your own branch or commits, extra worktrees, a linked `.venv`
 update it by hand. To turn `flowstate update` off on a computer, put `"self_update": false` in
 FlowState's `config.json` (or a `.flowstate-no-self-update` file in the folder).
 
-**By hand (and for 2.4.x).** In the FlowState folder run `git pull`, then
+**By hand (and to install 2.4.0).** In the FlowState folder run `git pull`, then
 `python setup_flowstate.py --clients <your apps> --verify` with the same options as when you
-set it up, then quit and reopen your AI apps. The first release that has `flowstate update`
-has to be installed this way.
+set it up, then quit and reopen your AI apps. 2.4.0, the first release that has
+`flowstate update`, has to be installed this way.
 
 ### From v1.1
 
