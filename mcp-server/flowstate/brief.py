@@ -179,6 +179,8 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
         linked = links.brief_lines(conn, pid) if prof["linked"] else []
         alerts = links.alert_lines(conn, pid)
         conflict_line = conflicts.brief_line(conn, pid)
+        from . import conflict_cards
+        card_line = conflict_cards.brief_line(conn, pid)
         mode_line = review_mode.brief_line(db_path, pid) if review_mode.available(conn) else None
         from .deletes import recent_line
         deleted_line = recent_line(conn, pid, name)
@@ -256,6 +258,8 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
         b.add(line)
     if conflict_line:
         b.add(conflict_line)
+    if card_line:
+        b.add(card_line)
     if last:
         b.add(f"Last session ({(last[0]['ended_at'] or '')[:10]}): {_one_line(last[0]['summary'], 280)}")
     if stale_line:

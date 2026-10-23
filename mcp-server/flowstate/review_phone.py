@@ -74,7 +74,15 @@ only confirmed it's you; it never sees what's in it.</p>
 
 EXTRA_CSS = """.card{border-top:1px solid var(--line);padding:18px 0 6px}
 .card .eyebrow{margin-top:0}.card .actions{margin-top:14px}
-.done{color:var(--accent);font-size:15px}"""
+.done{color:var(--accent);font-size:15px}
+.sides{display:flex;flex-direction:column;gap:10px}
+.side{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:#fff}
+.mark{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin:0}
+.who,.ev{color:var(--muted);font-size:14px;margin:4px 0}
+.claim{margin:6px 0;overflow-wrap:anywhere}
+.actions.stack{flex-direction:column}
+.actions.stack .btn{min-height:44px;width:100%}
+.ainote{color:var(--muted)}"""
 
 JS = r"""(function () {
   "use strict";
@@ -111,6 +119,42 @@ JS = r"""(function () {
     items.forEach(function (it) {
       var card = el("div", "card");
       card.appendChild(el("p", "eyebrow", it.project + " · " + it.kind_label + " #" + it.id));
+      if (it.card && it.card.sides) {
+        card.appendChild(el("p", "", it.card.headline || it.question));
+        var sides = el("div", "sides");
+        it.card.sides.forEach(function (s) {
+          var box = el("div", "side");
+          box.appendChild(el("p", "mark", "Claim " + (s.mark || "")));
+          box.appendChild(el("p", "who", (s.who || "Unknown") + (s.when ? ", " + s.when : "")));
+          box.appendChild(el("p", "claim", s.claim || ""));
+          var evs = s.evidence || [];
+          if (!evs.length) { box.appendChild(el("p", "ev", "Evidence: none attached")); }
+          evs.forEach(function (ev) {
+            var line = (ev.label || "") + (ev.excerpt ? " — " + ev.excerpt : "");
+            box.appendChild(el("p", "ev", "Evidence: " + (line || "none")));
+          });
+          sides.appendChild(box);
+        });
+        card.appendChild(sides);
+        var row = el("div", "actions stack");
+        [["keep_a", "Keep A", "btn"], ["keep_b", "Keep B", "btn ghost"],
+         ["keep_both", "Keep both", "btn ghost"], ["dismiss", "Dismiss", "btn ghost"]].forEach(function (b) {
+          var btn = el("button", b[2], b[1]);
+          btn.type = "button";
+          btn.addEventListener("click", function () {
+            var buttons = row.querySelectorAll("button");
+            for (var i = 0; i < buttons.length; i++) { buttons[i].disabled = true; }
+            post("/review/decide", {token: token, item_id: it.id, decision: b[0]}).then(function (r) {
+              if (r.ok) { show(r.j.items, r.j.total); $("status").textContent = r.j.message; }
+              else { say("Not done", r.j.message || "", true); }
+            }, function () { say("Not done", "Your FlowState didn't answer.", true); });
+          });
+          row.appendChild(btn);
+        });
+        card.appendChild(row);
+        list.appendChild(card);
+        return;
+      }
       card.appendChild(el("p", "", it.question));
       if (it.summary) { card.appendChild(el("p", "", it.summary)); }
       if (it.details) { card.appendChild(el("p", "muted", it.details)); }
@@ -190,13 +234,18 @@ def items(db_path) -> list:
     from . import review
     from .approve_page import view
     from .waiting import _KIND
+    from . import conflict_cards
+    hidden = conflict_cards.hidden_conflict_items(db_path)
     out = []
     for it in review.list_items(db_path, None, "pending", LIST_MAX)["items"]:
+        if it["id"] in hidden:   # the card already asks this pair
+            continue
         v = view(db_path, it["id"])
         v["kind_label"] = _KIND.get(it["kind"], it["kind"])
-        if it["kind"] not in approvals.USER_ONLY_KINDS + ("cleanup", "session_summary"):   # a record
+        if it["kind"] not in approvals.USER_ONLY_KINDS + ("cleanup", "session_summary", "disagreement"):
             v["question"] = "Approve to keep it; reject to leave it out."
-        v["details"] = (v["details"] or "")[:1000]
+        cap = 4000 if it["kind"] == "delete" else 1000
+        v["details"] = (v["details"] or "")[:cap]
         out.append(v)
     return out
 
@@ -330,15 +379,20 @@ def routes(db_path_fn):
             sess = sessions.check(request.cookies.get(COOKIE), body.get("token"))
             item_id = body.get("item_id")
             if not isinstance(item_id, int) or isinstance(item_id, bool) \
-                    or body.get("decision") not in ("approve", "reject"):
+                    or body.get("decision") not in ("approve", "reject", "keep_a", "keep_b",
+                                                    "keep_both", "dismiss"):
                 raise approvals.ApprovalError("bad_request", "Choose Approve or Reject for an item.")
         except approvals.ApprovalError as e:
             return refuse(e)
         from .popup import as_user
         label = f"phone ({sess['handle']})"
-        if body["decision"] == "approve":
+        keep = {"keep_a": "a", "keep_b": "b", "keep_both": "both"}.get(body["decision"])
+        if body["decision"] == "approve" or keep:
             args = {"item_id": item_id, "confirm_name": body.get("confirm_name"),
                     "user_request": "The user approved this in their phone list (flowstatemcp.com)."}
+            if keep:
+                args["keep"] = keep
+                args["user_request"] = "The user tapped a button in their phone list (flowstatemcp.com)."
             res = await asyncio.to_thread(as_user, "review_approve", args, label)
         else:
             reason = " ".join(str(body.get("reason") or "").split())[:300]
@@ -350,7 +404,9 @@ def routes(db_path_fn):
         if isinstance(res, dict) and "error" in res:
             return answer({"error": res["error"], "message": res.get("message") or res["error"],
                            "items": listing, "total": total}, 409)
-        done = "Approved" if body["decision"] == "approve" else "Rejected"
+        done = {"approve": "Approved", "keep_a": "Kept the older entry",
+                "keep_b": "Kept the newer entry", "keep_both": "Kept both",
+                "dismiss": "Dismissed"}.get(body["decision"], "Rejected")
         if isinstance(res, dict) and res.get("kind") == "session_summary":
             done = "Kept" if body["decision"] == "approve" else "Not kept"
         return answer({"ok": True, "message": f"{done} #{item_id}.", "items": listing,

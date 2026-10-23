@@ -34,6 +34,13 @@ finish a claimed todo; they just get a warning, and `manage_history(action="who"
 A decision that reads like a current one (and doesn't say it replaces it) is still saved, but
 flagged as a *possible* conflict (`D31 vs D12` in the brief) for the agent and then you to settle
 in the review queue; FlowState matches words (and meaning, if the local model is installed), it doesn't judge.
+When two entries clearly disagree, FlowState also queues a disagreement card: claim A and claim B,
+who wrote each, and up to two short evidence snippets. You keep the older, the newer, or both, or
+dismiss the card. The one you don't keep is marked superseded, not deleted. An agent flags a pair
+with `log_work` (`conflicts_with`, `topic`, `evidence`) or `manage_links(action="flag_conflict")`.
+The review page shows the card (side by side on a wide screen), and the tool reply includes the
+same card as plain text plus the review link. Chat apps that support MCP Apps can show the card
+in the chat; its buttons are not yet cryptographically proven to be a person.
 
 Each window of an app gets its own session, and the brief opens with one line about what the
 others did meanwhile (`Since your last visit (Oct 19): Claude Desktop and Grok saved 3 decisions,
