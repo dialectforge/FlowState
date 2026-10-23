@@ -36,6 +36,13 @@ if os.name == "nt":
     LIVE_DIRS = sorted(set(LIVE_DIRS) | {str(Path(os.environ[v]) / "flowstate")
                                          for v in ("LOCALAPPDATA", "APPDATA") if os.environ.get(v)})
 
+# The answer-time budget of one tool call (server.call_timeout, 15 s for real use). Past it
+# the server answers "flowstate_timeout" and the call finishes in the background: intended
+# for a person, but on a slow CI runner (a 57-minute Windows job) a delete with its safety
+# copy has run past 15 s and a test got that answer instead of the result it checks. Tests
+# get a generous budget; the tests of the timeout itself set their own small one.
+TEST_CALL_TIMEOUT = "120"
+
 SESSION = Path(tempfile.mkdtemp(prefix="fs-tests-")).resolve()
 atexit.register(shutil.rmtree, SESSION, True)   # also when pytest stops before sessionfinish
 GUARD_LOG = SESSION / "guard-refusals.log"
@@ -49,6 +56,7 @@ _SESSION_ENV = {
     "FLOWSTATE_GUARD_DIRS": os.pathsep.join(LIVE_DIRS), "FLOWSTATE_GUARD_LOG": GUARD_LOG,
     "FLOWSTATE_REVIEW_PORT": "0",   # the in-process review page (waiting.py): any free port
     "FLOWSTATE_UPDATE_CHECK": "0",  # the daily update check (updates.py): never asks GitHub
+    "FLOWSTATE_CALL_TIMEOUT": TEST_CALL_TIMEOUT,   # see TEST_CALL_TIMEOUT
     "GIT_AUTHOR_NAME": "FlowState Tests", "GIT_AUTHOR_EMAIL": "tests@example.invalid",
     "GIT_COMMITTER_NAME": "FlowState Tests", "GIT_COMMITTER_EMAIL": "tests@example.invalid",
 }
@@ -127,6 +135,7 @@ def _never_live(monkeypatch, tmp_path):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.delenv("FLOWSTATE_TOKEN", raising=False)
     monkeypatch.delenv("FLOWSTATE_TOKEN_FILE", raising=False)
+    monkeypatch.setenv("FLOWSTATE_CALL_TIMEOUT", TEST_CALL_TIMEOUT)   # a slow runner is not a timeout
     bad = [h for h in (f"{k} -> {v}" for k, v in resolved_flowstate_paths().items()) if _guard.forbidden(h.split(" -> ", 1)[1])]
     assert not bad, f"real-data guard: {bad}"
     yield
@@ -215,6 +224,7 @@ def server_env(db: Path, **extra) -> dict:
                 "FLOWSTATE_TOKEN_STORE_FILE": str(Path(db).parent / "config" / "http-token"),
                 "FLOWSTATE_REVIEW_PORT": "0",   # never the user's 8770
                 "FLOWSTATE_UPDATE_CHECK": "0",  # never asks GitHub (the guard refuses it too)
+                "FLOWSTATE_CALL_TIMEOUT": TEST_CALL_TIMEOUT,   # servers the tests start, too
                 "FLOWSTATE_GUARD_DIRS": os.environ["FLOWSTATE_GUARD_DIRS"],
                 "FLOWSTATE_GUARD_LOG": os.environ["FLOWSTATE_GUARD_LOG"]})
     env.update({k: str(v) for k, v in extra.items()})
