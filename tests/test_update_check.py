@@ -356,6 +356,9 @@ def test_start_here_never_waits_for_github(state, backend, monkeypatch):
     assert took < 5, took
     assert "is out" not in text                    # nothing cached yet: no line
     assert updates._worker is not None and updates._worker.is_alive()
+    deadline = time.monotonic() + 3                 # the thread may not have reached the request yet
+    while not slow.calls and time.monotonic() < deadline:
+        time.sleep(0.01)
     assert len(slow.calls) == 1
     t0 = time.monotonic()
     backend.handle_call("start_here", {"project": "Alpha"}, client="t")   # still checking: no 2nd
