@@ -36,5 +36,5 @@ Repository: https://github.com/dialectforge/FlowState
 - [mcp-server/flowstate/server.py](mcp-server/flowstate/server.py): tool dispatch, stdio and HTTP transports
 - [mcp-server/flowstate/identity.py](mcp-server/flowstate/identity.py): how app, model, machine and identity source are recorded (migration 012)
 - [mcp-server/flowstate/migrations/](mcp-server/flowstate/migrations/): numbered, additive database migrations
-- [database/schema.sql](database/schema.sql): base SQLite schema
+- [database/schema.sql](database/schema.sql): base SQLite schema (the package ships the same file as mcp-server/flowstate/schema.sql)
 - [tests/](tests/): pytest suite (temporary databases and fake config folders only)

@@ -53,7 +53,7 @@ from .guard import EXEMPT_ACTIONS, GuardError, WRITES, check_write, explicit_pro
 log = logging.getLogger("flowstate")
 
 # Create server instance; instructions reach every client at initialize.
-server = Server("flowstate", version="2.4.0", instructions=guide.INSTRUCTIONS)
+server = Server("flowstate", version="2.4.1", instructions=guide.INSTRUCTIONS)
 
 
 from .tooldefs import ALL_TOOLS  # noqa: E402 - the public tools (surface.py maps their calls)

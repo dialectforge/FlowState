@@ -104,7 +104,10 @@ python setup_flowstate.py --clients claude-desktop --schedule-backups --no-offsi
 ```
 
 `setup_flowstate.py` installs into `.venv` itself, so the `pip install` lines are only needed
-if you want the test tools or manage the venv yourself (then add `--skip-install`). Config
+if you want the test tools or manage the venv yourself (then add `--skip-install`). A plain,
+non-editable `pip install mcp-server` (or of a built wheel) works too from 2.4.1 on; in 2.4.0 it
+left out the database schema, so every FlowState call failed. `flowstate update` needs the git
+clone set up by `setup_flowstate.py`. Config
 snippets for every app, if you'd rather edit configs by hand, are in [AGENTS.md](AGENTS.md#manual-config-if-you-cant-run-the-script).
 
 ---
@@ -570,8 +573,9 @@ FlowState/
 │       ├── app_keys.py, identity.py, who.py # per-app keys, who/model/machine, "Who did what"
 │       ├── cli.py, cli_more.py # `flowstate <command>`
 │       ├── migrations/     # numbered, additive database migrations
+│       ├── schema.sql      # the base schema the code reads (same as database/schema.sql)
 │       └── tools/          # older tool implementations
-├── database/schema.sql     # base SQLite schema
+├── database/schema.sql     # base SQLite schema (kept the same as mcp-server/flowstate/schema.sql)
 ├── skills/flowstate/       # the Agent Skill
 ├── scripts/                # helpers: HTTP check, Cloudflare Tunnel template, Windows launchers
 ├── docs/                   # REMOTE-ACCESS.md and notes
@@ -618,12 +622,13 @@ A developer setup (your own branch or commits, extra worktrees, a linked `.venv`
 update it by hand. To turn `flowstate update` off on a computer, put `"self_update": false` in
 FlowState's `config.json` (or a `.flowstate-no-self-update` file in the folder).
 
-**By hand (and to install 2.4.0).** In the FlowState folder run `git pull`, then
+**By hand (and to install 2.4.0 or later the first time).** In the FlowState folder run `git pull`, then
 `python setup_flowstate.py --clients <your apps> --verify` with the same options as when you
 set it up, then quit and reopen your AI apps. 2.4.0, the first release that has
-`flowstate update`, has to be installed this way. (If your folder is at a release tag instead
+`flowstate update`, has to be installed this way; if you don't have 2.4.0 yet, install the
+newest release (2.4.1) the same way. (If your folder is at a release tag instead
 of `main`, `git pull` says you are not on a branch: run `git fetch --tags` and
-`git checkout v2.4.0` instead.)
+`git checkout v2.4.1` instead.)
 
 ### From v1.1
 

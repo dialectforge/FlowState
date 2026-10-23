@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.4.1 - 2026-10-23
+
+- Fixed: installing with plain pip (`pip install mcp-server`, not `-e`, or from a built wheel)
+  left out FlowState's database file (the base schema), so nothing worked: every call answered
+  `flowstate_unavailable`. Installs from the repository (`setup_flowstate.py`, `pip install -e`)
+  were not affected. The schema now ships inside the package (`mcp-server/flowstate/schema.sql`,
+  the same as `database/schema.sql`); the migrations and `release_signers` already did.
+- Fixed: the failed start also left an empty database file behind, which kept FlowState
+  unavailable even after reinstalling. An empty database file is now set up as a new one.
+- No new dependencies and no database changes. `flowstate update` from 2.4.0 needs no new
+  `.venv`, so it is not refused on Windows.
+- Tests: a new test builds a wheel, installs it (not editable) into a temporary venv away from
+  the repository and checks that FlowState starts, saves and replaces a decision, reads the
+  brief and migrates a new database.
+
 ## 2.4.0 - 2026-10-23
 
 ### In short

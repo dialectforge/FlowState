@@ -487,7 +487,8 @@ The same guidance is available as the MCP prompt `flowstate-start`.
   `approve_page.py` (the phone page at `/approve/<item>`), `review_phone.py` (the phone review list at
   `/review`), `waiting.py` (the chat walk, the local review link and the page started on first need), `connections.py`, `http_app.py`; the optional
   relay agent in `relay/`, wire protocol in `docs/relay-protocol.md`). Schema:
-  `database/schema.sql` (base) plus numbered migrations in `mcp-server/flowstate/migrations/`
+  `database/schema.sql` (base; the code reads its copy `mcp-server/flowstate/schema.sql`, which ships
+  in the package; keep the two the same, a test checks) plus numbered migrations in `mcp-server/flowstate/migrations/`
   (new tables only, or `ADD COLUMN ... DEFAULT NULL` on FlowState's own v2 tables as in 012;
   never touch v1.1 tables, never DROP or rewrite, so a v1.1 server can still open the same database).
 - Record identity only through `identity.py` (`identity.insert` / `identity.set_sql`), so

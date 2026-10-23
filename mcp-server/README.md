@@ -12,6 +12,10 @@ pip install -e .            # the server
 pip install -e ".[dev]"     # plus pytest, pytest-asyncio, httpx for the tests
 ```
 
+A plain `pip install .` (or of a built wheel) works too from 2.4.1 on: the base schema
+(`flowstate/schema.sql`), the migrations and `release_signers` are part of the package.
+`flowstate update` only works in a git clone set up by `setup_flowstate.py`.
+
 Search by meaning is optional; see "Honest limits" in the main README.
 
 ## Run

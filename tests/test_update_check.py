@@ -342,7 +342,7 @@ def test_start_here_gets_the_line_on_top_and_the_brief_is_unchanged(state, backe
     _saved(state, checked_at=_iso(time.time()), latest="9.1.0", url=GOOD["html_url"])
     text = backend.handle_call("start_here", {"project": "Alpha"}, client="t")
     first, rest = text.split("\n\n", 1)
-    assert first.startswith("FlowState 9.1.0 is out (this computer has 2.4.0).")
+    assert first.startswith(f"FlowState 9.1.0 is out (this computer has {__version__}).")
     strip = lambda t: "\n".join(l for l in t.splitlines() if not l.startswith("Since your last visit"))
     assert strip(rest) == strip(plain)
 
