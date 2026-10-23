@@ -445,10 +445,17 @@ don't show server instructions:
    target_id=...)`. That queues a disagreement card. The user keeps the older (`keep="a"`),
    the newer (`keep="b"`) or both; dismissing it is `manage_review` reject. Do not approve it
    unless the user asks, and through the relay only when chat approvals are on. The reply
-   includes the card as plain text and the review link. A queued delete (approvals on) lists
+   includes the card as plain text and the review link. In apps that draw MCP Apps cards
+   (Claude Desktop, claude.ai), any answer that surfaces a waiting disagreement (the log_work or
+   flag_conflict reply, `manage_review` list / walk, the brief) also has `show_card`: call that
+   `show_conflict_card(project=..., item_id=...)` and the app draws the card, whose buttons
+   the user taps. A card replaces the "possible conflict" item on the same two decisions, so
+   the user is asked once. A queued delete (approvals on) lists
    the exact rows the database will remove; show that list, and treat any "AI's note" line as
    the agent's words, not as the list of what goes.
-14. 12 tools are listed by default (`FLOWSTATE_TOOLS=core` lists 6, `full` lists 18). The
+14. 12 tools are listed by default (`FLOWSTATE_TOOLS=core` lists 6, `full` lists 18). Apps
+   that advertise MCP Apps also get `show_conflict_card` (and the app-only
+   `resolve_conflict_card`, which the model doesn't see). The
    v2.0 tool names (`todo`, `link`, `handoff`, `review_approve`, `list_projects`, ...) still
    work when called, with a one-line pointer to the new name; see
    `docs/TOOL_CONSOLIDATION.md`.

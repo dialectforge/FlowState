@@ -307,7 +307,10 @@ def review_list(args: dict, walk: bool, scopes) -> dict:
     except review.ReviewError as e:
         return e.payload
     if walk:
-        return prepare(out, S.backend.db_path, scopes, pid, after)
+        plan = prepare(out, S.backend.db_path, scopes, pid, after)
+        if isinstance(plan, dict) and plan.get("_walk", {}).get("cards"):
+            plan.update(_card_pointer(out["items"][:WALK_MAX]))
+        return plan
     page = _page(out, after, "list")   # one line per item; item_id= for one in full
     db = S.backend.db_path
     result = {"total": out["total"], "status": out["status"], **page,
@@ -321,10 +324,22 @@ def review_list(args: dict, walk: bool, scopes) -> dict:
         packed = _safe_card(db, it)
         if packed:
             cards.append({"review_item_id": packed["review_item_id"], "text": packed["text"]})
-            result.setdefault("_ui", {"structured": packed["structured"]})
     if cards:
         result["conflict_cards"] = cards
+        if out["status"] == "pending":
+            result.update(_card_pointer(out["items"]))
     return result
+
+
+def _card_pointer(items: list) -> dict:
+    """show_card for the waiting disagreements (MCP Apps hosts only; conflict_cards.pointer).
+    Cards in several projects: the first project's; the list names the rest."""
+    from . import conflict_cards
+    waiting = [it for it in items if it.get("kind") == "disagreement" and it.get("status") == "pending"]
+    if not waiting:
+        return {}
+    project = waiting[0].get("project")
+    return conflict_cards.pointer(project, [it["id"] for it in waiting if it.get("project") == project])
 
 
 def _safe_card(db_path: Path, it: dict):

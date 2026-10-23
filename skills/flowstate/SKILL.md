@@ -60,7 +60,9 @@ user switches project mid-chat, say so and switch. Pick the kind:
   `evidence` snippets (`file:line`, `file:line — excerpt`, or `output: excerpt`), or call
   `manage_links(action="flag_conflict", ...)`. The user keeps the older, the newer, or both on
   the review page (or in chat only when chat approvals are on). Show them the card text and the
-  review link from the answer. Don't resolve it yourself.
+  review link from the answer. If the answer has `show_card` (apps that draw MCP Apps cards),
+  call that `show_conflict_card(...)` so the user taps Keep A / Keep B / Keep both in the chat.
+  Don't resolve it yourself.
 - something changed in code or setup: `change`
 - something broke: `problem`
 - a lesson worth reusing: `learning`

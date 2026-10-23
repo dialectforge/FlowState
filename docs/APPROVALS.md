@@ -108,7 +108,9 @@ chat by default. What the code enforces (`waiting.phone_only`, called first in
   the phone review list and the popup (they decide as the user, with no app identity).
 - A disagreement card is the same rule when an agent uses `manage_review` approve / reject:
   chat approvals off means `phone_only` and the review link; on means the agent may pass
-  `keep="a"`, `"b"` or `"both"` with the user's words. The in-chat card's buttons call
+  `keep="a"`, `"b"` or `"both"` with the user's words. The in-chat card is drawn when the
+  AI calls `show_conflict_card` (read-only; its tool definition names the card's `ui://`
+  resource, which is how MCP Apps hosts decide what to draw). The card's buttons call
   `resolve_conflict_card` instead. That tool is app-only (`_meta.ui.visibility` is `["app"]`,
   so it is left off the model's tool list unless the host advertises MCP Apps) and it refuses
   `user_request`, `message`, `text` and `reason`. A client that doesn't advertise MCP Apps

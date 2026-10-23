@@ -373,7 +373,10 @@ def handle_call(name: str, args: dict, client: str = "unknown", meta: Optional[d
         return reply
     result = saves.run(backend.db_path, _handle, name, args, client, meta, pending,
                        _one_commit(name, args))
-    # something now waits in the review queue: say how the user decides it (after the save)
+    # something now waits in the review queue: say how the user decides it (after the save).
+    # The card's own tools show or decide a card; they queue nothing.
+    if name in ("show_conflict_card", "resolve_conflict_card"):
+        return result
     return waiting.queue_guidance(result, backend.db_path, client)
 
 
@@ -454,6 +457,8 @@ def _handle(name: str, args: dict, client: str, meta: dict) -> Any:
         result = _link(pid, args, client)
     elif name == "resolve_conflict_card":
         result = conflict_cards.resolve_card(db_path, args, client)
+    elif name == "show_conflict_card":
+        result = conflict_cards.show(db_path, args, pid)
     elif name == "review_mode":
         result = _review_mode(args, client)
     elif name == "history":
@@ -683,7 +688,10 @@ def _log_work(pid: int, args: dict, sid: Optional[int], by: Optional[tuple] = No
             out["resolved_conflicts"] = resolved
     elif kind == "decision" and isinstance(r, dict) and r.get("id") is not None:
         # possible conflicting decisions: a note only; never blocks or undoes the write
-        out.update(_safe_call(conflicts.on_save, backend.db_path, pid, r["id"], summary, comp_id) or {})
+        flagged = (int(args["conflicts_with"]) if args.get("conflicts_with") not in (None, "")
+                   and (args.get("conflicts_with_type") or "decision") == "decision" else None)
+        out.update(_safe_call(conflicts.on_save, backend.db_path, pid, r["id"], summary, comp_id,
+                              flagged) or {})
     out.update(_safe_call(conflict_cards.after_log, backend.db_path, pid, kind, args, out, client) or {})
     return out
 

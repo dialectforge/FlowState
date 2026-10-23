@@ -261,8 +261,10 @@ def _conflict_item(S):
 
 def test_reject_in_the_review_queue_dismisses_the_pair(backend):
     db = backend.backend.db_path
-    decide(backend, "Use Postgres for hosted storage", "Storage")
-    decide(backend, "Use SQLite for hosted storage", "Storage")
+    # same project, no component: a yes/no possible-conflict item (a same-component pair
+    # opens a disagreement card instead, which takes this item's place)
+    decide(backend, "Use Postgres for hosted storage")
+    decide(backend, "Use SQLite for hosted storage")
     it = _conflict_item(backend)
     assert it["summary"].startswith("Possible conflict: D")
     # agents can't dismiss on their own: the user's words are required
@@ -280,8 +282,10 @@ def test_reject_in_the_review_queue_dismisses_the_pair(backend):
 
 def test_approve_keeps_it_visible_as_a_real_conflict(backend):
     db = backend.backend.db_path
-    decide(backend, "Price Relay at $6", "Pricing")
-    decide(backend, "Price Relay at $12", "Pricing")
+    # same project, no component: a yes/no possible-conflict item (a same-component pair
+    # opens a disagreement card instead, which takes this item's place)
+    decide(backend, "Price Relay at $6")
+    decide(backend, "Price Relay at $12")
     it = _conflict_item(backend)
     got = ok(call(backend, "manage_review", {"action": "approve", "project": "Alpha",
                                              "item_id": it["id"],
@@ -466,8 +470,10 @@ def test_review_page_shows_conflict_buttons_and_reject_dismisses(backend):
     from starlette.testclient import TestClient
     from flowstate.review_page import HOST, Page, create_app
     db = backend.backend.db_path
-    decide(backend, "Use Postgres for hosted storage", "Storage")
-    decide(backend, "Use SQLite for hosted storage", "Storage")
+    # same project, no component: a yes/no possible-conflict item (a same-component pair
+    # opens a disagreement card instead, which takes this item's place)
+    decide(backend, "Use Postgres for hosted storage")
+    decide(backend, "Use SQLite for hosted storage")
     item = rows(db, "SELECT id FROM review_items WHERE kind = 'conflict'")[0][0]
     p = Page(db, 8770)
     c = TestClient(create_app(p), base_url=f"http://{HOST}:8770", follow_redirects=False)

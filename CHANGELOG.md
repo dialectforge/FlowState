@@ -15,8 +15,16 @@
   as a same-component hit also opens a card; unrelated decisions on that component do not. The
   review page shows claim A and claim B (stacked on a narrow screen, side by side on a wide
   one) with who wrote each, when, and the evidence. The tool reply includes that same card as
-  plain text, plus the review link. Hosts that support MCP Apps (spec 2026-01-26) also get an
-  in-chat card (`ui://flowstate/conflict-card.html`); its buttons call `resolve_conflict_card`,
+  plain text, plus the review link. Hosts that support MCP Apps (spec 2026-01-26), such as
+  Claude Desktop, also get an in-chat card (`ui://flowstate/conflict-card.html`). They list one
+  more tool, `show_conflict_card` (read-only), whose definition names the card; MCP Apps hosts
+  draw a card for a tool, not for a result. Every answer that surfaces a waiting disagreement
+  (log_work, flag_conflict, `manage_review` list and walk, the brief) gives the AI the call to
+  make (`show_card`). The card follows the MCP Apps handshake, reports its size, follows the
+  host's light or dark theme, and can show several cards at once. A card replaces the
+  "possible conflict" review item on the same two decisions: a `conflicts_with` flag no
+  longer queues both, and a same-component card closes the possible-conflict item (reason
+  "merged into disagreement #N"), so the user decides once. Its buttons call `resolve_conflict_card`,
   which is hidden from the model (`visibility: ["app"]`), refused for apps that don't support
   MCP Apps, and phone only through the relay unless `flowstate relay chat-approvals on`. Approving through any model-visible
   tool still follows chat approvals (off by default: refused, with the review link). Every

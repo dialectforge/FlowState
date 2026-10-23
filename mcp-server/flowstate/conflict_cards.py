@@ -8,6 +8,14 @@ deleted. Chat approvals still gate the model-visible review tools. The in-chat c
 buttons call resolve_conflict_card, which is app-only, refused for clients without MCP Apps,
 and phone only through the relay unless chat approvals are on.
 
+A card is one question: opening it closes the pending possible-conflict item on the same two
+decisions (merged into the card), so the user is not asked twice.
+
+MCP Apps hosts render a UI for a tool whose *definition* names it (`_meta.ui.resourceUri` in
+tools/list, spec 2026-01-26 "Resource Discovery"), not for a result. So the card has its own
+model-visible tool, show_conflict_card, listed only to hosts that advertise MCP Apps; answers
+that surface a disagreement tell the AI to call it (`show_card`).
+
 Card taps are not cryptographically proven to be a person. The tool is hidden from the
 model's list and refuses chat-text fields; a host that lets the model call it anyway
 is a known follow-up.
@@ -270,6 +278,7 @@ def _open_card(conn, db_path, pid: int, topic: str, left: tuple, right: tuple, h
                                AND a_type = ? AND a_id = ? AND b_type = ? AND b_id = ?""",
                             (pid, a[0], a[1], b[0], b[1])).fetchone()
     if existing and existing["review_item_id"]:
+        _absorb(conn, existing, client)
         return _pack(db_path, conn, existing, existing["review_item_id"])
     a_app, _aw = _writer(conn, a[0], a[1], fresh == a, client)
     b_app, _bw = _writer(conn, b[0], b[1], fresh == b, client)
@@ -284,15 +293,52 @@ def _open_card(conn, db_path, pid: int, topic: str, left: tuple, right: tuple, h
                            "The user chooses which entry stands.", {"card_id": cid}, client, conn=conn)
     conn.execute("UPDATE conflict_cards SET review_item_id = ? WHERE id = ?", (item, cid))
     card = conn.execute("SELECT * FROM conflict_cards WHERE id = ?", (cid,)).fetchone()
+    _absorb(conn, card, client)
     return _pack(db_path, conn, card, item)
 
 
-def _answer(cards: list) -> dict:
+def _absorb(conn, card, client: str) -> list:
+    """Close the pending possible-conflict items on the card's two decisions: the card asks
+    the same question with more to go on. The pair itself stays open until the card is
+    decided (_quiet_pair). Returns the closed item ids."""
+    if card["a_type"] != "decision" or card["b_type"] != "decision" or \
+            conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                         "AND name='decision_conflicts'").fetchone() is None:
+        return []
+    rows = conn.execute("""SELECT c.review_item_id FROM decision_conflicts c
+                           JOIN review_items i ON i.id = c.review_item_id
+                           WHERE c.status = 'open' AND i.status = 'pending' AND
+                           ((c.new_id = ? AND c.old_id = ?) OR (c.new_id = ? AND c.old_id = ?))""",
+                        (card["a_id"], card["b_id"], card["b_id"], card["a_id"])).fetchall()
+    for r in rows:
+        _close_item(conn, r[0], f"merged into disagreement #{card['review_item_id']}", client)
+    return [r[0] for r in rows]
+
+
+def show_call(project: str, item_ids: list) -> str:
+    ids = sorted({int(i) for i in item_ids if i is not None})
+    one = f", item_id={ids[0]}" if len(ids) == 1 else ""
+    return f'show_conflict_card(project="{project}"{one})'
+
+
+def pointer(project: Optional[str], item_ids: list) -> dict:
+    """{show_card, card_note} for answers that surface a disagreement, on MCP Apps hosts only
+    (elsewhere there is no card to show and the text is the card)."""
+    if not item_ids or not project or not client_has_ui():
+        return {}
+    call = show_call(project, item_ids)
+    return {"show_card": call,
+            "card_note": f"This app can show the disagreement as a card the user taps (Keep A, "
+                         f"Keep B or Keep both): call {call} now. Don't choose for them."}
+
+
+def _answer(cards: list, project: Optional[str] = None) -> dict:
     if not cards:
         return {}
     out = {"conflict_cards": [{"review_item_id": c["review_item_id"], "text": c["text"]}
                               for c in cards]}
-    out["_ui"] = {"structured": cards[0]["structured"]}
+    out.update(pointer(project or cards[0]["structured"].get("project"),
+                       [c["review_item_id"] for c in cards]))
     return out
 
 
@@ -326,6 +372,8 @@ def after_log(db_path: Path, pid: int, kind: str, args: dict, result: dict, clie
                     cards.append(_open_card(conn, db_path, pid, topic, ("decision", int(rid)),
                                             ("decision", int(hit["decision_id"])), "same_component",
                                             client, fresh=("decision", int(rid))))
+                    hit["review_item_id"] = cards[-1]["review_item_id"]   # merged into the card
+                    hit["on_card"] = True
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
@@ -562,7 +610,7 @@ def resolve_card(db_path: Path, args: dict, client: str) -> dict:
     text = packed["text"] if packed else OUTCOME.get("kept_" + args["keep"], "Saved.")
     res = {"resolved": item["id"], "keep": args["keep"], "text": text, "note": text}
     if packed:
-        res["_ui"] = {"structured": packed["structured"]}
+        res["_ui"] = {"structured": {"cards": [packed["structured"]]}}
         res["conflict_cards"] = [{"review_item_id": item["id"], "text": text}]
     res.update({k: v for k, v in out.items() if k not in res})
     return res
@@ -680,6 +728,18 @@ def brief_line(conn, pid: int) -> Optional[str]:
         return None
     extra = f" (+{len(shown) - 1} more)" if len(shown) > 1 else ""
     return f"Two AIs disagree about {shown[0]['topic']}{extra}."
+
+
+def brief_hint(conn, pid: int, project: str) -> Optional[str]:
+    """On MCP Apps hosts, when a card is open: the call that shows it."""
+    if not available(conn) or not client_has_ui():
+        return None
+    ids = [r[0] for r in conn.execute("""SELECT review_item_id FROM conflict_cards WHERE project_id = ?
+                                         AND status = 'open' AND review_item_id IS NOT NULL""", (pid,))]
+    if not ids:
+        return None
+    return (f"Disagreement card waiting: call {show_call(project, ids)} so the user can tap "
+            f"Keep A, Keep B or Keep both.")
 
 
 def hidden_conflict_items(db_path: Path) -> set:
@@ -834,6 +894,82 @@ def app_tool():
     return tool.model_copy(update={"meta": {"ui": {"resourceUri": UI_URI, "visibility": ["app"]}}})
 
 
+SHOW_MAX = 5
+
+
+def show_tool():
+    """Model-visible, and the tool the host renders the card for: its definition names the
+    ui:// resource (the spec ties the UI to the tool, not to a result). Read-only."""
+    from mcp.types import Tool, ToolAnnotations
+
+    from .conflict_card_ui import UI_URI
+    tool = Tool(
+        name="show_conflict_card",
+        title="Show a disagreement card",
+        description="Show the user the disagreement card(s) in this chat, so they tap Keep A, "
+                    "Keep B or Keep both themselves. Call it when a FlowState answer has "
+                    "show_card, or when the user asks to see a disagreement. Read-only: you "
+                    "never choose. item_id: one card; without it, the project's open cards "
+                    f"(at most {SHOW_MAX}). Returns the card text; the app draws the card.",
+        inputSchema={"type": "object", "properties": {
+            "project": {"type": ["string", "integer"], "description": "Name or id."},
+            "item_id": {"type": "integer", "description": "The disagreement's review item id."},
+        }},
+        annotations=ToolAnnotations(title="Show a disagreement card", readOnlyHint=True,
+                                    idempotentHint=True, openWorldHint=False))
+    return tool.model_copy(update={"meta": {"ui": {"resourceUri": UI_URI,
+                                                   "visibility": ["model", "app"]}}})
+
+
+def show(db_path: Path, args: dict, pid: Optional[int]) -> dict:
+    """show_conflict_card: one card (item_id) or the open ones (in a project, else all)."""
+    if args.get("project") not in (None, "") and pid is None:
+        return {"error": "project_not_found", "message": f"No single project matches "
+                f"{args.get('project')!r}."}
+    conn = _connect(db_path)
+    try:
+        if not available(conn):
+            return {"error": "not_available", "message": "Disagreement cards are not set up in "
+                    "this database yet."}
+        if args.get("item_id") is not None:
+            try:
+                item_id = int(args["item_id"])
+            except (TypeError, ValueError):
+                return {"error": "bad_request", "message": "item_id must be a number."}
+            rows = conn.execute("SELECT * FROM conflict_cards WHERE review_item_id = ?",
+                                (item_id,)).fetchall()
+            if not rows or (pid is not None and rows[0]["project_id"] != pid):
+                return {"error": "record_not_found",
+                        "message": f"No disagreement #{item_id}" + (" in this project." if pid else ".")}
+            total = 1
+        else:
+            where, params = "status = 'open' AND review_item_id IS NOT NULL", []
+            if pid is not None:
+                where, params = where + " AND project_id = ?", [pid]
+            total = conn.execute(f"SELECT COUNT(*) FROM conflict_cards WHERE {where}",
+                                 params).fetchone()[0]
+            rows = conn.execute(f"SELECT * FROM conflict_cards WHERE {where} ORDER BY id LIMIT ?",
+                                (*params, SHOW_MAX)).fetchall()
+        packed = [_pack(db_path, conn, r, r["review_item_id"]) for r in rows]
+    finally:
+        conn.close()
+    if not packed:
+        return {"shown": 0, "note": "No disagreement is waiting.",
+                "_ui": {"structured": {"cards": [], "note": "No disagreement is waiting."}}}
+    out = {"shown": len(packed), "conflict_cards": [
+        {"review_item_id": c["review_item_id"], "text": c["text"]} for c in packed]}
+    if total > len(packed):
+        out["more"] = total - len(packed)
+    open_ = [c for c in packed if not c["structured"]["resolved"]]
+    out["note"] = ("The card is on screen: the user taps Keep A, Keep B or Keep both. Don't "
+                   "choose for them or ask them to type it." if open_ and client_has_ui() else
+                   "Show the user this text; they decide on the review page or their phone."
+                   if open_ else "Already decided.")
+    out["_ui"] = {"structured": {"cards": [c["structured"] for c in packed],
+                                 "more": out.get("more", 0)}}
+    return out
+
+
 def client_has_ui() -> bool:
     try:
         from .server import server
@@ -846,17 +982,15 @@ def client_has_ui() -> bool:
 
 
 def with_app_tool(tools: list) -> list:
+    """MCP Apps hosts also get the card's two tools: show (model) and resolve (app only)."""
     if not client_has_ui():
         return tools
-    return list(tools) + [app_tool()]
+    return list(tools) + [show_tool(), app_tool()]
 
 
 def paint(result, ui):
-    """Attach the card resource to a tool result. `ui` is {'structured': <card dict>}."""
-    if not isinstance(ui, dict) or not ui.get("structured"):
+    """The card's data for the view: structuredContent, which the host passes to the card in
+    ui/notifications/tool-result. Only the card's own tools return it."""
+    if not isinstance(ui, dict) or ui.get("structured") is None:
         return result
-    from .conflict_card_ui import UI_URI
-    return result.model_copy(update={
-        "structuredContent": ui["structured"],
-        "meta": {"ui": {"resourceUri": UI_URI}},
-    })
+    return result.model_copy(update={"structuredContent": ui["structured"]})

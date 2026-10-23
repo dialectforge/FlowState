@@ -163,14 +163,16 @@ def find(conn, pid: int, new_id: int, summary: str, comp_id: Optional[int]) -> l
 
 
 def check(db_path: Path, pid: int, new_id: int, summary: str, comp_id: Optional[int],
-          client: Optional[str] = None) -> list[dict]:
+          client: Optional[str] = None, skip: Optional[int] = None) -> list[dict]:
     """After a decision is saved without replaces=: store each likely related pair once and
-    queue it for the user. Returns the new flags (empty if none, or if 014 hasn't run)."""
+    queue it for the user. Returns the new flags (empty if none, or if 014 hasn't run).
+    `skip`: the decision the new one was explicitly flagged against (conflicts_with); that
+    pair gets a disagreement card instead, so it is not asked twice."""
     conn = _connect(db_path)
     try:
         if not available(conn):
             return []
-        hits = find(conn, pid, new_id, summary, comp_id)
+        hits = [h for h in find(conn, pid, new_id, summary, comp_id) if h["decision_id"] != skip]
         if not hits:
             return []
         conn.execute("BEGIN IMMEDIATE")
@@ -211,9 +213,10 @@ def check(db_path: Path, pid: int, new_id: int, summary: str, comp_id: Optional[
         conn.close()
 
 
-def on_save(db_path: Path, pid: int, new_id: int, summary: str, comp_id: Optional[int]) -> dict:
+def on_save(db_path: Path, pid: int, new_id: int, summary: str, comp_id: Optional[int],
+            skip: Optional[int] = None) -> dict:
     """log_work, a decision saved without replaces=: {possible_conflicts, note} or {}."""
-    flags = check(db_path, pid, new_id, summary, comp_id)
+    flags = check(db_path, pid, new_id, summary, comp_id, skip=skip)
     if not flags:
         return {}
     conn = _connect(db_path)

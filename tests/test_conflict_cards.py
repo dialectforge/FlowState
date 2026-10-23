@@ -105,23 +105,43 @@ def test_flagging_a_new_decision_opens_a_card_with_evidence(backend, seeded_db):
     assert r.isError
 
 
-def test_tool_result_points_at_the_ui_resource(backend):
+def test_card_ui_is_declared_on_a_model_visible_tool_not_on_results(backend, monkeypatch):
+    """MCP Apps (2026-01-26, Resource Discovery): the host renders the ui:// resource named
+    by the TOOL's _meta.ui.resourceUri in tools/list. A result's _meta is not looked at."""
     S = backend
-    older = decide(S, "Use JWT tokens for API auth", app="Claude")
-    async def go():
+    async def listing():
         async with create_connected_server_and_client_session(
-                S.server, client_info=types.Implementation(name="Cursor", version="1")) as c:
-            return await c.call_tool("log_work", {
-                "project": "Alpha", "kind": "decision",
-                "summary": "Use session cookies for API auth",
-                "conflicts_with": older["record"]["id"], "topic": "API sessions",
-                "evidence": ["src/auth.py:42"]})
-    r = asyncio.run(go())
-    assert not r.isError
-    assert r.structuredContent["headline"] == "Two AIs disagree about API sessions."
-    assert r.structuredContent["sides"][1]["evidence"][0]["label"] == "src/auth.py:42"
-    meta = r.meta if isinstance(r.meta, dict) else r.model_dump(by_alias=True).get("_meta")
-    assert meta["ui"]["resourceUri"] == UI_URI
+                S.server, client_info=types.Implementation(name="claude-ai", version="1")) as c:
+            tools = (await c.list_tools()).tools
+            res = (await c.list_resources()).resources
+            body = await c.read_resource(UI_URI)
+            return tools, res, body
+    tools, _res, _body = asyncio.run(listing())
+    assert not {"show_conflict_card", "resolve_conflict_card"} & {t.name for t in tools}
+    monkeypatch.setattr(conflict_cards, "client_has_ui", lambda: True)
+    tools, res, body = asyncio.run(listing())
+    ui = {t.name: t.model_dump(by_alias=True, exclude_none=True).get("_meta", {}).get("ui")
+          for t in tools}
+    assert ui["show_conflict_card"] == {"resourceUri": UI_URI, "visibility": ["model", "app"]}
+    assert ui["resolve_conflict_card"]["visibility"] == ["app"]
+    show = next(t for t in tools if t.name == "show_conflict_card")
+    assert show.annotations.readOnlyHint is True
+    assert [str(r.uri) for r in res] == [UI_URI]
+    assert body.contents[0].mimeType == MIME and "<!DOCTYPE html>" in body.contents[0].text
+    # the card's data rides on show_conflict_card only; log_work answers carry text + a pointer
+    older = decide(S, "Use JWT tokens for API auth", app="Claude")
+    r, body = call(S, "log_work", {"project": "Alpha", "kind": "decision",
+                                   "summary": "Use session cookies for API auth",
+                                   "conflicts_with": older["record"]["id"], "topic": "API sessions",
+                                   "evidence": ["src/auth.py:42"]})
+    assert not r.isError and r.structuredContent is None
+    assert not r.model_dump(by_alias=True).get("_meta")
+    item = body["conflict_cards"][0]["review_item_id"]
+    assert body["show_card"] == f'show_conflict_card(project="Alpha", item_id={item})'
+    r = call(S, "show_conflict_card", {"project": "Alpha", "item_id": item})[0]
+    view = r.structuredContent["cards"][0]
+    assert view["headline"] == "Two AIs disagree about API sessions."
+    assert view["sides"][1]["evidence"][0]["label"] == "src/auth.py:42"
 
 
 def test_flag_conflict_between_two_existing_entries(backend, seeded_db):
@@ -351,11 +371,20 @@ def test_card_tap_needs_an_mcp_apps_client_and_is_phone_only_through_the_relay(
     assert ok(call(S, "resolve_conflict_card", tap))["resolved"] == item
 
 
-def test_card_tool_calls_do_not_reuse_the_initialize_id():
-    """The answer to id 1 is taken as ui/initialize's: a tap sent as id 1 was never shown."""
-    assert "var seq = INIT_ID;" in CARD_HTML and "++seq" in CARD_HTML
-    assert "}, INIT_ID);" in CARD_HTML
-    assert "ev.source !== window.parent" in CARD_HTML
+def test_card_follows_the_mcp_apps_handshake():
+    """ui/initialize (id 1) -> ui/notifications/initialized; data from tool-result; replies
+    to the host's requests; reports its size; taps are tools/call with fresh ids."""
+    script = CARD_HTML.split("<script>")[1]
+    assert "var seq = INIT_ID;" in script and "++seq" in script
+    assert 'id: INIT_ID, method: "ui/initialize"' in script
+    assert '"ui/notifications/initialized"' in script
+    assert '"ui/notifications/tool-result"' in script and "structuredContent" in script
+    assert '"ui/notifications/tool-cancelled"' in script
+    assert '"ui/notifications/size-changed"' in script and "ResizeObserver" in script
+    assert '"ui/resource-teardown"' in script and '"ping"' in script and "-32601" in script
+    assert "msg.error" in script and '"resolve_conflict_card"' in script
+    assert "ev.source !== window.parent" in script
+    assert "innerHTML" not in script and "ui/message" not in script and "fetch(" not in script
 
 
 def test_card_html_is_self_contained_and_escaped_on_the_review_page(backend, seeded_db):
@@ -404,3 +433,106 @@ def test_review_page_keep_a_logs_the_review_page_path(backend, seeded_db):
         [("review page", "kept_a")]
     html = client.get("/?status=approved").text
     assert "Kept the older one" in html
+
+
+def pending(db, kind=None):
+    sql = "SELECT id, kind FROM review_items WHERE status = 'pending'"
+    return [r for r in rows(db, sql) if kind is None or r[1] == kind]
+
+
+def test_explicit_flag_is_one_question_not_a_card_and_a_possible_conflict(backend, seeded_db):
+    S = backend
+    older = decide(S, "Use session cookies for API auth", component="Auth")["record"]["id"]
+    newer = decide(S, "Use JWT tokens for API auth", component="Auth", app="Claude",
+                   conflicts_with=older, topic="API sessions",
+                   evidence=['output: assert "sid" in response.cookies passed'])
+    assert not newer.get("possible_conflicts")
+    assert [k for _i, k in pending(seeded_db)] == ["disagreement"]
+    assert rows(seeded_db, "SELECT COUNT(*) FROM decision_conflicts")[0][0] == 0
+    brief = call(S, "start_here", {"project": "Alpha"})[1]
+    assert "Two AIs disagree about API sessions." in brief and f"D{newer['record']['id']} vs" not in brief
+
+
+def test_same_component_card_absorbs_the_possible_conflict_item(backend, seeded_db):
+    S = backend
+    decide(S, "Use session cookies for API auth", component="Auth")
+    hit = decide(S, "Use JWT tokens for API auth", component="Auth", app="Claude")
+    card = hit["conflict_cards"][0]["review_item_id"]
+    flag = next(f for f in hit["possible_conflicts"] if f["same_component"])
+    assert flag["review_item_id"] == card and flag["on_card"] is True
+    assert pending(seeded_db) == [(card, "disagreement")]
+    old_item = rows(seeded_db, "SELECT review_item_id FROM decision_conflicts")[0][0]
+    status, reason = rows(seeded_db, "SELECT status, reject_reason FROM review_items WHERE id = ?",
+                          old_item)[0]
+    assert status == "rejected" and reason == f"merged into disagreement #{card}"
+
+
+def test_flagging_a_pair_that_already_waits_closes_the_older_item_and_deciding_closes_both(
+        backend, seeded_db, monkeypatch):
+    S = backend
+    db = seeded_db
+    a = decide(S, "Use session cookies for API auth")["record"]["id"]
+    b = decide(S, "Use session cookies with JWT for API auth", app="Claude")
+    auto = next(f["review_item_id"] for f in b["possible_conflicts"])
+    assert [k for _i, k in pending(db)] == ["conflict"]
+    flagged = ok(call(S, "manage_links", {"action": "flag_conflict", "project": "Alpha",
+                                          "topic": "API sessions", "item_id": a,
+                                          "target_id": b["record"]["id"]}))["flagged"]
+    assert pending(db) == [(flagged, "disagreement")]
+    assert rows(db, "SELECT status FROM review_items WHERE id = ?", auto)[0][0] == "rejected"
+    monkeypatch.setattr(conflict_cards, "client_has_ui", lambda: True)
+    ok(call(S, "resolve_conflict_card", {"item_id": flagged, "keep": "b", "project": "Alpha"}))
+    assert pending(db) == []
+    assert rows(db, "SELECT status FROM decision_conflicts") == [("dismissed_compatible",)]
+
+
+def test_every_answer_that_surfaces_a_card_points_at_show_conflict_card(backend, seeded_db,
+                                                                       monkeypatch):
+    S = backend
+    a = decide(S, "Charge in USD only")["record"]["id"]
+    b = decide(S, "Offer a yearly plan")["record"]["id"]
+    flagged = ok(call(S, "manage_links", {"action": "flag_conflict", "project": "Alpha",
+                                          "topic": "pricing", "item_id": a, "target_id": b}))
+    assert "show_card" not in flagged   # no MCP Apps: the text is the card
+    assert "show_card" not in ok(call(S, "manage_review", {"action": "walk"}))
+    monkeypatch.setattr(conflict_cards, "client_has_ui", lambda: True)
+    item = flagged["flagged"]
+    want = f'show_conflict_card(project="Alpha", item_id={item})'
+    for args in ({"action": "list"}, {"action": "list", "project": "Alpha"}, {"action": "walk"}):
+        body = ok(call(S, "manage_review", args))
+        assert body["show_card"] == want, args
+        assert want in body["card_note"]
+    assert want in call(S, "start_here", {"project": "Alpha"})[1]
+    again = ok(call(S, "manage_links", {"action": "flag_conflict", "project": "Alpha",
+                                        "topic": "pricing", "item_id": a, "target_id": b}))
+    assert again["show_card"] == want
+    decided = ok(call(S, "manage_review", {"action": "list", "status": "approved"}))
+    assert "show_card" not in decided
+
+
+def test_show_conflict_card_reads_one_or_all_and_never_decides(backend, seeded_db, monkeypatch):
+    S = backend
+    monkeypatch.setattr(conflict_cards, "client_has_ui", lambda: True)
+    r, body = call(S, "show_conflict_card", {"project": "Alpha"})
+    assert body["shown"] == 0 and r.structuredContent == {"cards": [], "note": "No disagreement is waiting."}
+    a = decide(S, "Charge in USD only")["record"]["id"]
+    b = decide(S, "Offer a yearly plan")["record"]["id"]
+    c = decide(S, "Run on one server")["record"]["id"]
+    one = ok(call(S, "manage_links", {"action": "flag_conflict", "project": "Alpha",
+                                      "topic": "pricing", "item_id": a, "target_id": b}))["flagged"]
+    two = ok(call(S, "manage_links", {"action": "flag_conflict", "project": "Alpha",
+                                      "topic": "hosting", "item_id": b, "target_id": c}))["flagged"]
+    r, body = call(S, "show_conflict_card", {"project": "Alpha"})
+    assert [v["item_id"] for v in r.structuredContent["cards"]] == [one, two]
+    assert "how_to_decide" not in body and "dont_approve" not in body
+    r, body = call(S, "show_conflict_card", {"item_id": two})
+    assert [v["item_id"] for v in r.structuredContent["cards"]] == [two]
+    _r, body = call(S, "show_conflict_card", {"project": "Nope", "item_id": two})
+    assert body["error"] == "project_not_found"
+    _r, body = call(S, "show_conflict_card", {"item_id": 99999})
+    assert body["error"] == "record_not_found"
+    assert len(pending(seeded_db, "disagreement")) == 2   # showing decides nothing
+    saved = call(S, "resolve_conflict_card", {"item_id": one, "keep": "both", "project": "Alpha"})[0]
+    assert saved.structuredContent["cards"][0]["resolved"] is True
+    r, _body = call(S, "show_conflict_card", {"item_id": one})
+    assert r.structuredContent["cards"][0]["detail"].startswith("Kept both")
