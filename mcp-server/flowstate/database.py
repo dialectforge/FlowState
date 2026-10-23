@@ -40,7 +40,21 @@ def default_db_path() -> Path:
 
 
 DEFAULT_DB_PATH = default_db_path()   # as at import; code paths call default_db_path()
-SCHEMA_PATH = Path(__file__).parent.parent.parent / "database" / "schema.sql"
+# The base schema ships inside the package (flowstate/schema.sql), so a plain, non-editable
+# `pip install` has it too. database/schema.sql in the repository is the same file (a test
+# checks that they match); it is only used if the package copy is missing.
+PACKAGE_SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
+REPO_SCHEMA_PATH = Path(__file__).resolve().parents[2] / "database" / "schema.sql"
+
+
+def schema_path() -> Path:
+    """The base schema: the package's copy, else the repository's database/schema.sql."""
+    if PACKAGE_SCHEMA_PATH.is_file() or not REPO_SCHEMA_PATH.is_file():
+        return PACKAGE_SCHEMA_PATH
+    return REPO_SCHEMA_PATH
+
+
+SCHEMA_PATH = schema_path()
 
 
 def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
@@ -58,10 +72,12 @@ def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
 
 def init_db(db_path: Optional[Path] = None) -> None:
     """Initialize the database with schema."""
+    # Read the schema before the database file is created: a missing schema must not leave
+    # an empty database file behind (2.4.0 did, after a plain `pip install`).
+    schema = schema_path().read_text(encoding="utf-8")
     conn = get_connection(db_path)
     try:
-        with open(SCHEMA_PATH) as f:
-            conn.executescript(f.read())
+        conn.executescript(schema)
         conn.commit()
     finally:
         conn.close()
@@ -69,13 +85,22 @@ def init_db(db_path: Optional[Path] = None) -> None:
     migrate(db_path or default_db_path(), backup_first=False)
 
 
+def _is_empty_file(path: Path) -> bool:
+    try:
+        return path.is_file() and path.stat().st_size == 0
+    except OSError:
+        return False
+
+
 class Database:
     """Database operations for FlowState."""
     
     def __init__(self, db_path: Optional[Path] = None):
         self.db_path = db_path or default_db_path()
-        # Ensure DB exists
-        if not self.db_path.exists():
+        # Ensure DB exists. An empty (0-byte) file is a database that was never set up, for
+        # example one left by 2.4.0 when a plain `pip install` had no schema file; the schema
+        # only creates what is missing, so setting it up is safe.
+        if not self.db_path.exists() or _is_empty_file(self.db_path):
             init_db(self.db_path)
     
     def _conn(self) -> sqlite3.Connection:
