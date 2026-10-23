@@ -66,19 +66,17 @@ honest limits and docs/APPROVALS.md section 3 now say what `approvals.py` does: 
 ## From the update check and `flowstate update` (tasks 40/41, branches `dev/t40-update-check`, `dev/t40-self-update`)
 
 Open (need John or a spare machine; none can be closed from a test):
-- **No release signing key yet.** `mcp-server/flowstate/release_signers` ships empty, so every
-  `flowstate update` is refused ("no release signing key is set up yet"). John: make the key,
-  list it, add it to GitHub as a signing key, turn on immutable releases, sign the 2.4.0 tag
-  (`docs/RELEASING.md`). 2.4.0 itself is installed by hand by everyone (trust on first use), so
-  its `release_signers` must list the key before v2.4.0 is tagged, or no 2.4.0 install can use
-  `flowstate update` until another release is installed by hand.
-- **Real service stop/start never ran.** `Services` (Get-ScheduledTask + `schtasks /End` /
-  `/Run`, `launchctl bootout` / `bootstrap`, `systemctl --user stop` / `start`) and `Processes`
-  (Get-CimInstance / `ps`, `taskkill /T /F`) are only exercised with fakes. To check on a spare
-  Windows machine with a plain clone: whether `schtasks /End` leaves the python child of
-  `cmd /c` running, and whether the leftover check finds it (a venv `python.exe` is a launcher:
-  its child is the base Python, whose command line may not name the folder; the kill uses
-  `/T` on the launcher). Same for macOS and Linux.
+- **Release key: listed; still to do by John.** `release_signers` lists the FlowState release
+  key (task 43). Still John's: add it to GitHub as a signing key, turn on immutable releases,
+  sign the v2.4.0 tag on the Mac (`docs/RELEASING.md`).
+- **Real service stop/start: Windows done, macOS and Linux not.** Task 43 ran `flowstate update`
+  for real on Windows (an isolated plain clone, its own scheduled task, port, data and signed
+  test tags): update, dry run, a forced failed health check with automatic rollback, and
+  `--rollback` all worked. Found and fixed there: the leftover check killed the `.venv`
+  launcher that ran the update itself. Confirmed: `schtasks /End` ends only `cmd.exe`; the venv
+  launcher and its base-Python child keep running until the leftover check kills them after its
+  15 s wait (about 15 s per stop, more during a rollback). `launchctl` and `systemctl --user`
+  are still only exercised with fakes.
 - **Dependency-changing releases on Windows are refused.** `flowstate update` runs from the
   `.venv` it would replace, and a Windows venv's `python.exe` launcher keeps running (and holds
   the folder) while it does, so such a release is refused up front with the manual steps. Doing

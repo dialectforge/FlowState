@@ -3,10 +3,12 @@
 `flowstate update` (2.4.0 and later) installs a release only if its git tag is **signed with an SSH
 key listed in `mcp-server/flowstate/release_signers` of the copy the user already has**. It reads
 that list before it changes anything, so a tag signed by anyone else (or not signed) is refused.
-Until a key is listed there, every `flowstate update` is refused with "no release signing key is
-set up yet". This page is the one-time setup and the steps for each release, for Windows
-PowerShell. Nobody else can do the one-time part for you: the private key must be made and kept
-by you.
+Without a key listed there, every `flowstate update` is refused with "no release signing key is
+set up yet". Since 2.4.0 the list holds the FlowState release key (principal `flowstate-release`,
+fingerprint `SHA256:UJVoMdG58pnUO86XMZLuV2Yv21S+4WW24U4GlP2mrIQ`), so the one-time part below is
+done; it stays here for a new or replacement key. The commands are for Windows PowerShell; on a
+Mac the `git` commands are the same, with `~/.ssh/flowstate_release_ed25519` paths. Nobody else
+can do the one-time part for you: the private key must be made and kept by you.
 
 ## Two rules to keep in mind
 

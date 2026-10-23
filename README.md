@@ -584,8 +584,11 @@ Linux `~/.local/share/flowstate/flowstate.db`. More settings are listed in [AGEN
 
 ## Upgrading
 
-FlowState checks once a day whether a newer release is out and, if so, puts one line on top of
-the brief; your AI tells you once. Nothing updates on its own.
+FlowState (2.4.0 and later) checks once a day whether a newer release is out and, if so, puts
+one line on top of the brief; your AI tells you once. Nothing updates on its own.
+`flowstate update check` shows the last result, `flowstate update check now` checks at once, and
+`flowstate update check off` (or the setting `FLOWSTATE_UPDATE_CHECK=0`) turns the check off
+completely: no request, no line. `flowstate update check on` turns it back on.
 
 **From 2.4.0 on: `flowstate update`.** Ask your AI to "update FlowState". It runs
 `<venv python> -m flowstate update --dry-run` in a terminal on this computer and shows you the
@@ -618,7 +621,9 @@ FlowState's `config.json` (or a `.flowstate-no-self-update` file in the folder).
 **By hand (and to install 2.4.0).** In the FlowState folder run `git pull`, then
 `python setup_flowstate.py --clients <your apps> --verify` with the same options as when you
 set it up, then quit and reopen your AI apps. 2.4.0, the first release that has
-`flowstate update`, has to be installed this way.
+`flowstate update`, has to be installed this way. (If your folder is at a release tag instead
+of `main`, `git pull` says you are not on a branch: run `git fetch --tags` and
+`git checkout v2.4.0` instead.)
 
 ### From v1.1
 
