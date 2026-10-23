@@ -1,7 +1,13 @@
 # Changelog
 
-## Unreleased
+## 2.4.2 - 2026-10-23
 
+- Changed, please read: after updating, an AI connected through the relay (claude.ai, ChatGPT
+  and other cloud AIs) can no longer approve or reject review items in the chat. It gives you
+  the item's phone link instead. To allow it again, run `flowstate relay chat-approvals on` in
+  your own terminal. Apps connected directly are not affected. Details below.
+- No new dependencies and no database changes. `flowstate update` from 2.4.0 or 2.4.1 needs no
+  new `.venv`, so it is not refused on Windows.
 - Fixed: an answer that puts something in the review queue (log_work suggested or held by
   review mode, manage_memory import / cleanup / delete, manage_projects delete with approvals
   on, turning review off with approvals on, possible conflicts, shared-component alert todos,
@@ -26,6 +32,11 @@
   (dry run)` line for the OS's real shortcut path (it failed on Linux, where the file is
   `flowstate-review.desktop`), and `tests/conftest.py` no longer crashes on stock Debian /
   Ubuntu Python, whose own `sitecustomize` has no docstring.
+- Tests: the wheel install test failed on Windows (`No module named 'pywintypes'`). The test's
+  temporary venv borrows mcp and its dependencies from the test environment, but did not read
+  pywin32's own `.pth` file, which mcp needs on Windows. The test now repeats what that file
+  adds. A real install was not affected: pip installs pywin32 with mcp on Windows the normal way.
+- README: two phone screenshots in "Where to see what's waiting for you".
 
 ## 2.4.1 - 2026-10-23
 

@@ -171,6 +171,75 @@ def _borrowed_site_dirs() -> list:
     return sorted({str(Path(m.__file__).resolve().parents[1]) for m in (mcp, pydantic)})
 
 
+# .pth files from a borrowed site dir that the temp venv must still read. On Windows, mcp
+# depends on pywin32 (mcp/os/win32/utilities.py imports pywintypes), and pywin32 is only
+# importable through its own pywin32.pth: it adds win32, win32/lib and Pythonwin to sys.path and
+# runs pywin32_bootstrap, which lets Windows find the DLLs in pywin32_system32. A real
+# `pip install` of FlowState gets pywin32 and that .pth the normal way; only this test, which
+# borrows site-packages through plain path lines, has to repeat it. (Other .pth files are left
+# out on purpose: an editable FlowState's would put the source tree back on the path.)
+BORROWED_PTH = ("pywin32.pth",)
+
+
+def _deps_pth_lines(site_dirs) -> list:
+    """The lines of the venv's zz_flowstate_test_deps.pth: each borrowed site dir, then what its
+    pywin32.pth adds (folders that exist, made absolute; its `import` lines as they are), the
+    way site.addpackage reads it, plus the pywin32_system32 DLL folder for Windows."""
+    lines, imports = [], []
+    for d in site_dirs:
+        d = Path(d)
+        lines.append(str(d))
+        for name in BORROWED_PTH:
+            pth = d / name
+            if not pth.is_file():
+                continue
+            for raw in pth.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith(("import ", "import\t")):
+                    imports.append(line)
+                    continue
+                sub = d / line.replace("\\", "/")
+                if sub.is_dir() and str(sub) not in lines:
+                    lines.append(str(sub))
+        dlls = d / "pywin32_system32"
+        if os.name == "nt" and dlls.is_dir():
+            imports.append(f"import os; os.add_dll_directory({str(dlls)!r})")
+    # import lines last, so every folder above is on sys.path when they run
+    return lines + [i for n, i in enumerate(imports) if i not in imports[:n]]
+
+
+def test_borrowed_pywin32_pth_is_repeated_in_the_temp_venv(tmp_path):
+    """Windows CI: mcp imports pywintypes, which the temp venv only finds if the borrowed
+    pywin32.pth is repeated (a fake pywin32 layout here, so it runs on every OS)."""
+    site_dir = tmp_path / "site-packages"
+    for sub in ("win32/lib", "Pythonwin", "pywin32_system32"):
+        (site_dir / sub).mkdir(parents=True)
+    (site_dir / "pywin32.pth").write_text(
+        "# .pth file for the PyWin32 extensions\nwin32\nwin32\\lib\nPythonwin\nmissing_dir\n"
+        "# hackery\nimport fs_fake_bootstrap\n", encoding="utf-8")
+    (site_dir / "win32" / "lib" / "fs_fake_pywintypes.py").write_text("OK = 1\n", encoding="utf-8")
+    (site_dir / "win32" / "lib" / "fs_fake_bootstrap.py").write_text("RAN = 1\n", encoding="utf-8")
+    (site_dir / "Pythonwin" / "fs_fake_win32ui.py").write_text("OK = 1\n", encoding="utf-8")
+    lines = _deps_pth_lines([site_dir])
+    assert lines[:4] == [str(site_dir), str(site_dir / "win32"), str(site_dir / "win32" / "lib"),
+                         str(site_dir / "Pythonwin")]
+    assert "import fs_fake_bootstrap" in lines and not any("missing_dir" in l for l in lines)
+    assert lines[-1].startswith("import ")
+    if os.name == "nt":
+        assert f"import os; os.add_dll_directory({str(site_dir / 'pywin32_system32')!r})" in lines
+    pth_dir = tmp_path / "venv-site"
+    pth_dir.mkdir()
+    (pth_dir / "zz_flowstate_test_deps.pth").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    r = subprocess.run([sys.executable, "-I", "-c",
+                        "import site, sys; site.addsitedir(sys.argv[1]); "
+                        "import fs_fake_pywintypes, fs_fake_win32ui; "
+                        "assert 'fs_fake_bootstrap' in sys.modules; print('PTH-OK')", str(pth_dir)],
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0 and "PTH-OK" in r.stdout, r.stdout + r.stderr
+
+
 def test_wheel_installs_and_works_without_the_repository(tmp_path):
     import flowstate
     work = tmp_path / "wheel-test"
@@ -196,9 +265,10 @@ def test_wheel_installs_and_works_without_the_repository(tmp_path):
     purelib = subprocess.run([str(py), "-c", "import sysconfig; print(sysconfig.get_paths()['purelib'])"],
                              capture_output=True, text=True, env=clean).stdout.strip()
     # mcp, pydantic and their dependencies from this environment, after the venv's own
-    # site-packages (plain path lines: .pth files in there, e.g. an editable FlowState, are not read)
-    (Path(purelib) / "zz_flowstate_test_deps.pth").write_text("\n".join(_borrowed_site_dirs()) + "\n",
-                                                              encoding="utf-8")
+    # site-packages (plain path lines: .pth files in there, e.g. an editable FlowState, are not
+    # read, except pywin32's on Windows; see _deps_pth_lines)
+    (Path(purelib) / "zz_flowstate_test_deps.pth").write_text("\n".join(_deps_pth_lines(_borrowed_site_dirs()))
+                                                              + "\n", encoding="utf-8")
 
     run_dir = work / "run"
     data = run_dir / "data"

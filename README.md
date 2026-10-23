@@ -396,6 +396,19 @@ relay); an app on another computer gets 1, and 3 with the relay. Every decision 
 the chat walk, on the phone list or on the tunnel page is logged with how it was made (`chat`,
 `phone` or `tunnel page`); see `manage_history(action="list")`.
 
+The phone list (3), on an iPhone:
+
+<table>
+  <tr>
+    <td><img src="docs/images/review-waiting.png" width="280" alt="The FlowState phone page titled Waiting for you, showing a learning an AI saved for review with Approve and Reject buttons"></td>
+    <td><img src="docs/images/review-approved.png" width="280" alt="The FlowState phone page after approving: Nothing is waiting for you, Approved #129"></td>
+  </tr>
+  <tr>
+    <td><em>An item an AI saved for review, waiting on your phone (FlowStateMCP relay).</em></td>
+    <td><em>After you approve an item.</em></td>
+  </tr>
+</table>
+
 Honest limits:
 - The review page answers only on 127.0.0.1 and only to same-origin form posts carrying the
   page's CSRF token, so other websites can't use it. But a program on your own computer (an AI
@@ -673,10 +686,10 @@ FlowState's `config.json` (or a `.flowstate-no-self-update` file in the folder).
 `python setup_flowstate.py --clients <your apps> --verify` with the same options as when you
 set it up, then quit and reopen your AI apps. 2.4.0, the first release that has
 `flowstate update`, has to be installed this way; if you don't have 2.4.0 yet, install the
-newest release (2.4.1) the same way. From 2.4.0 to 2.4.1 `flowstate update` works, on Windows
-too (2.4.1 needs no new `.venv`). (If your folder is at a release tag instead
+newest release (2.4.2) the same way. From 2.4.0 or 2.4.1 to 2.4.2 `flowstate update` works,
+on Windows too (2.4.2 needs no new `.venv`). (If your folder is at a release tag instead
 of `main`, `git pull` says you are not on a branch: run `git fetch --tags` and
-`git checkout v2.4.1` instead.)
+`git checkout v2.4.2` instead.)
 
 ### From v1.1
 
