@@ -166,13 +166,14 @@ def test_shortcut_is_made_once_and_kept_up_to_date(home):
     db = home / "data" / "fs.db"
     desk = home / "Desktop"
     desk.mkdir()
+    places = setup.Places(home)
+    path, text, _x = setup.shortcut_file(places, Path(sys.executable), db.resolve())
     r = run_setup(home, "--clients", "none", "--db", str(db), "--dry-run")
-    assert r.returncode == 0 and "FlowState review" in r.stdout and "would be created (dry run)" in r.stdout
+    # the file name differs per OS (Linux: flowstate-review.desktop), so look for the path
+    assert r.returncode == 0 and f"[shortcut] {path}: would be created (dry run)" in r.stdout, r.stdout
     assert not any(desk.iterdir())
     r = run_setup(home, "--clients", "none", "--db", str(db))
     assert r.returncode == 0, r.stdout + r.stderr
-    places = setup.Places(home)
-    path, text, _x = setup.shortcut_file(places, Path(sys.executable), db.resolve())
     assert path.parent == desk and path.read_bytes().decode("utf-8") == text
     assert f"[shortcut] {path}: created" in r.stdout
     assert setup.SHORTCUT_MARK in text and "review-page" in text and str(db.resolve()) in text

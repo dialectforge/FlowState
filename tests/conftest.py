@@ -61,7 +61,9 @@ os.environ["PYTHONPATH"] = os.pathsep.join(
     [str(GUARD_SITE), str(SERVER_DIR)] + [p for p in os.environ.get("PYTHONPATH", "").split(os.pathsep) if p])
 sys.path.insert(0, str(GUARD_SITE))
 import sitecustomize as _guard  # noqa: E402  (this process: the audit hook goes in now)
-if "FLOWSTATE_GUARD_DIRS" not in getattr(_guard, "__doc__", "") or not _guard._DIRS:
+# (`or ""`: stock Debian / Ubuntu Python has its own sitecustomize, whose __doc__ is None)
+if "FLOWSTATE_GUARD_DIRS" not in (getattr(_guard, "__doc__", None) or "") \
+        or not getattr(_guard, "_DIRS", None):
     # a different sitecustomize was already imported: load ours under its own name
     import importlib.util
     _spec = importlib.util.spec_from_file_location("fs_guard_site", GUARD_SITE / "sitecustomize.py")
