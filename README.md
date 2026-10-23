@@ -165,7 +165,9 @@ prompt `flowstate-start`.
 - **Review queue**: auto-captured summaries, and anything the AI marks as a suggestion, wait
   for your OK. Approve, edit or reject them in chat, on the review page, or with
   `flowstate approve <id>` in your terminal. The app that queued an item needs your own words
-  to decide it.
+  to decide it. An AI that reaches FlowState through the relay can't approve or reject anything
+  in the chat: it gives you the item's phone link instead (see "Chat approvals through the
+  relay" below).
 - **Review mode** (yours to set): `off`, `auto_only` (default), chosen record types, or
   `everything`. Set it for the whole install or per project. The AI may change it only when you
   ask in the chat, and every change is logged with your words. With approvals on, turning review
@@ -189,6 +191,17 @@ prompt `flowstate-start`.
   own FlowState, and the site never sees the item), or with `flowstate approve <id>` in your
   terminal. Every decision is logged with how it was made. With approvals off, an AI can delete
   without asking you; the safety copy and undo are what protect you then.
+- **Chat approvals through the relay: phone only, unless you allow them**
+  (`flowstate relay chat-approvals on|off`; off by default). An AI connected through the
+  optional relay (claude.ai, ChatGPT and other cloud AIs) can't approve or reject review items
+  in the chat, even when you tell it to there: its answer says nothing was decided and gives
+  the item's phone link, so you decide it yourself on your phone (or on the computer where
+  FlowState runs). Turn it on in a terminal on that computer (it asks you to type `y`) and
+  those AIs can approve and reject again when they quote your words, as before. Either way,
+  the items that are yours alone stay yours alone: deletes and turning review off while
+  approvals are on, and "did you say this yourself?" checks. Apps that connect directly (on
+  this computer or your own network) are not affected. There is no tool for this setting, so
+  an AI can't switch it on through FlowState.
 - **Superseded decisions**: a new decision can name the one it replaces, so only the current
   one shows in the brief.
 - **Source and last-verified flags**: records can say where they came from (`user_stated`,
@@ -410,6 +423,7 @@ the venv active). Add `-h` to any command for its options.
 | `review [--project NAME]` | List what waits in the review queue |
 | `approve ID [ID ...]` / `reject ID [--reason TEXT]` | Decide review items; asks you to type `y` in this terminal (piped input doesn't count) |
 | `approvals [on\|off] [--project P]` | Opt-in approvals (off by default). `on`: an AI's deletes and turning review off wait for you. Turning them `off` asks for `y` in this terminal. Also `approvals phone on\|off` and `approvals popup add\|remove NAME` |
+| `relay chat-approvals [on\|off]` | May AIs connected through the relay approve and reject review items in the chat? Off by default (phone only). Turning it `on` asks for `y` in this terminal; with no argument it shows the setting |
 | `review-page` | Review page in your browser (127.0.0.1 only): approve / edit / reject, review mode, pause apps, "Who did what" (with undo). You can also just click the link in your AI's answer (see "Where to see what's waiting for you") |
 | `keys add --name N [--read-only] [--workspace W]` / `keys list` / `keys revoke --id ID` (or `--name N`) | Per-app keys for the local/LAN HTTP server; the key is shown once, only a hash is kept; a revoked key stops at once |
 | `apps list` / `apps activity` / `apps pause --app NAME` / `apps resume --app NAME` | Which app did what; stop one app from writing |
@@ -501,6 +515,7 @@ gets a certificate for your address.
 <venv python> -m flowstate relay status                   # handle, URL, certificate, tunnel, CT check
 <venv python> -m flowstate relay disable                  # stop (keeps keys); `enable` to turn back on
 <venv python> -m flowstate relay forget                   # delete the device token, keys and certificate
+<venv python> -m flowstate relay chat-approvals           # may relay AIs approve in the chat? (off: phone only)
 ```
 
 During the beta the relay has room for 10 computers, one per account. If it is full,
@@ -537,7 +552,9 @@ protocol is in [docs/relay-protocol.md](docs/relay-protocol.md).
   on, an AI's deletes and turning review off need your own click or key (popup, phone or
   terminal), whatever words it passes. That stops an AI approving its own work through
   FlowState; an AI that controls your own logged-in browser or your terminal window could still
-  get through, and the popup is only as trustworthy as the app that shows it. Hard rules are
+  get through, and the popup is only as trustworthy as the app that shows it. Through the
+  relay, quoting your words isn't enough by default: an AI there can't approve or reject
+  anything in the chat unless you run `flowstate relay chat-approvals on`. Hard rules are
   shown first in every brief; FlowState can't stop an AI from doing something outside FlowState.
 - **Phone approvals and the phone list need the relay and trust flowstatemcp.com's sign-in.**
   They only exist if you use the optional FlowStateMCP hosted relay. This release pins the

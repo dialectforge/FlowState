@@ -393,7 +393,10 @@ don't show server instructions:
    phone, or `flowstate approve <id>` for their terminal). Pass it on as it is; you can't
    approve it, and no app can pass the user's OK along. (Limit: this stops agents approving their
    own work through FlowState; one that controls the user's own logged-in browser or terminal
-   could still get through.) The review page, pausing apps and git commit
+   could still get through.) Through the relay, `manage_review` approve / reject answer
+   `phone_only` by default (the user's own setting, `flowstate relay chat-approvals`, with no
+   tool for it): nothing was decided; show the user the phone link in the answer and don't
+   retry. The review page, pausing apps and git commit
    capture are the user's controls (command line / `flowstate review-page`); there is no tool
    for them.
 

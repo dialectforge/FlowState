@@ -10,7 +10,22 @@
   link is known, the local page (`review_page`) for apps on this computer, and `dont_approve`,
   a plain line telling the AI not to approve it itself but to show the user the link. Before,
   through the relay the answer had no link, so an AI offered to approve the item in the chat.
-  Approving and rejecting work as before.
+- Changed: an AI connected through the relay can no longer approve or reject review items in
+  the chat by default (`manage_review` approve / reject, and the older `review_approve` /
+  `review_reject` names), even when it quotes the user. The answer is `error: phone_only`:
+  nothing was decided, with the item's phone link (`phone`, `next`), `how_to_decide` and
+  `dont_approve`, so the user decides it on their phone (or on the computer where FlowState
+  runs). New setting `flowstate relay chat-approvals on|off` (off by default; stored with the
+  other approval settings in the database; turning it on asks for `y` in your own terminal):
+  on, relay AIs approve and reject as before when they quote you. Items that are yours alone
+  stay locked either way (deletes and turning review off with approvals on, "did you say this
+  yourself?" checks). Apps connected directly (stdio, your own network, your own tunnel) are
+  not affected. There is no tool for the setting, so an AI can't turn it on through FlowState.
+  `flowstate approvals` shows it too, and the `manage_review` description says so in one line.
+- Tests: the setup-script shortcut test checks the exact `[shortcut] <path>: would be created
+  (dry run)` line for the OS's real shortcut path (it failed on Linux, where the file is
+  `flowstate-review.desktop`), and `tests/conftest.py` no longer crashes on stock Debian /
+  Ubuntu Python, whose own `sitecustomize` has no docstring.
 
 ## 2.4.1 - 2026-10-23
 

@@ -423,6 +423,51 @@ def queue_guidance(result, db_path: Optional[Path], client: str):
     return result
 
 
+# ---------------------------------------------------------------- approve / reject via the relay
+PHONE_ONLY = ("Nothing was decided: review item #{id} still waits for the user. Through the "
+              "relay, approving and rejecting review items in a chat is off on this FlowState "
+              "(the default), even when the user asks for it here: the user decides each item "
+              "themselves, on their phone. Only the user can change this, on the computer where "
+              "FlowState runs.")
+PHONE_ONLY_WHY = ("This request came through the relay, where approving and rejecting in the "
+                  "chat is off on this FlowState.")
+
+
+def phone_only(db_path: Optional[Path], item_id) -> Optional[dict]:
+    """An AI's manage_review approve / reject (server._review_decide). Through the relay, while
+    chat approvals are off (the default; `flowstate relay chat-approvals on` allows them), a
+    pending item is refused with its own phone link (else the review list's) and the walk's
+    guidance. None: go on as usual (another connection, the setting is on, or the item is
+    missing or already decided: the usual answer says so)."""
+    from .popup import listener
+    if db_path is None or listener() != "relay" or approvals.relay_chat_on(db_path):
+        return None
+    from . import review
+    try:
+        item = review.get_item(db_path, int(item_id))
+    except Exception:  # noqa: BLE001 - not found / bad id: the usual answer
+        item = None
+    if not item or item["status"] != "pending":
+        return None
+    iid = item["id"]
+    try:
+        link = approvals.phone_link(db_path, iid)
+    except Exception:  # noqa: BLE001 - no phone link, nothing more
+        link = None
+    ways = {"phone": link} if link else links(db_path, False)
+    try:
+        nxt = approvals.ask_line(db_path, iid, "approve or reject it")
+    except Exception:  # noqa: BLE001
+        nxt = f"Waiting for the user: ask them to decide review item #{iid} themselves."
+    out = {"error": "phone_only", "message": PHONE_ONLY.format(id=iid), "item_id": iid,
+           "kind": item.get("kind"), "status": "waiting for the user", "next": nxt}
+    out.update(ways)
+    out["how_to_decide"] = how_to_decide(ways, PHONE_ONLY_WHY, False,
+                                         "the link" if ways else "where to decide it")
+    out["dont_approve"] = DONT_APPROVE if ways else DONT_APPROVE_NO_LINK
+    return out
+
+
 def _form(it: dict, i: int, n: int) -> tuple[str, dict]:
     from .popup import NOTE_FIELD
     details = " ".join(str(it.get("details") or "").split())

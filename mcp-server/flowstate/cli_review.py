@@ -253,6 +253,10 @@ def cmd_approvals(a) -> int:
             + ("" if approvals.relay_handle() else " (no relay set up)")
             + ("" if approvals.keys_ready() else "; not available in this release yet") + ".")
         say("Popup apps: " + ", ".join(sorted(approvals.popup_clients(db))))
+        say("Chat approvals through the relay: "
+            + ("on (AIs on the relay may approve / reject items that aren't yours alone)"
+               if approvals.relay_chat_on(db) else "off (phone only)")
+            + "; flowstate relay chat-approvals on|off.")
         return 0
     say(f"Approvals are now {res['now']} for {where}.")
     return 0

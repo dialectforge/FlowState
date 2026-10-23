@@ -13,7 +13,8 @@
     flowstate keys              add --name N [--read-only] [--workspace W] | list |
                                 revoke --id ID | --name N   (per-app LAN keys: app_keys.py)
     flowstate relay             enroll --code C | run | status | renew | enable | disable |
-                                forget | ct-check | ct-ack   (optional, off by default: relay/)
+                                forget | ct-check | ct-ack |
+                                chat-approvals [on|off]   (optional, off by default: relay/)
     (Phase D commands: see cli_more.py)
 
 Plain-language output; exit code 0 = OK, 1 = failed / refused. Never prints a token.

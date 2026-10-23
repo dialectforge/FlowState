@@ -1048,6 +1048,10 @@ def _user_only(out: dict, item_id: int, client: str) -> dict:
 def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
     if args.get("item_id") is None:
         return {"error": "item_id_required", "message": "Name the review item (item_id)."}
+    if identity.current() is not None:   # an AI through the relay: phone only, by default
+        no = waiting.phone_only(backend.db_path, args["item_id"])
+        if no:
+            return no
     user_request = (args.get("user_request") or "").strip()
     if not user_request:
         return {"error": "user_request_required",

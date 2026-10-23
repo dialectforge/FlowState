@@ -100,7 +100,8 @@ never guess or invent one. `manage_history(action="who", ...)` shows who did wha
   this chat, and quote their words in `user_request`. Tell the user when items are waiting; don't ask them to
   approve in the same breath as creating them. (An item your own app queued needs the user's
   own words, `own_item` otherwise; or they run `flowstate approve <id>` in their terminal.
-  Don't run it for them.)
+  Don't run it for them.) Through the relay, approve and reject are refused by default
+  (`phone_only`): show the user the phone link from the answer and let them decide there.
 - `manage_review(action="list")` gives one line per item (`next_page` for more);
   `item_id=<id>` gives one item in full. Read it before approving with edits.
 - **When the user asks what's waiting for them**, call `manage_review(action="walk")`. In

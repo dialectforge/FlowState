@@ -78,6 +78,35 @@ review shortcut on their desktop (or run `flowstate approve <id>` in a terminal)
 that runs commands or drives the user's browser) can reach the 127.0.0.1 page, as it could run
 `flowstate approve`.
 
+## Approve / reject through the relay: phone only by default (2.4.2)
+
+An AI that reaches FlowState through the relay listener can't decide any review item in the
+chat by default. What the code enforces (`waiting.phone_only`, called first in
+`server._review_decide`, so `manage_review` approve / reject and the older `review_approve` /
+`review_reject` names alike):
+
+- When the request carries an app identity (an agent, not the terminal command, the review
+  page, the popup's own answer or the phone page), came through the relay listener
+  (`popup.listener() == "relay"`, set by `remote_auth.Gate`, never from a header), and the item
+  is pending, the call is refused whatever `user_request` says (also with none). The answer:
+  `error` `phone_only`, `message` ("Nothing was decided: review item #N still waits for the
+  user. ..."), `item_id`, `kind`, `status` "waiting for the user", `next` (the one line to pass
+  on, with the item's phone link), `phone` (the item's own `/approve/<handle>/<id>?n=...` link
+  when phone links are available, else the review list's, else no link), `how_to_decide` (the
+  walk's wording) and `dont_approve`. Nothing is changed or logged as a decision. A missing or
+  already decided item gets the usual answer.
+- The setting: `approval_settings` key `relay_chat_approvals` (`approvals.relay_chat_on`),
+  `on` or absent / `off` (the default). Only `flowstate relay chat-approvals on|off` changes it
+  (`approvals.set_relay_chat`, logged in `review_mode_log` with scope `relay_chat_approvals`);
+  turning it on asks for `y` on the user's own terminal (`cli_review.open_terminal`; piped input
+  doesn't count), off needs nothing. No MCP tool reads or writes the key (a test checks).
+- On: relay requests are checked exactly as before (quote the user in `user_request`; the
+  queuing app needs the user's own words). User-only items stay locked either way: deletes
+  and turning review off queued with approvals on (approve gets "waiting for the user"), and
+  "did you say this?" items (`user_only`).
+- Not affected: stdio, the LAN listener and the public (own tunnel) listener; the phone page,
+  the phone review list and the popup (they decide as the user, with no app identity).
+
 ## "The user said so" is always user-only
 
 One kind of review item is user-only whatever the approvals setting: an app asking to change

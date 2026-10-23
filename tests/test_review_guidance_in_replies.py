@@ -142,16 +142,23 @@ def test_plain_saves_and_errors_get_no_guidance(backend, relay):
         == [4, 5, 6]
 
 
-def test_current_behaviour_relay_app_can_still_approve_with_the_users_words(backend, relay):
-    """NOT a decision: pins today's behaviour (approve over the relay is unchanged in 2.4.2)
-    so a later change is deliberate. An item that isn't user-only (approvals off; not a
-    "did you say this?" item) is approved by the app that queued it when user_request has two
-    or more words that aren't the item's own text; any other app name needs just one word."""
+def test_relay_app_cannot_approve_by_default_and_gets_the_phone_link(backend, relay):
+    """John's decision (2.4.2): through the relay, approve and reject are phone only by default
+    (`flowstate relay chat-approvals on` brings back quoting the user in user_request). Before,
+    this test pinned that the queuing app could approve over the relay with the user's words.
+    More cases: test_relay_chat_approvals.py."""
     S = backend
     _r, q = call(S, "log_work", {"project": "Alpha", "kind": "decision", "suggested": True,
                                  "summary": "Pinned behaviour item"})
     item = q["queued_for_review"]
     r, body = call(S, "manage_review", {"action": "approve", "project": "Alpha", "item_id": item,
                                         "user_request": f"Approve review item {item}"})
-    assert not r.isError, body
+    assert body["error"] == "phone_only" and body["item_id"] == item, body
+    assert body["phone"].startswith(f"https://flowstatemcp.com/approve/testbox/{item}?n=")
+    assert body["phone"] in body["how_to_decide"] and body["dont_approve"] == waiting.DONT_APPROVE
+    assert _status(S.backend.db_path, item) == "pending"
+    approvals.set_relay_chat(S.backend.db_path, True)   # the user's terminal: as before
+    r, body = call(S, "manage_review", {"action": "approve", "project": "Alpha", "item_id": item,
+                                        "user_request": f"Approve review item {item}"})
+    assert not r.isError and "error" not in body, body
     assert _status(S.backend.db_path, item) == "approved"

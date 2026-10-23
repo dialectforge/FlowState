@@ -8,6 +8,7 @@
     flowstate relay forget [--yes]
     flowstate relay ct-check
     flowstate relay ct-ack --id CRTSH_ID
+    flowstate relay chat-approvals [on|off] [--db FILE]
 
 For relay developers only: FLOWSTATE_RELAY_DOMAIN (default fsmcp.com), FLOWSTATE_RELAY_API,
 FLOWSTATE_RELAY_TUNNEL (host:port), FLOWSTATE_RELAY_TUNNEL_SNI, FLOWSTATE_RELAY_CA_FILE,
@@ -239,6 +240,55 @@ def cmd_ct_ack(a) -> int:
     return 0 if ok else 1
 
 
+CHAT_ON = ("AIs connected through the relay can approve and reject review items in the chat "
+           "when they quote you (except deletes and turning review off while approvals are on, "
+           "and \"did you say this?\" checks: those stay yours alone).")
+CHAT_OFF = ("AIs connected through the relay can't approve or reject review items; they give "
+            "you the phone link instead (the default). Apps on this computer are not affected.")
+
+
+def cmd_chat_approvals(a) -> int:
+    """May an AI on the relay approve / reject review items in the chat? Off by default.
+    Turning it on asks for `y` in your own terminal (an AI's shell has none); off needs nothing.
+    There is no tool for it, so an AI can't switch it on through FlowState."""
+    from .. import approvals
+    from .. import server as S
+    from ..cli_review import _db, open_terminal
+    db = _db(a)
+    S.init_backend(db)   # migrations first (019 holds the settings)
+    S.backend.tracker = None
+    if S.backend.error:
+        say(f"FAILED: FlowState database unavailable: {S.backend.error}")
+        return 1
+    if a.state is None:
+        on = approvals.relay_chat_on(db)
+        say(f"Chat approvals through the relay are {'on' if on else 'off'}. "
+            + (CHAT_ON if on else CHAT_OFF))
+        say("Change it: flowstate relay chat-approvals on|off")
+        return 0
+    if a.state == "on" and not approvals.relay_chat_on(db):
+        tty = open_terminal()
+        if tty is None:
+            say("Refused: turning chat approvals on asks you to confirm in a terminal, and there "
+                "is none here (piped input doesn't count). Run it yourself in a terminal window.")
+            return 2
+        try:
+            if tty.ask("Let AIs connected through the relay approve and reject review items in "
+                       "the chat? Type y to confirm: ").lower() not in ("y", "yes"):
+                say("Not confirmed; nothing changed.")
+                return 1
+        finally:
+            tty.close()
+    try:
+        res = approvals.set_relay_chat(db, a.state == "on")
+    except approvals.ApprovalError as e:
+        say(f"FAILED: {e}")
+        return 1
+    say(f"Chat approvals through the relay are now {res['now']}. "
+        + (CHAT_ON if res["now"] == "on" else CHAT_OFF))
+    return 0
+
+
 # ---------------------------------------------------------------- parser
 def register(sub) -> None:
     p = sub.add_parser("relay", help="optional relay: reach this FlowState from cloud AIs "
@@ -270,6 +320,11 @@ def register(sub) -> None:
     q = rs.add_parser("ct-ack", help="acknowledge a CT alert you have checked")
     q.add_argument("--id", type=int, required=True)
     q.set_defaults(fn=_guard(cmd_ct_ack))
+    q = rs.add_parser("chat-approvals", help="may AIs on the relay approve / reject review items "
+                                             "in the chat? (default off: phone only)")
+    q.add_argument("state", nargs="?", choices=["on", "off"], help="omit to show the setting")
+    q.add_argument("--db")
+    q.set_defaults(fn=_guard(cmd_chat_approvals))
 
 
 def _guard(fn):

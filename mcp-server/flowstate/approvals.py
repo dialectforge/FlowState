@@ -25,6 +25,11 @@ can pass the user's OK along: only a human click or keypress decides, in this or
              the site to be signed.
   3. terminal `flowstate approve <id>` asks for the user's `y` on their own terminal.
 
+Through the relay (2.4.2), an AI can't approve or reject any review item in the chat by
+default: the answer gives the user's phone link instead. `flowstate relay chat-approvals on`
+(the user's terminal only; relay_chat_on) lets it quote the user as before, except for the
+user-only items above.
+
 Turning approvals on needs nothing; turning them off needs the user's terminal
 (`flowstate approvals off` asks for `y` there). Every user-only decision is logged
 (approval_log; manage_history list shows it). Unanswered requests never approve themselves.
@@ -179,6 +184,52 @@ def phone_on(db_path: Path) -> bool:
         return not available(conn) or (_get(conn, "phone_approvals") or "on") == "on"
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------- chat approvals via the relay
+RELAY_CHAT_KEY = "relay_chat_approvals"
+
+
+def relay_chat_on(db_path: Optional[Path]) -> bool:
+    """May an AI connected through the relay approve or reject review items in the chat
+    (manage_review approve / reject, quoting the user in user_request)? Off by default: the
+    user decides on their phone (or on this computer). Only the user changes it, on this
+    computer: `flowstate relay chat-approvals on|off`; no tool reads or writes this key.
+    User-only items (user_only) stay the user's own click or key either way."""
+    if db_path is None:
+        return False
+    try:
+        conn = _conn(db_path)
+    except sqlite3.Error:
+        return False
+    try:
+        return available(conn) and _get(conn, RELAY_CHAT_KEY) == "on"
+    except sqlite3.Error:
+        return False
+    finally:
+        conn.close()
+
+
+def set_relay_chat(db_path: Path, on: bool, who: str = "command-line") -> dict:
+    """The user's terminal only (relay/cli.py). Logged with the review-mode changes."""
+    conn = _conn(db_path)
+    try:
+        if not available(conn):
+            raise ApprovalError("approvals_unavailable", "Approvals aren't set up in this database "
+                                                         "yet (migration 019); restart FlowState.")
+        conn.execute("BEGIN IMMEDIATE")
+        old = _get(conn, RELAY_CHAT_KEY)
+        new = "on" if on else "off"
+        _put(conn, RELAY_CHAT_KEY, new, who)
+        from . import identity
+        identity.insert(conn, "review_mode_log", {
+            "scope": RELAY_CHAT_KEY, "old_mode": old, "new_mode": new, "client": who[:80],
+            "caller": "command-line", "user_request": "set in the user's terminal",
+            "changed_at": _ts()}, who)
+        conn.commit()
+    finally:
+        conn.close()
+    return {"old": old or "off", "now": "on" if relay_chat_on(db_path) else "off"}
 
 
 def set_value(db_path: Path, key: str, value: Optional[str], who: str = "command-line") -> None:

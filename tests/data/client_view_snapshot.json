@@ -506,7 +506,7 @@
     "readOnlyHint": false,
     "title": "Review queue (user decides)"
    },
-   "description": "The user's review queue and mode. Summaries, suggestions, imports, clean-ups, deletes and conflicts wait. list (a line each; item_id: one in full), get_mode: read-only. walk: when the user asks what's waiting (boxes, or a list and links to share). approve: make it a record (edit or move_to first), do a delete (project: confirm_name) or confirm a conflict. reject: mark it rejected. set_mode: which new records wait. approve, reject, set_mode: ONLY call this when the user has explicitly told you, in this chat; quote them in user_request; never approve your own suggestions or change the mode to get your own writes saved. Returns {items, total}, the mode, or the result.",
+   "description": "The user's review queue and mode: summaries, suggestions, imports, clean-ups, deletes, conflicts. list (a line each; item_id: one in full), get_mode: read-only. walk: when the user asks what's waiting (boxes or links). approve: make it a record (edit / move_to first), delete (project: confirm_name), confirm a conflict. set_mode: which new records wait. approve, reject, set_mode: ONLY call this when the user has explicitly told you, in this chat; quote them in user_request; never approve your own suggestions or change the mode to get your own writes saved. Relay: approve/reject are phone-only by default; share the link. Returns {items, total}, the mode, or the result.",
    "inputSchema": {
     "properties": {
      "action": {
