@@ -900,7 +900,7 @@ def test_pre_update_is_a_safety_label():
     assert B.is_safety_copy(Path("flowstate-20261022-120000-pre-update.db"))
 
 
-RELEASE_KEY_FINGERPRINT = "SHA256:UJVoMdG58pnUO86XMZLuV2Yv21S+4WW24U4GlP2mrIQ"
+RELEASE_KEY_FINGERPRINT = "SHA256:3ZexAB20E6w1x7qWXivjtxhlqQ0RSBBuHNPilbiBzvE"
 
 
 def test_shipped_release_signers_lists_the_release_key(tmp_path):

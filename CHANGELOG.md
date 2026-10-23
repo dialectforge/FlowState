@@ -57,7 +57,7 @@
   anything changes. An unsigned tag, a key that isn't listed, an empty list ("no release signing
   key is set up yet"), a missing `ssh-keygen` or any check error: nothing is changed, and it says
   how to update by hand. `release_signers` lists one key, the FlowState release key
-  (`flowstate-release`, `SHA256:UJVoMdG58pnUO86XMZLuV2Yv21S+4WW24U4GlP2mrIQ`); see `docs/RELEASING.md`.
+  (`flowstate-release`, `SHA256:3ZexAB20E6w1x7qWXivjtxhlqQ0RSBBuHNPilbiBzvE`); see `docs/RELEASING.md`.
 - Then: a `pre-update` backup of the database (kept at least 7 days, like `pre-migration`),
   this folder's services stopped (Windows scheduled tasks, macOS LaunchAgents, Linux systemd
   user units that run from this folder; a leftover FlowState process from this `.venv` is
