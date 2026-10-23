@@ -1711,9 +1711,12 @@ def s13_approvals(W):
         o = opn(grant)
         body = o.json() if o.status_code == 200 else {}
         ck = o.headers.get("set-cookie", "").lower()
+        shown = body.get("item", {})
         R.check(13, "a good grant opens the page with the item from the local database",
-                o.status_code == 200 and body.get("item", {}).get("question", "").endswith(
-                    '"Flyer to approve on the phone" from Lakeside Bakery.')
+                o.status_code == 200
+                and shown.get("question") == "This record will be deleted from Lakeside Bakery"
+                and shown.get("summary", "").startswith(
+                    'Todo "Flyer to approve on the phone" in Lakeside Bakery')
                 and "httponly" in ck and "samesite=strict" in ck and "secure" in ck, o.text)
         R.check(13, "the same grant can't open the page twice", opn(grant).json().get("error") == "grant_used", "")
         dec = lambda d, cookie=True: hc.post(  # noqa: E731
