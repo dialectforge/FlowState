@@ -759,9 +759,9 @@ def test_collapse_dots_and_ancestry():
 
 # ---------------------------------------------------------------- service discovery
 def test_mentions_matches_only_this_folder():
-    live, dev = Path(r"C:\FlowState\FlowState-2.4"), Path(r"C:\FlowState\FlowState-2.4-dev")
-    t_live = r"cmd /c C:\FlowState\FlowState-2.4\scripts\windows\start-flowstate-http.cmd --port 8766"
-    t_dev = r"cmd /c C:\FlowState\FlowState-2.4-dev\scripts\windows\start-flowstate-http.cmd"
+    live, dev = Path(r"C:\Apps\FlowState-2.4"), Path(r"C:\Apps\FlowState-2.4-dev")
+    t_live = r"cmd /c C:\Apps\FlowState-2.4\scripts\windows\start-flowstate-http.cmd --port 8766"
+    t_dev = r"cmd /c C:\Apps\FlowState-2.4-dev\scripts\windows\start-flowstate-http.cmd"
     if os.name == "nt":
         assert SU.mentions(t_live, live) and not SU.mentions(t_live, dev)
         assert SU.mentions(t_dev, dev) and not SU.mentions(t_dev, live)
@@ -788,15 +788,15 @@ class FakeRun:
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows paths")
 def test_windows_task_discovery_matches_only_this_folder():
-    live, dev = Path(r"C:\FlowState\FlowState-2.4"), Path(r"C:\FlowState\FlowState-2.4-dev")
+    live, dev = Path(r"C:\Apps\FlowState-2.4"), Path(r"C:\Apps\FlowState-2.4-dev")
     tasks = [{"n": "\\FlowState HTTP Server", "s": "Running",
-              "a": r"cmd /c C:\FlowState\FlowState-2.4\scripts\windows\start-flowstate-http.cmd --host 192.0.2.10 --port 8766 "},
+              "a": r"cmd /c C:\Apps\FlowState-2.4\scripts\windows\start-flowstate-http.cmd --host 192.0.2.50 --port 8766 "},
              {"n": "\\FlowState Relay Agent", "s": "Running",
-              "a": r"cmd /c C:\FlowState\FlowState-2.4\scripts\windows\start-flowstate-relay.cmd --db x "},
+              "a": r"cmd /c C:\Apps\FlowState-2.4\scripts\windows\start-flowstate-relay.cmd --db x "},
              {"n": "\\FlowState Nightly Backup", "s": "Ready",
-              "a": r"C:\FlowState\FlowState-2.4\scripts\windows\backup.cmd "},
-             {"n": "\\FlowState Public Listener", "s": "Disabled", "a": r"C:\FlowState\FlowState-v2\x.cmd "},
-             {"n": "\\Dev HTTP", "s": "Running", "a": r"C:\FlowState\FlowState-2.4-dev\.venv\Scripts\python.exe -m flowstate --transport http "}]
+              "a": r"C:\Apps\FlowState-2.4\scripts\windows\backup.cmd "},
+             {"n": "\\FlowState Public Listener", "s": "Disabled", "a": r"C:\Apps\FlowState-v2\x.cmd "},
+             {"n": "\\Dev HTTP", "s": "Running", "a": r"C:\Apps\FlowState-2.4-dev\.venv\Scripts\python.exe -m flowstate --transport http "}]
     run = FakeRun({"Get-ScheduledTask": (0, json.dumps(tasks))})
     sv = SU.Services(system="Windows", run=run)
     got = sv.find(live)
