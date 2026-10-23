@@ -673,7 +673,7 @@
       "type": "string"
      },
      "user_request": {
-      "description": "The user's own words. Required.",
+      "description": "The user's own words (required).",
       "type": "string"
      }
     },

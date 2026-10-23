@@ -137,7 +137,7 @@ MANAGE_REVIEW = _tool("manage_review", guide.REVIEW_DESCRIPTION, {
     "limit": _p("list: how many (20; max 100).", "integer"),
     "after": _p("list, walk: the page after this id.", "integer"),
     "item_id": _p("list: one in full. approve / reject: its id.", "integer"),
-    "user_request": {**USER_REQUEST, "description": "The user's own words. Required."},
+    "user_request": {**USER_REQUEST, "description": "The user's own words (required)."},
     "reason": _p("reject: the user's reason (required)."),
     "summary": _p("approve: new summary."),
     "details": _p("approve: new details."),

@@ -407,7 +407,9 @@ def test_phone_approve_end_to_end(on, relay):
     r = _open(c, item, grant)
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["item"]["question"] == 'Cursor wants to delete the todo "Alpha todo" from Alpha.'
+    assert body["item"]["question"] == "This record will be deleted from Alpha"
+    assert body["item"]["summary"].startswith('Todo "Alpha todo" in Alpha')
+    assert "priority" in body["item"]["summary"]
     cookie = r.headers["set-cookie"].lower()
     assert "httponly" in cookie and "secure" in cookie and "samesite=strict" in cookie
     assert _open(c, item, grant).json()["error"] == "grant_used"           # one load per grant
