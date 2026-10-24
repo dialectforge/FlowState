@@ -403,3 +403,52 @@ def test_a_walk_that_showed_boxes_drops_the_review_card_pointer(backend, seeded_
     out = json.loads(asyncio.run(go()).content[0].text)
     assert out["walked"] == [f"#{item}: approved"]
     assert "show_card" not in out and "card_note" not in out
+
+
+# ---------------------------------------------------------------- the brief's card hint (task 40)
+def brief(S, app="Cursor"):
+    return call(S, "start_here", {"project": "Alpha"}, app=app)[1]
+
+
+def test_brief_says_how_many_review_cards_wait_on_mcp_apps_hosts_only(backend, seeded_db,
+                                                                      monkeypatch):
+    S = backend
+    suggest(S, "Use Redis for caching")
+    suggest(S, "Add a health check", kind="todo")
+    plain = brief(S)
+    assert "show_review_card" not in plain and "Review cards:" not in plain   # no card tool there
+    assert "Review queue: 2 items waiting" in plain
+    monkeypatch.setattr(review_cards, "client_has_ui", lambda: True)
+    text = brief(S)
+    want = ('Review cards: 2 items wait for the user; call show_review_card(project="Alpha") '
+            'to show them as cards in the chat.')
+    assert want in text and text.count("show_review_card") == 1
+
+
+def test_brief_card_hint_is_quiet_when_nothing_waits_and_counts_one(backend, seeded_db, ui):
+    S = backend
+    assert "show_review_card" not in brief(S)
+    item = suggest(S, "Use Kafka for events")
+    assert "Review cards: 1 item waits for the user" in brief(S)
+    ok(call(S, "manage_review", {"action": "reject", "item_id": item, "project": "Alpha",
+                                 "user_request": "User: reject the Kafka suggestion please",
+                                 "reason": "not needed"},
+            app="Claude Code"))
+    assert "show_review_card" not in brief(S)
+
+
+def test_brief_names_both_cards_on_one_line_when_both_kinds_wait(backend, seeded_db, ui):
+    S = backend
+    a = ok(call(S, "log_work", {"project": "Alpha", "kind": "decision",
+                                "summary": "Charge in USD only"}))["record"]["id"]
+    b = ok(call(S, "log_work", {"project": "Alpha", "kind": "decision",
+                                "summary": "Offer a yearly plan"}))["record"]["id"]
+    dis = ok(call(S, "manage_links", {"action": "flag_conflict", "project": "Alpha",
+                                      "topic": "pricing", "item_id": a, "target_id": b}))["flagged"]
+    suggest(S, "Use Redis for caching")
+    text = brief(S)
+    lines = [ln for ln in text.splitlines() if "show_conflict_card" in ln or "show_review_card" in ln]
+    assert lines == [f'Cards waiting: call show_conflict_card(project="Alpha", item_id={dis}) for '
+                     f'the disagreement and show_review_card(project="Alpha") for the other 1 item, '
+                     f'to show them in the chat.']
+    assert "Disagreement card waiting" not in text and "Review cards:" not in text

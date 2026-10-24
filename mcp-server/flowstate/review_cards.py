@@ -221,6 +221,33 @@ def both(conflict: dict, rest: dict) -> dict:
                          f"disagreement(s) and {calls[1]} for the rest. Don't choose for them."}
 
 
+def brief_hint(conn, pid: int, project: str, card_hint: Optional[str] = None) -> Optional[str]:
+    """On MCP Apps hosts, when non-disagreement items wait in the project: how many, and the
+    call that shows them as cards. `card_hint` is the disagreement card's own hint
+    (conflict_cards.brief_hint); when both wait, one line names both calls."""
+    if not client_has_ui() or not review.available(conn):
+        return card_hint
+    n = conn.execute("SELECT COUNT(*) FROM review_items WHERE project_id = ? AND status = 'pending' "
+                     "AND kind != 'disagreement'", (pid,)).fetchone()[0]
+    if not n:
+        return card_hint
+    items = f"{n} item{'s' if n != 1 else ''}"
+    call = show_call(project, [])
+    if card_hint:
+        dis, k = conflict_call(conn, pid, project)
+        return (f"Cards waiting: call {dis} for the disagreement{'s' if k > 1 else ''} and "
+                f"{call} for the other {items}, to show them in the chat.")
+    return (f"Review cards: {items} wait{'s' if n == 1 else ''} for the user; call {call} to "
+            f"show them as cards in the chat.")
+
+
+def conflict_call(conn, pid: int, project: str) -> tuple:
+    from . import conflict_cards
+    ids = [r[0] for r in conn.execute("""SELECT review_item_id FROM conflict_cards WHERE project_id = ?
+                                         AND status = 'open' AND review_item_id IS NOT NULL""", (pid,))]
+    return conflict_cards.show_call(project, ids), len(ids)
+
+
 # ---------------------------------------------------------------- show_review_card
 def show(db_path: Path, args: dict, pid: Optional[int]) -> dict:
     """One item (item_id, any status) or up to SHOW_MAX waiting ones, oldest first (in a

@@ -182,6 +182,8 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
         from . import conflict_cards
         card_line = conflict_cards.brief_line(conn, pid)
         card_hint = conflict_cards.brief_hint(conn, pid, name)
+        from . import review_cards
+        card_hint = review_cards.brief_hint(conn, pid, name, card_hint)
         mode_line = review_mode.brief_line(db_path, pid) if review_mode.available(conn) else None
         from .deletes import recent_line
         deleted_line = recent_line(conn, pid, name)
