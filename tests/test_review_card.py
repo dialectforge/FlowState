@@ -384,3 +384,22 @@ def test_card_html_is_self_contained_and_uses_text_content():
     assert 'data-theme="dark"' in CARD_HTML and "--accent" in CARD_HTML
     assert re.search(r"maxLength = 300", script) and "Reason (optional)" in script
     assert MIME == "text/html;profile=mcp-app" and UI_URI == "ui://flowstate/review-card.html"
+
+
+def test_a_walk_that_showed_boxes_drops_the_review_card_pointer(backend, seeded_db, ui):
+    """An app that shows FlowState's boxes and draws cards: the boxes asked about each item,
+    so the answer doesn't point at review cards for them too."""
+    S = backend
+    item = review.add_item(seeded_db, 1, "todo", "Waiting thing", None, {}, "cursor")
+
+    async def elicit(_ctx, _params):
+        return types.ElicitResult(action="accept", content={"approve": True})
+
+    async def go():
+        async with create_connected_server_and_client_session(
+                S.server, client_info=types.Implementation(name="claude-code", version="1"),
+                elicitation_callback=elicit) as c:
+            return await c.call_tool("manage_review", {"action": "walk"})
+    out = json.loads(asyncio.run(go()).content[0].text)
+    assert out["walked"] == [f"#{item}: approved"]
+    assert "show_card" not in out and "card_note" not in out
