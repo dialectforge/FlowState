@@ -708,10 +708,10 @@ FlowState's `config.json` (or a `.flowstate-no-self-update` file in the folder).
 `python setup_flowstate.py --clients <your apps> --verify` with the same options as when you
 set it up, then quit and reopen your AI apps. 2.4.0, the first release that has
 `flowstate update`, has to be installed this way; if you don't have 2.4.0 yet, install the
-newest release (2.4.3) the same way. From 2.4.0, 2.4.1 or 2.4.2 to 2.4.3 `flowstate update`
-works, on Windows too (2.4.3 needs no new `.venv`). (If your folder is at a release tag instead
+newest release (2.4.4) the same way. From 2.4.0, 2.4.1, 2.4.2 or 2.4.3 to 2.4.4 `flowstate update`
+works, on Windows too (2.4.4 needs no new `.venv`). (If your folder is at a release tag instead
 of `main`, `git pull` says you are not on a branch: run `git fetch --tags` and
-`git checkout v2.4.3` instead.)
+`git checkout v2.4.4` instead.)
 
 ### From v1.1
 

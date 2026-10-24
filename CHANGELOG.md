@@ -1,9 +1,9 @@
 # Changelog
 
-## Unreleased
+## 2.4.4 - 2026-10-24
 
-- No new dependencies and no database migration. `flowstate update` from 2.4.3 needs no new
-  `.venv`.
+- No new dependencies and no database migration. `flowstate update` from 2.4.0 to 2.4.3
+  needs no new `.venv`.
 - Review cards in the chat. Hosts that support MCP Apps (such as Claude Desktop) now get a card
   for everything else that waits in the review queue: session summaries, suggestions, imports,
   clean-up ideas, markdown edits and possible conflicts. The AI calls a new read-only tool,
