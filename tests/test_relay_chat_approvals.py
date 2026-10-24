@@ -302,6 +302,8 @@ def test_only_the_terminal_and_the_local_page_write_the_other_settings():
         ["cli_review.py", "review_page.py"]
     assert _callers(r"change_popup_clients\(", "approvals.py") == ["cli_review.py", "review_page.py"]
     assert _callers(r"set_self_update\(", "updates.py") == ["review_page.py"]
+    # (task 41) the terminal's `flowstate update self-update on|off` reaches it in updates.py
+    assert _callers(r"cli_self_update\(", "updates.py") == ["cli_more.py"]
     assert _callers(r"[\"']self_update[\"']\s*\]\s*=", "updates.py") == []
     assert _callers(r"approvals:project:", "approvals.py") == ["review_page.py"]   # reads only
 

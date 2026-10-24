@@ -402,10 +402,7 @@ class Page:
         state = form.get("state")
         if state not in ("on", "off"):
             raise ValueError("state")
-        old = "allowed" if updates.self_update_allowed() else "by hand"
-        updates.set_self_update(state == "on")
-        new = "allowed" if updates.self_update_allowed() else "by hand"
-        self._log("config:self_update", old, new)
+        new = updates.set_self_update(state == "on", self.db_path, self.client, SETTING_WORDS)["now"]
         return ("`flowstate update` may update this computer again." if new == "allowed" else
                 "This computer is now updated by hand: `flowstate update` refuses to run.")
 
@@ -771,7 +768,10 @@ class Page:
         allowed = updates.self_update_allowed()
         from .selfupdate import FOLDER, OPT_OUT_FILE
         file_note = (f"A {OPT_OUT_FILE} file in the FlowState folder also keeps this folder "
-                     "updated by hand." if (FOLDER / OPT_OUT_FILE).exists() else "")
+                     "updated by hand (delete it yourself to allow updates). "
+                     if (FOLDER / OPT_OUT_FILE).exists() else "")
+        file_note += ("In a terminal: <code>flowstate update self-update on|off</code> (no word "
+                      "shows the value and where it comes from).")
         out.append(self._row(
             "Updates by flowstate update",
             "Whether <code>flowstate update</code> may update FlowState on this computer when you "

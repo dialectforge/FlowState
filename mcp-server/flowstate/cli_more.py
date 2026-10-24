@@ -9,6 +9,7 @@
     flowstate import-memory  --project P FILE [--source Claude|ChatGPT] [--kind learning]
     flowstate git-capture    enable --project P --repo PATH | disable --project P | status | run [--project P]
     flowstate update         check [on|off|now]   (the daily update check: updates.py)
+    flowstate update         self-update [on|off] (may `flowstate update` update this computer: updates.py)
     flowstate update         [--dry-run] [--yes --user-said TEXT] [--rollback] [--db FILE] [--app NAME]
                              (move this install to the newest signed release: selfupdate.py)
 """
@@ -187,6 +188,8 @@ def cmd_update(a) -> int:
     from . import updates
     if a.action == "check":
         return updates.cli_check(a.sub, say)
+    if a.action == "self-update":
+        return updates.cli_self_update(a.sub, _db(a), say)
     from . import selfupdate
     return selfupdate.cli(a, say)
 
@@ -252,8 +255,9 @@ def register(sub) -> None:
     p.set_defaults(fn=cmd_git_capture)
 
     p = sub.add_parser("update", help="update to the newest signed release (only when the user asks); "
-                                      "`update check [on|off|now]`: the daily update check")
-    p.add_argument("action", nargs="?", choices=["check"])
+                                      "`update check [on|off|now]`: the daily update check; "
+                                      "`update self-update [on|off]`: may `flowstate update` run here")
+    p.add_argument("action", nargs="?", choices=["check", "self-update"])
     p.add_argument("sub", nargs="?", choices=["on", "off", "now"])
     p.add_argument("--dry-run", action="store_true", help="check everything and show the plan; change nothing")
     p.add_argument("--yes", action="store_true", help="don't ask in the terminal (needs --user-said)")

@@ -481,6 +481,7 @@ the venv active). Add `-h` to any command for its options.
 | `migrate [--dry-run]` | Apply new database migrations (backup first) |
 | `update --dry-run` / `update` / `update --rollback` | Update to the newest signed release (dry run first; asks for `y`; rolls back on any failure). See "Upgrading" |
 | `update check` / `update check on\|off\|now` | The daily update check: show the last result, turn it on or off, or check now |
+| `update self-update` / `update self-update on\|off` | May `flowstate update` update this computer? Show the value and where it comes from (`config.json`, the `.flowstate-no-self-update` file, or the default), or change it (`off`: you update by hand) |
 | `cleanup --project NAME [--queue]` | Clean-up suggestions (printed; `--queue` sends them to the review queue) |
 | `export-md --project NAME --out FILE` / `import-md --project NAME FILE` | Readable markdown copy; edits come back through the review queue |
 | `import-memory --project NAME FILE --source Claude` | A Claude / ChatGPT memory export into the review queue |
@@ -714,8 +715,10 @@ plan, then `<venv python> -m flowstate update --yes --user-said "<your words>"`.
 Then quit and reopen your AI apps; until you do, an app still running the old version says so
 in its brief. `flowstate update --rollback` goes back to the version before the last update.
 A developer setup (your own branch or commits, extra worktrees, a linked `.venv`) is refused:
-update it by hand. To turn `flowstate update` off on a computer, put `"self_update": false` in
-FlowState's `config.json` (or a `.flowstate-no-self-update` file in the folder).
+update it by hand. To turn `flowstate update` off on a computer, run
+`flowstate update self-update off` (it puts `"self_update": false` in FlowState's `config.json`;
+`on` turns it back on, and with no word it shows the value), use the review page's Settings, or
+put a `.flowstate-no-self-update` file in the folder (that file wins until you delete it).
 
 **By hand (and to install 2.4.0 or later the first time).** In the FlowState folder run `git pull`, then
 `python setup_flowstate.py --clients <your apps> --verify` with the same options as when you

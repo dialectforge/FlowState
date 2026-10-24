@@ -75,15 +75,66 @@ def self_update_allowed() -> bool:
         return True
 
 
-def set_self_update(allowed: bool) -> Path:
-    """config.json "self_update": allowed -> the key is removed (the default), else false. Only
-    the local review page (review_page.py) calls this; no MCP tool reads or writes it."""
+SELF_UPDATE_SCOPE = "config:self_update"
+
+
+def set_self_update(allowed: bool, db_path: Optional[Path] = None, who: str = "command-line",
+                    how: Optional[str] = None) -> dict:
+    """config.json "self_update": allowed -> the key is removed (the default), else false, and
+    one review_mode_log row in `db_path` (when that database has the table) saying `who` changed
+    it and `how`. Only the user's terminal (`flowstate update self-update on|off`, cli_self_update
+    below) and the local review page (review_page.py) call this; no MCP tool reads or writes it."""
+    old = "allowed" if self_update_allowed() else "by hand"
     cfg = paths.load_config()
     if allowed:
         cfg.pop("self_update", None)
     else:
         cfg["self_update"] = False
-    return paths.save_config(cfg)
+    path = paths.save_config(cfg)
+    new = "allowed" if self_update_allowed() else "by hand"
+    if db_path is not None and Path(db_path).is_file():
+        from . import approvals, dbconn, identity, review_mode
+        conn = dbconn.connect(str(db_path), timeout=5.0)
+        try:
+            conn.execute("PRAGMA busy_timeout = 5000")
+            if review_mode.available(conn):
+                identity.insert(conn, "review_mode_log", {
+                    "scope": SELF_UPDATE_SCOPE, "old_mode": old, "new_mode": new,
+                    "client": who[:80], "caller": who[:80],
+                    "user_request": how or approvals.TERMINAL_WORDS,
+                    "changed_at": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())}, who)
+                conn.commit()
+        finally:
+            conn.close()
+    return {"old": old, "now": new, "path": path}
+
+
+def opt_out_file() -> Optional[Path]:
+    """The FlowState folder's `.flowstate-no-self-update` file if it is there, else None."""
+    try:
+        from .selfupdate import FOLDER, OPT_OUT_FILE
+    except ImportError:
+        return None
+    f = FOLDER / OPT_OUT_FILE
+    return f if f.exists() else None
+
+
+def self_update_status() -> dict:
+    """What `flowstate update self-update` shows: allowed or not, and why."""
+    file = opt_out_file()
+    try:
+        in_config = "self_update" in paths.load_config()
+    except Exception:  # noqa: BLE001
+        in_config = False
+    allowed = self_update_allowed()
+    if file is not None:
+        source = "file"
+    elif not allowed:
+        source = "config.json"
+    else:
+        source = "config.json" if in_config else "default"
+    return {"allowed": allowed and file is None, "config_allowed": allowed, "source": source,
+            "file": file, "config": paths.config_file()}
 
 
 def has_update_command() -> bool:
@@ -374,6 +425,45 @@ def cli_check(sub: Optional[str], say=print) -> int:
         _show(st, say)
         return 0 if not st.get("last_error") else 1
     _show(read_state(), say)
+    return 0
+
+
+# ---------------------------------------------------------------- `flowstate update self-update`
+def cli_self_update(sub: Optional[str], db_path: Optional[Path], say=print) -> int:
+    """on / off: config.json "self_update", logged like the review page's Settings. No argument:
+    the value now and where it comes from. No confirm prompt (as on the page). The
+    .flowstate-no-self-update file is never deleted here; `on` says it still keeps updates off."""
+    if sub in ("on", "off"):
+        res = set_self_update(sub == "on", db_path)
+        if sub == "off":
+            say(f"This computer is now updated by hand: `flowstate update` refuses to run "
+                f"(saved in {res['path']}). `flowstate update self-update on` allows it again.")
+            return 0
+        say(f"config.json allows `flowstate update` again (saved in {res['path']}).")
+        file = opt_out_file()
+        if file is not None:
+            say(f"But the file {file} still keeps this folder updated by hand, so "
+                "`flowstate update` still refuses. To allow it, delete that file yourself "
+                f"(macOS / Linux: rm \"{file}\"; Windows: del \"{file}\"). FlowState leaves it "
+                "where it is.")
+        return 0
+    if sub is not None:
+        say("Use `flowstate update self-update on`, `off`, or no word to see the value.")
+        return 2
+    st = self_update_status()
+    word = "allowed" if st["allowed"] else "by hand"
+    if st["source"] == "file":
+        why = (f"the file {st['file']} keeps this folder updated by hand"
+               + ("" if st["config_allowed"] else
+                  f"; config.json also says \"self_update\": false, in {st['config']}"))
+    elif st["source"] == "config.json":
+        why = (f"config.json says \"self_update\": false, in {st['config']}" if not st["allowed"]
+               else f"set in config.json, {st['config']}")
+    else:
+        why = "the default; config.json has no \"self_update\""
+    say(f"Updates by `flowstate update`: {word} ({why}).")
+    say("Change it with `flowstate update self-update on|off`"
+        + (" (the file wins until you delete it)." if st["source"] == "file" else "."))
     return 0
 
 

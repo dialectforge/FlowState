@@ -45,6 +45,14 @@
   name still stops it, and an app can't decide its own review item by sending a different
   name (the same sign-in counts as the same app). Rows already saved are not changed. Local,
   LAN and own-tunnel callers are recorded as before.
+- `flowstate update self-update on|off`: whether `flowstate update` may update this computer,
+  from the terminal (`config.json` `"self_update"`, the same setting as on the review page's
+  Settings). With no word it shows the value and where it comes from: `config.json`, the
+  `.flowstate-no-self-update` file, or the default. A change is logged in `review_mode_log` like
+  the page's (as `command-line`, "set in the user's terminal") and shows in the page's recent
+  changes. No confirm prompt, as on the page. If the `.flowstate-no-self-update` file is there,
+  `on` says it still keeps the folder updated by hand and how to delete it; FlowState never
+  deletes it.
 
 ## 2.4.4 - 2026-10-24
 
