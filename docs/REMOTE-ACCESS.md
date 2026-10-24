@@ -79,7 +79,11 @@ claude.ai or ChatGPT work through Cloudflare Access Managed OAuth; whether the p
    public URL, just like the LAN token. `flowstate remote add-client` makes a per-app
    **remote** token (prefix `fs_ct_`) for the public listener (it also works on the LAN
    listener, as before). Both record the app's name from the key or token, not from what the
-   app says; for remote apps the machine recorded is the client's name. Changes made with the
+   app says; for remote apps the machine recorded is the client's name. Through the relay one
+   sign-in is often shared by several cloud apps (or named after another app), so there the
+   app recorded is the name the connecting app sends ("Relay (unknown app)" if it sends none)
+   and the machine is "relay (signed in as <the token's or OAuth app's name>)"; pausing either
+   name stops its writes. Changes made with the
    shared LAN token are marked "shared token (legacy)". Every change keeps the app, the model
    (only when the app supplies it, for example with an `X-FlowState-Model` header) and how the
    app was identified; see "Who did what" on the review page.

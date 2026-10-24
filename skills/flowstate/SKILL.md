@@ -126,7 +126,8 @@ never guess or invent one. `manage_history(action="who", ...)` shows who did wha
   user asks to see what's waiting, call it; the user taps Approve or Reject on the cards
   themselves. It only shows; never decide for them, and don't ask them to type the answer in
   the chat instead. If `show_card` is a list, call each (disagreements use
-  `show_conflict_card`). In apps without cards, show the plain list as above.
+  `show_conflict_card`). The brief's "Review cards: N items wait" (or "Cards waiting: ...")
+  line names the same call. In apps without cards, show the plain list as above.
 - **Writes come with a receipt** (`receipt.saved`). If a write times out, don't repeat it:
   the next FlowState answer says whether it saved.
 - **Delete only when the user wants something gone**: `manage_projects(action="delete" |

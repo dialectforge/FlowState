@@ -368,7 +368,9 @@ don't show server instructions:
    same links. In apps that draw MCP Apps cards, a list or walk answer with waiting items also
    has `show_card` naming `show_review_card(project=..., item_id=...)` (and `show_conflict_card`
    for disagreements; a list when both wait): call it and the user taps Approve or Reject on
-   the card. It only shows; the tap is theirs.
+   the card. It only shows; the tap is theirs. There the brief also says how many items wait
+   and names `show_review_card(project=...)` (one line naming both calls when a disagreement
+   waits too); apps without cards don't get that line.
 7. The **review mode** (`off`, `auto_only` default, `types`, `everything`; shown in the brief)
    decides what else waits for review. Only call `manage_review(action="set_mode")` when the
    user asks for that change in the chat, quoting their words in `user_request`; every change
@@ -429,7 +431,9 @@ don't show server instructions:
    on it; `search` without a query lists the newest records.
 12. Every recorded change keeps the app, the model (only if supplied), the machine or
    workspace, and how the app was identified (`app_key`, `oauth_client`, `remote_token`,
-   `shared_token` or `self_reported`). `manage_history(action="who", by_app=..., by_model=...,
+   `shared_token` or `self_reported`). Through the relay the app is the name the connecting app
+   sends (else "Relay (unknown app)") and the machine is "relay (signed in as <key or OAuth
+   app name>)". `manage_history(action="who", by_app=..., by_model=...,
    by_machine=..., since=..., until=...)` lists who did what (read-only).
 13. Several agents can work on one project at once. Before you start a todo,
    `manage_todos(action="claim", project=..., todo_id=<id>)` (`minutes`, default 15, max 120;

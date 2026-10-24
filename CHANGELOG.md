@@ -33,6 +33,18 @@
   page call the writers).
 - The local review page is now readable in a phone-sized window (viewport, 44 px buttons,
   tables scroll inside themselves).
+- In apps that draw MCP Apps cards, the brief now says how many review items wait and names
+  `show_review_card(project=...)`, as it already did for a disagreement card. When both wait
+  it is one line naming both calls. Apps without cards get the review-queue line as before.
+- Fixed: items, claims and changes written by an AI connected through the relay showed the
+  name of the sign-in it used (for example a remote token named "Cursor", or one OAuth sign-in
+  shared by several cloud apps) as the app that wrote them, on the review page, the phone list
+  and the cards. Through the relay the app recorded is now the name the connecting app sends
+  at connect time, or "Relay (unknown app)" if it sends none, and the machine is "relay
+  (signed in as <sign-in name>)", so the sign-in is still on record. Pausing the sign-in's
+  name still stops it, and an app can't decide its own review item by sending a different
+  name (the same sign-in counts as the same app). Rows already saved are not changed. Local,
+  LAN and own-tunnel callers are recorded as before.
 
 ## 2.4.4 - 2026-10-24
 
