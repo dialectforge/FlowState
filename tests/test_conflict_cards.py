@@ -536,3 +536,23 @@ def test_show_conflict_card_reads_one_or_all_and_never_decides(backend, seeded_d
     assert saved.structuredContent["cards"][0]["resolved"] is True
     r, _body = call(S, "show_conflict_card", {"item_id": one})
     assert r.structuredContent["cards"][0]["detail"].startswith("Kept both")
+
+
+def test_the_app_that_opened_a_card_cant_dismiss_it_by_quoting_its_own_claim(backend, seeded_db):
+    """A same-component card is the saving app's own item: its own words are both claims,
+    not only the headline (the e2e S3 check, as a unit test)."""
+    S = backend
+    decide(S, "Show prices including sales tax on the menu page", app="Claude", component="Core")
+    hit = decide(S, "Show prices including sales tax on the cart page", app="Grok", component="Core")
+    item = hit["conflict_cards"][0]["review_item_id"]
+    _r, body = call(S, "manage_review", {"action": "reject", "project": "Alpha", "item_id": item,
+                                         "reason": "fine",
+                                         "user_request": "Show prices including sales tax on the cart page"},
+                    app="Grok")
+    assert body["error"] == "own_item"
+    assert rows(seeded_db, "SELECT status FROM review_items WHERE id = ?", item)[0][0] == "pending"
+    out = ok(call(S, "manage_review", {"action": "reject", "project": "Alpha", "item_id": item,
+                                       "reason": "both can stand",
+                                       "user_request": "User: these two can both stand, dismiss it"},
+                  app="Grok"))
+    assert out["rejected"] == item

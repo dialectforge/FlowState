@@ -24,6 +24,10 @@
   every kind. Approving or rejecting runs the same step as `manage_review` (one shared module,
   `review_apply.py`); `manage_review`'s own rules are unchanged. Card taps are not
   cryptographically proven to be a person, as with the disagreement card.
+- Fix: the app whose save opened a disagreement card could dismiss it through `manage_review`
+  by quoting its own decision: the card's own words were only its headline ("Two AIs disagree
+  about ..."). The own-item check now compares against both claims on the card, as it did for
+  the possible-conflict item the card replaced in 2.4.3. (Found by the end-to-end run, S3.)
 - Fix: the review page's port note (`review-page/<db>.json`) now goes under `FLOWSTATE_HOME`
   when that is set, instead of always the per-OS data folder, so a second install or a test
   database no longer writes into the main one's folder. New data-folder git repos ignore

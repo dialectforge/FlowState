@@ -1073,6 +1073,15 @@ def _user_only(out: dict, item_id: int, client: str) -> dict:
     return out
 
 
+def _own_text(item: dict) -> dict:
+    """A disagreement's own words are its two claims (the card text), not only its headline,
+    so the app that made it can't decide it by quoting its own record."""
+    if item.get("kind") != "disagreement":
+        return item
+    packed = _safe_call(conflict_cards.ui_for_item, backend.db_path, item)
+    return {**item, "details": packed["text"]} if packed else item
+
+
 def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
     if args.get("item_id") is None:
         return {"error": "item_id_required", "message": "Name the review item (item_id)."}
@@ -1096,7 +1105,7 @@ def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
             return no   # a "did the user say this?" item: the user's alone
         if locked and agent and name == "review_approve":   # only the user's own click or key
             return _user_only({"item_id": item["id"], "kind": item["kind"]}, item["id"], client)
-        own = review.own_item_refusal(item, identity.current(), user_request)
+        own = review.own_item_refusal(_own_text(item), identity.current(), user_request)
         if own:
             return own
         if name == "review_approve" and item and item.get("kind") == "disagreement":
