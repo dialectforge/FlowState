@@ -274,9 +274,15 @@ def resolve_replaced(db_path: Path, by_decision: int, replaced: int,
         except Exception:
             conn.execute("ROLLBACK")
             raise
-        return [f"D{r['new_id']} vs D{r['old_id']}" for r in rows]
+        out = [f"D{r['new_id']} vs D{r['old_id']}" for r in rows]
     finally:
         conn.close()
+    try:
+        from . import conflict_cards
+        conflict_cards.on_decision_replaced(db_path, by_decision, replaced, client)
+    except Exception:  # noqa: BLE001 - the replacement itself is already saved
+        pass
+    return out
 
 
 def _pair_of(conn, item: dict):
@@ -319,10 +325,15 @@ def dismiss(db_path: Path, item_id: int, client: Optional[str] = None) -> dict:
         conn.execute(f"""UPDATE decision_conflicts SET status = 'dismissed_compatible',
                         resolved_at = ?{sets} WHERE id = ? AND status = 'open'""",
                      (_now(), *who, row["id"]))
-        return {"dismissed": f"D{row['new_id']} vs D{row['old_id']}: marked compatible; no "
-                             f"longer shown."}
+        new_id, old_id = row["new_id"], row["old_id"]
     finally:
         conn.close()
+    try:
+        from . import conflict_cards
+        conflict_cards.on_conflict_dismissed(db_path, new_id, old_id, client)
+    except Exception:  # noqa: BLE001 - the dismissal itself is already saved
+        pass
+    return {"dismissed": f"D{new_id} vs D{old_id}: marked compatible; no longer shown."}
 
 
 # ---------------------------------------------------------------- the brief

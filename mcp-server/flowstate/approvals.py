@@ -502,6 +502,14 @@ def describe(item: dict, project: str, db_path: Optional[Path] = None) -> str:
         return (f'mark the {p.get("record_type") or "record"} "{title}" in {project} as '
                 f"something you said yourself (user_stated)")
     if item["kind"] == "delete":
+        if db_path is not None:
+            try:
+                from . import deletes
+                live = deletes.question(db_path, item, project)
+                if live:
+                    return live
+            except Exception:  # noqa: BLE001 - the stored counts still describe it
+                pass
         rtype, title = p.get("record_type") or "record", " ".join(str(p.get("title") or "").split())
         title = title if len(title) <= 60 else title[:57] + "..."
         if rtype == "project":

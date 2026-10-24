@@ -21,15 +21,15 @@
     "readOnlyHint": true,
     "title": "Project brief (start here)"
    },
-   "description": "CALL THIS FIRST in every conversation about a project. Returns the brief as text: hard rules, a handoff note if any, review mode, possible conflicts, open todos (and claims) and problems, recent changes, decisions and learnings, facts to re-check, linked projects. No project: lists projects. size=deep: full working context. Side effects: opens or reuses the automatic session, notes when you looked, runs the user's opt-in git capture.",
+   "description": "CALL THIS FIRST in every conversation about a project. Returns the brief as text: hard rules, a handoff note if any, review mode, possible conflicts, open todos (and claims) and problems, recent changes, decisions and learnings. No project: lists projects. Side effects: opens or reuses the automatic session, notes when you looked, runs the user's opt-in git capture.",
    "inputSchema": {
     "properties": {
      "folder": {
-      "description": "Working folder; picks the project if none is given.",
+      "description": "Working folder, if no project is given.",
       "type": "string"
      },
      "project": {
-      "description": "Project name or id. Omit to get the project list.",
+      "description": "Name or id. Omit to list projects.",
       "type": [
        "string",
        "integer"
@@ -37,7 +37,7 @@
      },
      "size": {
       "default": "standard",
-      "description": "quick (~1,500 chars), standard (4,000, default) or deep (12,000).",
+      "description": "quick, standard (default) or deep.",
       "enum": [
        "quick",
        "standard",
@@ -58,7 +58,7 @@
     "readOnlyHint": false,
     "title": "Log work"
    },
-   "description": "Record one new decision (a choice and why), change (code or setup), problem (bug or blocker), learning (reusable lesson) or todo in a project. To update todos or problems: manage_todos / manage_problems. Only adds. Review mode or suggested=true may queue it for the user. A change on a shared component alerts linked projects. A decision close to a current one gets a possible-conflict note; act on it. Secrets are refused. Returns {logged, record, note} or {queued_for_review}.",
+   "description": "Record one new decision (a choice and why), change (code or setup), problem (bug or blocker), learning (reusable lesson) or todo in a project. To update todos or problems: manage_todos / manage_problems. Only adds. Review mode or suggested=true may queue it for the user. A change on a shared component alerts linked projects. A decision close to a current one gets a possible-conflict note; act on it. conflicts_with opens a disagreement card. Secrets are refused. Returns {logged, record, note} or {queued_for_review}.",
    "inputSchema": {
     "properties": {
      "category": {
@@ -76,12 +76,36 @@
       "type": "string"
      },
      "component": {
-      "description": "Component name (created if missing; change / problem default General); shared ones too.",
+      "description": "Component name; created if missing. Shared ones too.",
+      "type": "string"
+     },
+     "conflicts_with": {
+      "description": "Record id this disagrees with.",
+      "type": "integer"
+     },
+     "conflicts_with_type": {
+      "description": "Default decision.",
+      "enum": [
+       "project",
+       "component",
+       "decision",
+       "change",
+       "learning",
+       "problem",
+       "todo"
+      ],
       "type": "string"
      },
      "details": {
-      "description": "Why, what was rejected, old / new values. Max 10,000 chars.",
+      "description": "Why, or old and new values. Max 10,000 chars.",
       "type": "string"
+     },
+     "evidence": {
+      "description": "Up to 2: file:line or output: text.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
      },
      "kind": {
       "description": "The record kind (see the description).",
@@ -95,11 +119,11 @@
       "type": "string"
      },
      "model": {
-      "description": "Your model name if you know it. Never guess.",
+      "description": "Model name if known. Never guess.",
       "type": "string"
      },
      "priority": {
-      "description": "todo / problem only. Default normal; high and medium are older names.",
+      "description": "todo or problem. Default normal.",
       "enum": [
        "critical",
        "urgent",
@@ -118,11 +142,11 @@
       ]
      },
      "replaces": {
-      "description": "decision only: id of the decision this replaces.",
+      "description": "Decision id this one replaces.",
       "type": "integer"
      },
      "source": {
-      "description": "Where it came from: the user, your inference, or the code.",
+      "description": "user_stated, ai_inferred or from_code.",
       "enum": [
        "user_stated",
        "ai_inferred",
@@ -136,6 +160,10 @@
      },
      "summary": {
       "description": "The record in one short line.",
+      "type": "string"
+     },
+     "topic": {
+      "description": "Short topic, e.g. API sessions.",
       "type": "string"
      }
     },
@@ -155,7 +183,7 @@
     "readOnlyHint": true,
     "title": "Search and ask"
    },
-   "description": "Find stored todos, decisions, changes, learnings, problems and solutions. query: ranked matches (word endings match; by meaning too if a local model is installed). query + answer=true: a short quoted answer with record ids, also from hard rules and handoffs, or says FlowState has nothing; check it before contradicting a decision. No query: the newest records (since_hours, content_types). Read-only. Overview: start_here; edit trail: manage_history. Returns {results, count} or {answer, sources}.",
+   "description": "Find stored todos, decisions, changes, learnings, problems and solutions. query: ranked matches. query + answer=true: a short quoted answer with record ids, or says FlowState has nothing. No query: the newest records. Read-only. Overview: start_here. Returns {results, count} or {answer, sources}.",
    "inputSchema": {
     "properties": {
      "answer": {
@@ -178,12 +206,12 @@
       "type": "array"
      },
      "limit": {
-      "description": "Max results: default 10, max 50 (answer=true: 5, max 10).",
+      "description": "Default 10, max 50.",
       "type": "integer"
      },
      "mode": {
       "default": "auto",
-      "description": "auto (meaning too if a local model exists), keyword or meaning.",
+      "description": "auto, keyword or meaning.",
       "enum": [
        "auto",
        "keyword",
@@ -192,14 +220,14 @@
       "type": "string"
      },
      "project": {
-      "description": "Project name or id. Omit to search every project.",
+      "description": "Omit to search every project.",
       "type": [
        "string",
        "integer"
       ]
      },
      "query": {
-      "description": "Words to find, or a question with answer=true. Omit to list the newest.",
+      "description": "Words, or a question when answer=true. Omit to list newest.",
       "type": "string"
      },
      "since_hours": {
@@ -239,7 +267,7 @@
       "type": "string"
      },
      "blocked_by": {
-      "description": "Todo ids it waits on (unblock: omit = all).",
+      "description": "Todo ids it waits on.",
       "items": {
        "type": "integer"
       },
@@ -286,7 +314,7 @@
       "type": "integer"
      },
      "model": {
-      "description": "Your model name if you know it. Never guess.",
+      "description": "Model name if known. Never guess.",
       "type": "string"
      },
      "next_step": {
@@ -435,7 +463,7 @@
       "type": "string"
      },
      "model": {
-      "description": "Your model name if you know it. Never guess.",
+      "description": "Model name if known. Never guess.",
       "type": "string"
      },
      "notes": {
@@ -506,7 +534,7 @@
     "readOnlyHint": false,
     "title": "Review queue (user decides)"
    },
-   "description": "The user's review queue and mode: summaries, suggestions, imports, clean-ups, deletes, conflicts. list (a line each; item_id: one in full), get_mode: read-only. walk: when the user asks what's waiting (boxes or links). approve: make it a record (edit / move_to first), delete (project: confirm_name), confirm a conflict. set_mode: which new records wait. approve, reject, set_mode: ONLY call this when the user has explicitly told you, in this chat; quote them in user_request; never approve your own suggestions or change the mode to get your own writes saved. Relay: approve/reject are phone-only by default; share the link. Returns {items, total}, the mode, or the result.",
+   "description": "The user's review queue and mode: summaries, suggestions, imports, clean-ups, deletes, conflicts. list (a line each; item_id: one in full), get_mode: read-only. walk: when the user asks what's waiting (boxes or links). approve: make it a record (edit / move_to first), delete (confirm_name), confirm a conflict (keep=a|b|both). set_mode: which new records wait. approve, reject, set_mode: ONLY call this when the user has explicitly told you, in this chat; quote them in user_request; never approve your own suggestions or change the mode to get your own writes saved. Relay: approve/reject are phone-only by default; share the link. Returns {items, total}, the mode, or the result.",
    "inputSchema": {
     "properties": {
      "action": {
@@ -548,7 +576,7 @@
       "type": "string"
      },
      "confirm_name": {
-      "description": "approve, project delete: its name from the user.",
+      "description": "Project delete: the exact name.",
       "type": "string"
      },
      "details": {
@@ -558,6 +586,15 @@
      "item_id": {
       "description": "list: one in full. approve / reject: its id.",
       "type": "integer"
+     },
+     "keep": {
+      "description": "Disagreement: a (older), b (newer) or both.",
+      "enum": [
+       "a",
+       "b",
+       "both"
+      ],
+      "type": "string"
      },
      "kinds": {
       "description": "set_mode, mode=types: kinds that wait.",
@@ -588,11 +625,11 @@
       "type": "string"
      },
      "model": {
-      "description": "Your model name if you know it. Never guess.",
+      "description": "Model name if known. Never guess.",
       "type": "string"
      },
      "move_to": {
-      "description": "approve: project to move a misfiled item to.",
+      "description": "Project to move a misfiled item to.",
       "type": [
        "string",
        "integer"
@@ -611,7 +648,7 @@
       "type": "string"
      },
      "project": {
-      "description": "approve / reject: required. Else omit for all.",
+      "description": "Required to approve or reject.",
       "type": [
        "string",
        "integer"
@@ -636,7 +673,7 @@
       "type": "string"
      },
      "user_request": {
-      "description": "approve, reject, set_mode: the user's words (required).",
+      "description": "The user's own words (required).",
       "type": "string"
      }
     },
@@ -682,7 +719,7 @@
       "type": "string"
      },
      "handoff_id": {
-      "description": "pickup: the note's id (H<id> in the brief).",
+      "description": "pickup: the note id.",
       "type": "integer"
      },
      "include_picked_up": {
@@ -694,11 +731,11 @@
       "type": "integer"
      },
      "model": {
-      "description": "Your model name if you know it. Never guess.",
+      "description": "Model name if known. Never guess.",
       "type": "string"
      },
      "next_step": {
-      "description": "leave: the very next step. Max 500 chars.",
+      "description": "leave: the next step. Max 500 chars.",
       "type": "string"
      },
      "project": {
@@ -709,7 +746,7 @@
       ]
      },
      "where_i_was": {
-      "description": "leave: what you did and how far it got. Max 1,000 chars.",
+      "description": "leave: progress so far. Max 1,000 chars.",
       "type": "string"
      }
     },
@@ -757,7 +794,7 @@
       "type": "boolean"
      },
      "model": {
-      "description": "Your model name if you know it. Never guess.",
+      "description": "Model name if known. Never guess.",
       "type": "string"
      },
      "project": {
@@ -807,7 +844,7 @@
     "readOnlyHint": false,
     "title": "Cross-project links"
    },
-   "description": "Connect things across projects. add: a project uses a shared component (link_type=uses, target_project, target_component), depends on a project, two components are the same, records relate, or a record gets a URL (e.g. an issue). Then a change or decision logged on the shared component (log_work component=<name>) gives each linked project an update todo and a 'changed since' line; FlowState never edits other projects. remove: by link_id or the add fields; kept as removed (manage_history undo, record_type=link). list: read-only. Requires project. Returns the link or {links}.",
+   "description": "Connect things across projects. add: a project uses a shared component (link_type=uses, target_project, target_component), depends on a project, two components are the same, records relate, or a record gets a URL (e.g. an issue). Then a change or decision logged on the shared component (log_work component=<name>) gives each linked project an update todo and a 'changed since' line; FlowState never edits other projects. remove: by link_id or the add fields; kept as removed (manage_history undo, record_type=link). flag_conflict: two records disagree (topic, evidence); the user keeps one. list: read-only. Requires project. Returns the link, the card, or {links}.",
    "inputSchema": {
     "properties": {
      "action": {
@@ -815,13 +852,21 @@
       "enum": [
        "add",
        "remove",
-       "list"
+       "list",
+       "flag_conflict"
       ],
       "type": "string"
      },
      "component": {
       "description": "Source: a component of this project, by name.",
       "type": "string"
+     },
+     "evidence": {
+      "description": "flag_conflict: up to 2 snippets for the source record.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
      },
      "include_removed": {
       "description": "list: also removed links.",
@@ -864,7 +909,7 @@
       "type": "string"
      },
      "model": {
-      "description": "Your model name if you know it. Never guess.",
+      "description": "Model name if known. Never guess.",
       "type": "string"
      },
      "note": {
@@ -881,6 +926,13 @@
      "target_component": {
       "description": "add: a component name in the target project.",
       "type": "string"
+     },
+     "target_evidence": {
+      "description": "flag_conflict: up to 2 snippets for the other record.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
      },
      "target_id": {
       "description": "add: the target record's id.",
@@ -906,6 +958,10 @@
       ],
       "type": "string"
      },
+     "topic": {
+      "description": "flag_conflict: what they disagree about, in plain words.",
+      "type": "string"
+     },
      "url": {
       "description": "add: an https URL to attach to the source record.",
       "type": "string"
@@ -921,7 +977,8 @@
     "flowstate/actions": {
      "additive": [
       "add",
-      "remove"
+      "remove",
+      "flag_conflict"
      ],
      "read": [
       "list"
@@ -967,7 +1024,7 @@
       "type": "integer"
      },
      "model": {
-      "description": "Your model name if you know it. Never guess.",
+      "description": "Model name if known. Never guess.",
       "type": "string"
      },
      "page": {
@@ -1067,7 +1124,7 @@
       "type": "string"
      },
      "model": {
-      "description": "Your model name if you know it. Never guess.",
+      "description": "Model name if known. Never guess.",
       "type": "string"
      },
      "name": {
@@ -1189,7 +1246,7 @@
       "type": "integer"
      },
      "model": {
-      "description": "Your model name if you know it. Never guess.",
+      "description": "Model name if known. Never guess.",
       "type": "string"
      },
      "origin": {

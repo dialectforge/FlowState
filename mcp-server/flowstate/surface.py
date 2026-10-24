@@ -27,7 +27,7 @@ ROUTES: dict[str, dict[str, tuple[str, Optional[str]]]] = {
                       "set_mode": ("review_mode", "set")},
     "manage_handoffs": {a: ("handoff", a) for a in ("leave", "list", "pickup")},
     "manage_rules": {a: ("rules", a) for a in ("add", "list", "remove")},
-    "manage_links": {a: ("link", a) for a in ("add", "remove", "list")},
+    "manage_links": {a: ("link", a) for a in ("add", "remove", "list", "flag_conflict")},
     "manage_history": {a: ("history", a) for a in ("list", "undo", "who")},
     "manage_projects": {"list": ("list_projects", None), "create": ("create_project", None),
                         "update": ("update_project", None),

@@ -28,7 +28,7 @@ from . import activity
 from . import approvals
 from . import claims
 from . import cleanup
-from . import conflicts
+from . import conflicts, conflict_cards
 from . import connections
 from . import deletes
 from . import history
@@ -187,12 +187,14 @@ def _error(code: str, message: str, **extra) -> types.CallToolResult:
 
 
 def _ok(result: Any) -> types.CallToolResult:
+    ui = result.pop("_ui", None) if isinstance(result, dict) else None
     if isinstance(result, dict) and "error" in result and len(result) <= 3:
         return types.CallToolResult(
             content=[TextContent(type="text", text=json.dumps(result, indent=2, default=str))],
             isError=True)
     text = result if isinstance(result, str) else json.dumps(priority.show(result), indent=2, default=str)
-    return types.CallToolResult(content=[TextContent(type="text", text=text)], isError=False)
+    out = types.CallToolResult(content=[TextContent(type="text", text=text)], isError=False)
+    return conflict_cards.paint(out, ui)
 
 
 TIMED_OUT_WRITE = ("This write is probably still saving: the next FlowState answer will say "
@@ -209,7 +211,7 @@ UNAVAILABLE = ("FlowState's database is unavailable right now ({}). Tell the use
 @server.list_tools()
 async def list_tools() -> list[Tool]:
     """The public tools of the current profile (FLOWSTATE_TOOLS: default, core or full)."""
-    return tool_labels.visible(ALL_TOOLS)
+    return conflict_cards.with_app_tool(tool_labels.visible(ALL_TOOLS))
 
 
 @server.call_tool()
@@ -450,6 +452,8 @@ def _handle(name: str, args: dict, client: str, meta: dict) -> Any:
         result = _delete_request(pid, name, args, client)
     elif name == "link":
         result = _link(pid, args, client)
+    elif name == "resolve_conflict_card":
+        result = conflict_cards.resolve_card(db_path, args, client)
     elif name == "review_mode":
         result = _review_mode(args, client)
     elif name == "history":
@@ -626,6 +630,9 @@ def _log_work(pid: int, args: dict, sid: Optional[int], by: Optional[tuple] = No
     source, source_note = provenance.at_log_time(   # no way around the user's confirmation
         backend.db_path, pid, kind, summary, source, by[0] if by else identity.stamp(client)["app"])
     replaces = args.get("replaces")
+    bad = conflict_cards.precheck(backend.db_path, pid, args)
+    if bad:
+        return bad
     if replaces is not None and kind != "decision":
         return {"error": "bad_request", "message": "replaces only applies to kind=decision."}
     if replaces is not None:
@@ -677,6 +684,7 @@ def _log_work(pid: int, args: dict, sid: Optional[int], by: Optional[tuple] = No
     elif kind == "decision" and isinstance(r, dict) and r.get("id") is not None:
         # possible conflicting decisions: a note only; never blocks or undoes the write
         out.update(_safe_call(conflicts.on_save, backend.db_path, pid, r["id"], summary, comp_id) or {})
+    out.update(_safe_call(conflict_cards.after_log, backend.db_path, pid, kind, args, out, client) or {})
     return out
 
 
@@ -747,7 +755,10 @@ def _link(pid: Optional[int], args: dict, client: str) -> Any:
                 return {"error": "project_required", "message": "manage_links list needs project=\"<name>\"."}
             return links.list_links(backend.db_path, pid, spec.get("item_type"), spec.get("item_id"),
                                     spec.get("component"), bool(args.get("include_removed")))
-        return {"error": "bad_action", "message": "action must be add, remove or list."}
+        tried = conflict_cards.try_link(backend.db_path, pid, args, client)
+        if tried is not None:
+            return tried
+        return {"error": "bad_action", "message": "action must be add, remove, list or flag_conflict."}
     except links.LinkError as e:
         return e.payload
 
@@ -985,7 +996,8 @@ def _suggest(pid: int, args: dict, client: str) -> Any:
         return {"error": "bad_kind", "message": "kind must be decision, change, problem, learning or todo."}
     if not summary:
         return {"error": "summary_required", "message": "log_work needs a one-line summary."}
-    payload = {k: args[k] for k in ("component", "priority", "category", "replaces", "source")
+    payload = {k: args[k] for k in ("component", "priority", "category", "replaces", "source",
+                                    "evidence", "conflicts_with", "conflicts_with_type", "topic")
                if args.get(k) not in (None, "")}
     item = review.add_item(backend.db_path, pid, kind, summary, args.get("details") or None,
                            payload, client)
@@ -1069,6 +1081,10 @@ def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
         own = review.own_item_refusal(item, identity.current(), user_request)
         if own:
             return own
+        if name == "review_approve" and item and item.get("kind") == "disagreement":
+            bad = conflict_cards.keep_error(args)
+            if bad:
+                return bad
         if name == "review_approve":
             if item and item["kind"] == "delete":   # checked before anything is claimed
                 from .remote_auth import DELETE_REFUSAL, may_delete
@@ -1078,11 +1094,14 @@ def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
         if name == "review_reject":
             out = review.reject(backend.db_path, int(args["item_id"]), args.get("reason") or "",
                                 user_request, client)
-            if locked or approvals.logs_every_decision(client, agent):   # chat walk, phone list too
+            if (item or {}).get("kind") != "disagreement" and (
+                    locked or approvals.logs_every_decision(client, agent)):   # chat walk, phone list too
                 _safe_call(approvals.log_decision, backend.db_path, item,
                            "agent" if agent else approvals.path_of(client), client, "rejected")
             if out.get("kind") == "conflict":   # the user says the two decisions fit together
                 out.update(conflicts.dismiss(backend.db_path, int(args["item_id"]), client))
+            elif out.get("kind") == "disagreement":
+                out.update(_safe_call(conflict_cards.on_reject, backend.db_path, item, client) or {})
             return out
 
         def apply(item: dict, payload: dict):   # a source tag is the queuing app's say-so
@@ -1127,12 +1146,15 @@ def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
         edits = {k: args.get(k) for k in ("summary", "details", "priority", "category", "component")}
         if safety.needs_copy(item):   # a verified copy first, or no change at all
             done["safety_copy"] = safety.copy_before(backend.db_path).name
+        def apply_disagreement(item: dict, _edits: dict):
+            return conflict_cards.apply_keep(backend.db_path, item, args.get("keep"), client)
+
         out = review.approve(backend.db_path, int(args["item_id"]), user_request, client, apply, edits,
                              others={"cleanup": apply_cleanup, "edit": apply_edit,
                                      "delete": apply_delete, "conflict": apply_conflict,
-                                     "setting": apply_setting,
+                                     "setting": apply_setting, "disagreement": apply_disagreement,
                                      "source": lambda it, _e: provenance.confirm(backend.db_path, it)})
-        if locked or approvals.logs_every_decision(client, agent):
+        if (item or {}).get("kind") != "disagreement" and (locked or approvals.logs_every_decision(client, agent)):
             _safe_call(approvals.log_decision, backend.db_path, item, approvals.path_of(client),
                        client, "approved")
         return {**out, **done}
@@ -1140,36 +1162,8 @@ def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
         return e.payload
 
 
-# ============================================================
-# PROMPT: the same guidance as a user-selectable prompt
-# ============================================================
-
-@server.list_prompts()
-async def list_prompts() -> list[types.Prompt]:
-    return [types.Prompt(
-        name=guide.PROMPT_NAME, description=guide.PROMPT_DESCRIPTION,
-        arguments=[types.PromptArgument(name="project", description="Project name (optional)",
-                                        required=False)])]
-
-
-@server.get_prompt()
-async def get_prompt(name: str, arguments: Optional[dict]) -> types.GetPromptResult:
-    if name != guide.PROMPT_NAME:
-        raise ValueError(f"Unknown prompt: {name}")
-    project = (arguments or {}).get("project") or ""
-    brief = ""
-    if project and not backend.error:
-        try:
-            text = await asyncio.wait_for(
-                asyncio.to_thread(_start_here, {"project": project}, _client_name()),
-                timeout=call_timeout())
-            brief = text if text.startswith("FlowState brief:") else ""
-        except Exception:  # noqa: BLE001 - prompt still works without the brief
-            brief = ""
-    return types.GetPromptResult(
-        description=guide.PROMPT_DESCRIPTION,
-        messages=[types.PromptMessage(role="user", content=TextContent(
-            type="text", text=guide.prompt_text(project, brief)))])
+guide.register_prompts(server)
+conflict_cards.register(server)
 
 
 # ============================================================

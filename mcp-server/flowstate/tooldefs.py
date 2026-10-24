@@ -41,10 +41,9 @@ def _tool(name: str, description: str, props: dict, required=()) -> Tool:
 # ============================================================
 
 START_HERE = _tool("start_here", guide.START_HERE_DESCRIPTION, {
-    "project": _p("Project name or id. Omit to get the project list.", ["string", "integer"]),
-    "folder": _p("Working folder; picks the project if none is given."),
-    "size": _p("quick (~1,500 chars), standard (4,000, default) or deep (12,000).",
-               enum=list(SIZE_NAMES), default="standard"),
+    "project": _p("Name or id. Omit to list projects.", ["string", "integer"]),
+    "folder": _p("Working folder, if no project is given."),
+    "size": _p("quick, standard (default) or deep.", enum=list(SIZE_NAMES), default="standard"),
 })
 
 LOG_WORK = _tool("log_work", guide.LOG_WORK_DESCRIPTION, {
@@ -52,29 +51,31 @@ LOG_WORK = _tool("log_work", guide.LOG_WORK_DESCRIPTION, {
     "kind": _p("The record kind (see the description).",
                enum=["decision", "change", "problem", "learning", "todo"]),
     "summary": _p("The record in one short line."),
-    "details": _p("Why, what was rejected, old / new values. Max 10,000 chars."),
-    "component": _p("Component name (created if missing; change / problem default General); "
-                    "shared ones too."),
-    "priority": {**_PRIORITY, "description": "todo / problem only. Default normal; high and medium "
-                                             "are older names."},
+    "details": _p("Why, or old and new values. Max 10,000 chars."),
+    "component": _p("Component name; created if missing. Shared ones too."),
+    "priority": {**_PRIORITY, "description": "todo or problem. Default normal."},
     "category": _p("learning only: the kind of lesson.", enum=_LEARNING_CATEGORIES),
     "suggested": _p("true = queue it for the user's review.", "boolean"),
-    "replaces": _p("decision only: id of the decision this replaces.", "integer"),
-    "source": _p("Where it came from: the user, your inference, or the code.",
+    "replaces": _p("Decision id this one replaces.", "integer"),
+    "evidence": {"type": "array", "items": {"type": "string"},
+                 "description": "Up to 2: file:line or output: text."},
+    "conflicts_with": _p("Record id this disagrees with.", "integer"),
+    "conflicts_with_type": _p("Default decision.", enum=list(links.ENDPOINTS)),
+    "topic": _p("Short topic, e.g. API sessions."),
+    "source": _p("user_stated, ai_inferred or from_code.",
                  enum=list(provenance.SOURCES)),
     "model": MODEL,
 }, ["project", "kind", "summary"])
 
 SEARCH = _tool("search", guide.SEARCH_DESCRIPTION, {
-    "query": _p("Words to find, or a question with answer=true. Omit to list the newest."),
+    "query": _p("Words, or a question when answer=true. Omit to list newest."),
     "answer": _p("true = answer the query, quoting records.", "boolean"),
-    "project": _p("Project name or id. Omit to search every project.", ["string", "integer"]),
+    "project": _p("Omit to search every project.", ["string", "integer"]),
     "content_types": {"type": "array", "items": {"type": "string", "enum": list(meaning.TYPES)},
                       "description": "Only these record types. Omit for all."},
     "since_hours": _p("No query only: from the last N hours.", "integer"),
-    "mode": _p("auto (meaning too if a local model exists), keyword or meaning.",
-               enum=["auto", "keyword", "meaning"], default="auto"),
-    "limit": _p("Max results: default 10, max 50 (answer=true: 5, max 10).", "integer"),
+    "mode": _p("auto, keyword or meaning.", enum=["auto", "keyword", "meaning"], default="auto"),
+    "limit": _p("Default 10, max 50.", "integer"),
 })
 
 _TODO_ACTIONS = ("list", "next", "update", "block", "unblock", "add", "claim", "renew", "release",
@@ -94,7 +95,7 @@ MANAGE_TODOS = _tool("manage_todos", guide.TODOS_DESCRIPTION, {
     "compact": _p("list: shorter rows.", "boolean"),
     "parent_todo_id": _p("add: parent todo id.", "integer"),
     "blocked_by": {"type": "array", "items": {"type": "integer"},
-                   "description": "Todo ids it waits on (unblock: omit = all)."},
+                   "description": "Todo ids it waits on."},
     "blocked_by_problem": _p("Problem id it waits on.", "integer"),
     "due_date": _p("add: ISO due date."),
     "component_id": _p("add: component id.", "integer"),
@@ -130,28 +131,28 @@ MANAGE_PROBLEMS = _tool("manage_problems", guide.PROBLEMS_DESCRIPTION, {
 _REVIEW_ACTIONS = ("list", "walk", "get_mode", "approve", "reject", "set_mode")
 MANAGE_REVIEW = _tool("manage_review", guide.REVIEW_DESCRIPTION, {
     "action": _action(_REVIEW_ACTIONS),
-    "project": _p("approve / reject: required. Else omit for all.",
-                  ["string", "integer"]),
+    "project": _p("Required to approve or reject.", ["string", "integer"]),
     "status": _p("list: which ones. Default pending.",
                  enum=["pending", "approved", "rejected", "all"]),
     "limit": _p("list: how many (20; max 100).", "integer"),
     "after": _p("list, walk: the page after this id.", "integer"),
     "item_id": _p("list: one in full. approve / reject: its id.", "integer"),
-    "user_request": {**USER_REQUEST, "description": "approve, reject, set_mode: the user's "
-                                                    "words (required)."},
+    "user_request": {**USER_REQUEST, "description": "The user's own words (required)."},
     "reason": _p("reject: the user's reason (required)."),
     "summary": _p("approve: new summary."),
     "details": _p("approve: new details."),
     "priority": {**_PRIORITY, "description": "approve: for a todo or problem."},
     "category": _p("approve: for a learning.", enum=_LEARNING_CATEGORIES),
     "component": _p("approve: component to file it under."),
-    "move_to": _p("approve: project to move a misfiled item to.", ["string", "integer"]),
+    "move_to": _p("Project to move a misfiled item to.", ["string", "integer"]),
     "mode": _p("set_mode: the new mode (default auto_only).",
                enum=list(review_mode.MODES)),
     "kinds": {"type": "array", "items": {"type": "string", "enum": list(review_mode.KINDS)},
               "description": "set_mode, mode=types: kinds that wait."},
     "clear": _p("set_mode: drop this project's override.", "boolean"),
-    "confirm_name": _p("approve, project delete: its name from the user."),
+    "confirm_name": _p("Project delete: the exact name."),
+    "keep": _p("Disagreement: a (older), b (newer) or both.",
+               enum=["a", "b", "both"]),
     "model": MODEL,
 }, ["action"])
 
@@ -159,9 +160,9 @@ _HANDOFF_ACTIONS = ("leave", "pickup", "list")
 MANAGE_HANDOFFS = _tool("manage_handoffs", guide.HANDOFFS_DESCRIPTION, {
     "action": _action(_HANDOFF_ACTIONS),
     "project": PROJECT,
-    "where_i_was": _p("leave: what you did and how far it got. Max 1,000 chars."),
-    "next_step": _p("leave: the very next step. Max 500 chars."),
-    "handoff_id": _p("pickup: the note's id (H<id> in the brief).", "integer"),
+    "where_i_was": _p("leave: progress so far. Max 1,000 chars."),
+    "next_step": _p("leave: the next step. Max 500 chars."),
+    "handoff_id": _p("pickup: the note id.", "integer"),
     "include_picked_up": _p("list: include picked-up notes.", "boolean"),
     "limit": _p("list: max notes. Default 20.", "integer"),
     "model": MODEL,
@@ -179,7 +180,7 @@ MANAGE_RULES = _tool("manage_rules", guide.RULES_DESCRIPTION, {
     "model": MODEL,
 }, ["action", "project"])
 
-_LINK_ACTIONS = ("add", "remove", "list")
+_LINK_ACTIONS = ("add", "remove", "list", "flag_conflict")
 MANAGE_LINKS = _tool("manage_links", guide.LINKS_DESCRIPTION, {
     "action": _action(_LINK_ACTIONS),
     "project": _p("The source project, by name or id. Required.", ["string", "integer"]),
@@ -194,6 +195,11 @@ MANAGE_LINKS = _tool("manage_links", guide.LINKS_DESCRIPTION, {
     "target_id": _p("add: the target record's id.", "integer"),
     "url": _p("add: an https URL to attach to the source record."),
     "note": _p("add: a short note kept on the link."),
+    "topic": _p("flag_conflict: what they disagree about, in plain words."),
+    "evidence": {"type": "array", "items": {"type": "string"},
+                 "description": "flag_conflict: up to 2 snippets for the source record."},
+    "target_evidence": {"type": "array", "items": {"type": "string"},
+                        "description": "flag_conflict: up to 2 snippets for the other record."},
     "link_id": _p("remove: the link's id (from list); or give the add fields instead.", "integer"),
     "include_removed": _p("list: also removed links.", "boolean"),
     "model": MODEL,
