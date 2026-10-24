@@ -139,7 +139,12 @@ def _norm(text: str) -> str:
 
 
 def _own(item: Optional[dict], ident) -> bool:
-    """Did this caller's app (on the same machine, when recorded) queue the item?"""
+    """Did this caller's app (on the same machine, when recorded) queue the item? Through the
+    relay the app name is the app's own say-so, so the same sign-in (machine "relay (signed in
+    as ...)") counts as the same caller whatever name it sends now."""
+    if item and ident is not None and getattr(ident, "credential", None) and \
+            item.get("machine") and item["machine"] == ident.machine:
+        return True
     if not item or ident is None or not item.get("app") or item["app"] != ident.app:
         return False
     return not (item.get("machine") and ident.machine and item["machine"] != ident.machine)

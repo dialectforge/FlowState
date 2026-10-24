@@ -6,13 +6,20 @@ here so nothing records identity in two different ways:
 
   app              the app's name. From the per-app key / remote token / OAuth client when
                    there is one (the app can't pick it), else the MCP client name it sends.
+                   Through the relay the sign-in is often shared or reused by several cloud
+                   apps, so there it is the MCP client name the app sends, else "Relay
+                   (unknown app)"; the sign-in's name goes into `machine` and `credential`.
   model            the AI model name, ONLY when the caller supplies it: the `model` argument,
                    else the X-FlowState-Model header (HTTP), else FLOWSTATE_MODEL (stdio).
                    Never guessed; NULL otherwise.
   machine          stdio: FLOWSTATE_WORKSPACE, else this computer's host name. LAN/local
                    HTTP: the key's workspace, else the X-FlowState-Workspace header. Remote
-                   (OAuth / remote tokens): the client's name.
+                   (OAuth / remote tokens): the client's name. Relay: "relay (signed in as
+                   <client's name>)".
   identity_source  app_key | oauth_client | remote_token | shared_token | self_reported
+
+Plus `credential` (not stored): the per-app key's / token's / OAuth client's own name, when
+the app name came from somewhere else (the relay); a paused app name stops it too.
 
 Plus `session` (not a stored column of the logs above; todo claims use it to tell two
 sessions of one app apart): stdio = this server process, HTTP = the MCP session id.
@@ -31,6 +38,7 @@ from dataclasses import asdict, dataclass
 from typing import Optional
 
 SOURCES = ("app_key", "oauth_client", "remote_token", "shared_token", "self_reported")
+RELAY_UNKNOWN = "Relay (unknown app)"
 LABELS = {"app_key": "per-app key", "oauth_client": "OAuth app", "remote_token": "remote token",
           "shared_token": "shared token (legacy)", "self_reported": "self-reported"}
 FIELDS = ("app", "model", "machine", "identity_source")
@@ -45,6 +53,7 @@ class Identity:
     machine: Optional[str]
     identity_source: str
     session: Optional[str] = None
+    credential: Optional[str] = None
 
     def as_dict(self) -> dict:
         """The four recorded fields (not the session)."""
@@ -70,10 +79,17 @@ def stdio_machine() -> Optional[str]:
     return clean(os.environ.get("FLOWSTATE_WORKSPACE")) or clean(socket.gethostname())
 
 
+def _sent_name(client) -> Optional[str]:
+    """The MCP client name the app sent at initialize, or None (none sent: "unknown")."""
+    name = clean(client)
+    return None if name is None or name.lower() == "unknown" else name
+
+
 def resolve(client: str, http: bool = False, token=None, headers: Optional[dict] = None,
-            model_arg=None) -> Identity:
+            model_arg=None, listener: Optional[str] = None) -> Identity:
     """The identity of one tool call. stdio: http=False. HTTP: `token` is the FSAccessToken
-    the caller signed in with, `headers` the request headers (lower-case names)."""
+    the caller signed in with, `headers` the request headers (lower-case names), `listener`
+    the one Gate marked (lan / public / relay)."""
     headers = headers or {}
     model = clean(model_arg)
     if not http:   # stdio: the app that started this process
@@ -85,6 +101,14 @@ def resolve(client: str, http: bool = False, token=None, headers: Optional[dict]
     session = clean(headers.get("mcp-session-id"))
     source = getattr(token, "identity_source", "") if token is not None else ""
     name = clean(getattr(token, "client_name", "")) or "unknown"
+    if listener == "relay":
+        # one OAuth sign-in or remote token can sit behind several cloud apps (or be named
+        # after another app), so its name would credit the wrong app: the app's own name
+        # instead, or an honest "unknown", and the sign-in in the machine column
+        signed_in = f"relay (signed in as {name})" if token is not None else "relay"
+        return Identity(_sent_name(client) or RELAY_UNKNOWN, model, clean(signed_in),
+                        source or "self_reported", session,
+                        name if token is not None else None)
     if source == "app_key":
         return Identity(name, model, clean(getattr(token, "workspace", None)) or workspace,
                         "app_key", session)

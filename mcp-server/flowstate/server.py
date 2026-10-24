@@ -158,13 +158,15 @@ def _identity(client: str, args: dict) -> identity.Identity:
         req = None
     if req is None:
         return identity.resolve(client, model_arg=args.get("model"))
-    tok = getattr(getattr(req, "scope", {}).get("user"), "access_token", None)
+    from .remote_auth import LISTENER_KEY
+    scope = getattr(req, "scope", {}) or {}
+    tok = getattr(scope.get("user"), "access_token", None)
     try:
         headers = {k.lower(): v for k, v in req.headers.items()}
     except AttributeError:
         headers = {}
     return identity.resolve(client, http=True, token=tok, headers=headers,
-                            model_arg=args.get("model"))
+                            model_arg=args.get("model"), listener=scope.get(LISTENER_KEY))
 
 
 # A write that creates a record: (tool, action) -> record type, for the activity log.
@@ -261,7 +263,8 @@ async def _call_internal(name: str, arguments: dict, shown: str = "") -> types.C
     try:
         try:
             result = await asyncio.wait_for(
-                asyncio.to_thread(_paused_or_call, write, app, name, dict(arguments or {}), client, meta),
+                asyncio.to_thread(_paused_or_call, write, (app, ident.credential), name,
+                                  dict(arguments or {}), client, meta),
                 timeout=call_timeout())
             if result is _PAUSED:
                 out = _error("paused_by_user", PAUSED.format(app=app))
@@ -315,9 +318,10 @@ async def _call_internal(name: str, arguments: dict, shown: str = "") -> types.C
 _PAUSED = object()
 
 
-def _paused_or_call(write: bool, app: str, name: str, args: dict, client: str, meta: dict):
-    """The user paused this app's writes? (inside the call's time limit) Else the call."""
-    if write and _safe_bool(activity.is_paused, backend.db_path, app):
+def _paused_or_call(write: bool, apps: tuple, name: str, args: dict, client: str, meta: dict):
+    """The user paused this app's writes (the app's name, or through the relay also the name
+    of the sign-in it used)? (inside the call's time limit) Else the call."""
+    if write and any(_safe_bool(activity.is_paused, backend.db_path, a) for a in apps if a):
         return _PAUSED
     return handle_call(name, args, client, meta)
 
