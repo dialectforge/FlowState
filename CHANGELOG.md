@@ -5,6 +5,22 @@
 (Part of 2.4.4, which is not tagged yet: fold these into the 2.4.4 section at release prep.)
 
 - No new dependencies and no database migration.
+- **A name for this FlowState.** Each install now has a display name, "Main FlowState" until
+  you change it, so people see a name instead of the relay handle (the random letters in your
+  relay address). Change it with `flowstate name "Office laptop"` (no word shows it,
+  `flowstate name --reset` goes back to "Main FlowState") or in the new first row of the review
+  page's Settings ("Name of this FlowState"; editable on the page `flowstate review-page` opens,
+  read-only on the page an AI's link opens, absent on the tunnel page). 1 to 40 characters,
+  trimmed, plain text, no control characters. It is kept in `config.json` as `"display_name"`
+  and every change is logged with the other settings (Recent changes).
+- Where it shows: the review page's title and header (local and tunnel), and, once the phone link
+  has checked out, the phone list ("Waiting for you on Office laptop (3)") and the phone approve
+  page. Never in a URL: every link still uses the handle. No MCP tool reads or writes it, and
+  the brief doesn't carry it.
+- With the relay, the agent sends the name to the relay in its signed-in hello (and again when
+  you rename it while `flowstate relay run` is running, within a heartbeat), so flowstatemcp.com
+  can say "Open what's waiting for you on Office laptop?" instead of the handle. A relay or site
+  that doesn't know the name ignores it and nothing else changes (docs/relay-protocol.md 3.1).
 - **Session summaries show what the session saved.** A summary waiting for review used to say
   only "saved 1 change; also problem solved", so Keep / Don't keep was a blind choice. Now every
   place that shows one (the local review page, the tunnel review page, the phone list, the

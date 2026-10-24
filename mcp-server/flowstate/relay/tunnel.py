@@ -153,6 +153,11 @@ class _ServerTLS:
         return b"".join(parts)
 
 
+def _display_name() -> str:
+    from ..install_name import get
+    return get()
+
+
 class TunnelAgent:
     def __init__(self, *, host: str, port: int, sni: str, token: str, handle: str,
                  client_ctx: ssl.SSLContext,
@@ -160,8 +165,13 @@ class TunnelAgent:
                  local_port: Callable[[], Optional[int]], peer_map: dict,
                  on_state: Optional[Callable[[str, str], None]] = None,
                  heartbeat: float = DEFAULT_HEARTBEAT, min_heartbeat: float = 5.0,
-                 backoff: Optional[Backoff] = None, stable_after: float = 30.0):
+                 backoff: Optional[Backoff] = None, stable_after: float = 30.0,
+                 display_name: Optional[Callable[[], Optional[str]]] = None):
         self.host, self.port, self.sni = host, port, sni
+        # this FlowState's display name (install_name.py), sent in the hello and again in a
+        # "name" message when it changes; a relay that doesn't know "name" ignores both
+        self.display_name = display_name or _display_name
+        self._sent_name: Optional[str] = None
         self.token, self.handle = token, handle
         self.client_ctx, self.server_ctx, self.local_port = client_ctx, server_ctx, local_port
         self.peer_map, self.on_state = peer_map, on_state
@@ -234,8 +244,13 @@ class TunnelAgent:
         stop_wait = asyncio.ensure_future(stop.wait())
         pinger = None
         try:
-            writer.write(encode({"type": "hello", "v": 1, "role": "control", "proto": PROTOCOL,
-                                 "handle": self.handle, "token": self.token, "agent": AGENT}))
+            hello = {"type": "hello", "v": 1, "role": "control", "proto": PROTOCOL,
+                     "handle": self.handle, "token": self.token, "agent": AGENT}
+            name = self._name()
+            if name:
+                hello["name"] = name
+            self._sent_name = name
+            writer.write(encode(hello))
             await writer.drain()
             msg = await read_msg(reader, CONNECT_TIMEOUT)
             self._check_error(msg)
@@ -284,8 +299,18 @@ class TunnelAgent:
             while True:
                 await asyncio.sleep(hb)
                 seq += 1
+                name = self._name()
+                if name and name != self._sent_name:   # renamed while connected
+                    writer.write(encode({"type": "name", "name": name}))
+                    self._sent_name = name
                 writer.write(encode({"type": "ping", "seq": seq}))
                 await writer.drain()
+
+    def _name(self) -> Optional[str]:
+        try:
+            return self.display_name()
+        except Exception:  # noqa: BLE001 - a name problem must not kill the tunnel
+            return None
 
     # ------------------------------------------------------------ data connections
     def _on_open(self, msg: dict, ctrl: asyncio.StreamWriter) -> None:

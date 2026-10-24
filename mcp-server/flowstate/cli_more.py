@@ -12,6 +12,7 @@
     flowstate update         self-update [on|off] (may `flowstate update` update this computer: updates.py)
     flowstate update         [--dry-run] [--yes --user-said TEXT] [--rollback] [--db FILE] [--app NAME]
                              (move this install to the newest signed release: selfupdate.py)
+    flowstate name           ["New name" | --reset]   (this FlowState's display name: install_name.py)
 """
 
 from pathlib import Path
@@ -194,8 +195,13 @@ def cmd_update(a) -> int:
     return selfupdate.cli(a, say)
 
 
+def cmd_name(a) -> int:
+    from . import install_name
+    return install_name.cli(a.value, a.reset, _db(a), say)
+
+
 COMMANDS = ("cleanup", "apps", "meaning", "review-page", "export-md", "import-md", "import-memory",
-            "git-capture", "update")
+            "git-capture", "update", "name")
 
 
 def register(sub) -> None:
@@ -266,3 +272,10 @@ def register(sub) -> None:
     p.add_argument("--app", help="the AI app running this for the user (kept in the history)")
     p.add_argument("--db", help="the database to back up and migrate (default: as the server)")
     p.set_defaults(fn=cmd_update)
+
+    p = sub.add_parser("name", help='this FlowState\'s display name ("Main FlowState" until you '
+                                    'change it); the relay address stays the same')
+    p.add_argument("value", nargs="?", help="the new name (1-40 characters); none: show it")
+    p.add_argument("--reset", action="store_true", help='back to "Main FlowState"')
+    p.add_argument("--db", help="the database whose settings log records the change")
+    p.set_defaults(fn=cmd_name)

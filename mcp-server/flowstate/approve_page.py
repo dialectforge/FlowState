@@ -24,7 +24,7 @@ import json
 import secrets
 from datetime import datetime, timezone
 
-from . import approvals
+from . import approvals, install_name
 
 HEADERS = {
     "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; "
@@ -59,7 +59,7 @@ SHELL = """<!doctype html>
     <button id="reject" class="btn ghost" type="button">Reject</button>
   </div>
 </section>
-<p class="faint small">Your FlowState, on your own computer, shows this page. flowstatemcp.com
+<p class="faint small" id="foot">Your FlowState, on your own computer, shows this page. flowstatemcp.com
 only confirmed it's you; it never sees what's in it.</p>
 </main></body></html>
 """
@@ -130,8 +130,12 @@ JS = r"""(function () {
     var it = r.j.item;
     token = r.j.token;
     needsName = !!it.needs_name;
+    if (typeof r.j.name === "string" && r.j.name) {   // this FlowState's name, as text (textContent)
+      $("foot").textContent = r.j.name + ", your FlowState on your own computer, shows this page. " +
+        "flowstatemcp.com only confirmed it's you; it never sees what's in it.";
+    }
     say(it.question, "");
-    $("project").textContent = it.project;
+    $("project").textContent = it.project + (r.j.name ? " · " + r.j.name : "");
     $("summary").textContent = it.summary;
     $("details").textContent = [it.details, it.contents_text].filter(Boolean).join("\n\n");
     $("who").textContent = "Asked by " + it.queued_by + ", " + localTime(it.queued_at);
@@ -301,7 +305,8 @@ def routes(db_path_fn):
             item = await asyncio.to_thread(view, db, item_id)
         except approvals.ApprovalError as e:
             return refuse(e)
-        return answer({"item": item, "token": token}, cookie=token, path=f"/approve/{item_id}")
+        return answer({"item": item, "token": token, "name": install_name.get()}, cookie=token,
+                      path=f"/approve/{item_id}")
 
     async def decide(request):
         item_id = request.path_params["item"]

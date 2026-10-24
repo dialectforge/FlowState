@@ -2401,6 +2401,25 @@ def s17_settings_page(W):
                 ro.status_code == 303 and "nothing+changed" in ro.headers.get("location", "")
                 and W.q("SELECT key, value FROM approval_settings ORDER BY key") == settings
                 and W.count("review_mode_log") == before, ro.headers.get("location"))
+        # this FlowState's display name (task 43): set in the terminal, shown on the page, logged
+        code, out = W.cli("name", "Bakery back office")
+        r = hc.get(link)
+        sec = r.text.split("<h2>Settings</h2>", 1)[-1]
+        named = W.q("SELECT old_mode, new_mode, client FROM review_mode_log "
+                    "WHERE scope = 'config:display_name' ORDER BY id")
+        R.check(17, "`flowstate name` renames this FlowState; the page header and its Settings row show it, "
+                "read-only on the link page; the change is logged",
+                code == 0 and "now called \"Bakery back office\"" in out
+                and "FlowState review <span class='inst'>· Bakery back office</span>" in r.text
+                and "<b>Bakery back office</b>." in sec and "/settings/name" not in sec
+                and [tuple(x.values()) for x in named][-1:] == [("Main FlowState", "Bakery back office",
+                                                                  "command-line")], (code, out[:160]))
+        nb = cc1.call("start_here", project=Q)
+        bad, bout = W.cli("name", "x" * 41)
+        W.cli("name", "--reset")
+        R.check(17, "no app reads the name through FlowState; a too-long name is refused; --reset goes back",
+                "Bakery back office" not in json.dumps(nb) and bad == 2 and "at most 40" in bout
+                and "Main FlowState" in hc.get(link).text, bout[:120])
     if os.name == "nt":
         R.word("S17: the launch-key part runs on POSIX only (it reads the link from a pseudo-terminal).")
         return

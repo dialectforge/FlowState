@@ -46,7 +46,7 @@ import secrets
 import threading
 import time
 
-from . import approvals
+from . import approvals, install_name
 from .approve_page import CSS, HEADERS, _same_origin
 
 COOKIE = "fs_review_phone"
@@ -67,7 +67,7 @@ SHELL = """<!doctype html>
 <p id="status" class="muted"></p>
 <noscript><p class="muted">This page needs JavaScript to read your link.</p></noscript>
 <section id="list"></section>
-<p class="faint small">Your FlowState, on your own computer, shows this page. flowstatemcp.com
+<p class="faint small" id="foot">Your FlowState, on your own computer, shows this page. flowstatemcp.com
 only confirmed it's you; it never sees what's in it.</p>
 </main></body></html>
 """
@@ -91,7 +91,7 @@ JS = r"""(function () {
   var m = /(?:^#|&)g=([A-Za-z0-9_.-]+)/.exec(location.hash || "");
   var grant = m ? m[1] : null;
   history.replaceState(null, "", location.pathname);   // the grant leaves the address bar now
-  var token = null;
+  var token = null, where = "";   // where: this FlowState's name, once the grant checked out
   function $(id) { return document.getElementById(id); }
   function el(tag, cls, text) {
     var e = document.createElement(tag);
@@ -153,7 +153,8 @@ JS = r"""(function () {
     var list = $("list");
     while (list.firstChild) { list.removeChild(list.firstChild); }
     total = total || items.length;
-    say(items.length ? "Waiting for you (" + total + ")" : "Nothing is waiting for you",
+    say((items.length ? "Waiting for you" : "Nothing is waiting for you") + (where ? " on " + where : "") +
+        (items.length ? " (" + total + ")" : ""),
         total > items.length ? "Showing the oldest " + items.length + "; decide some to see more." : "");
     items.forEach(function (it) {
       var card = el("div", "card");
@@ -231,6 +232,12 @@ JS = r"""(function () {
   post("/review/open", {grant: grant}).then(function (r) {
     if (!r.ok) { say("Can't show your list", r.j.message || "", true); return; }
     token = r.j.token;
+    if (typeof r.j.name === "string" && r.j.name) {
+      where = r.j.name;
+      document.title = "FlowState: " + where;
+      $("foot").textContent = where + ", your FlowState on your own computer, shows this page. " +
+        "flowstatemcp.com only confirmed it's you; it never sees what's in it.";
+    }
     show(r.j.items, r.j.total);
   }, function () { say("Can't show your list", "Your FlowState didn't answer.", true); });
 })();
@@ -410,7 +417,8 @@ def routes(db_path_fn):
             total = await asyncio.to_thread(_total, db)
         except approvals.ApprovalError as e:
             return refuse(e)
-        return answer({"items": listing, "total": total, "token": token}, cookie=cookie)
+        return answer({"items": listing, "total": total, "token": token,
+                       "name": install_name.get()}, cookie=cookie)
 
     async def decide(request):
         db = db_path_fn()

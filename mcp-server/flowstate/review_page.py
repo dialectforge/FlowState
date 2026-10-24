@@ -4,7 +4,7 @@
 
 Lists the review queue with Approve / Edit / Reject, shows "Who did what" (app, model, machine
 and identity source of every recorded change, with Undo where the edit history allows it), and
-a Settings section (render_settings): review mode, app pauses, approvals on/off (install and
+a Settings section (render_settings): this FlowState's display name, review mode, app pauses, approvals on/off (install and
 per project), popup apps, phone links, chat approvals through the relay, config.json
 "self_update" and the update check, environment-only settings read-only, and the recent
 setting changes. Everything done here counts as the user acting (it is logged as
@@ -54,7 +54,7 @@ from typing import Callable, Optional, Union
 from urllib.parse import urlencode
 
 from . import dbconn
-from . import activity, approvals, history, identity, review, review_mode, updates, who
+from . import activity, approvals, history, identity, install_name, review, review_mode, updates, who
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8770   # 8766 = LAN server, 8767 = public listener
@@ -63,7 +63,7 @@ CLIENT = "review-page"
 USER_WORDS = "The user did this on the FlowState review page ({what})."
 
 _CSS = """body{font-family:system-ui,sans-serif;max-width:60rem;margin:1.5rem auto;padding:0 1rem;color:#222}
-h1{font-size:1.4rem}h2{font-size:1.1rem;margin-top:2rem;border-bottom:1px solid #ddd}
+h1{font-size:1.4rem}h1 .inst{color:#666;font-weight:normal;overflow-wrap:anywhere}h2{font-size:1.1rem;margin-top:2rem;border-bottom:1px solid #ddd}
 .item{border:1px solid #ccc;border-radius:8px;padding:.7rem 1rem;margin:.8rem 0}
 .meta{color:#666;font-size:.85rem}textarea,input[type=text],select{width:100%;box-sizing:border-box;margin:.2rem 0}
 button{padding:.35rem .9rem;margin:.3rem .4rem 0 0}.ok{color:#0a6b0a}.err{color:#b00020}
@@ -408,6 +408,19 @@ class Page:
         return ("`flowstate update` may update this computer again." if new == "allowed" else
                 "This computer is now updated by hand: `flowstate update` refuses to run.")
 
+    def set_display_name(self, form: dict, sess: str) -> str:
+        if self.settings != "edit":
+            return READ_ONLY
+        reset = form.get("op") == "reset"
+        try:
+            res = install_name.set_name(None if reset else form.get("name", ""), self.db_path,
+                                        self.client, SETTING_WORDS)
+        except install_name.BadName as e:
+            return f"Not changed: {e}"
+        if not res["changed"]:
+            return f"This FlowState is already called \"{res['now']}\"."
+        return f"This FlowState is now called \"{res['now']}\"."
+
     def set_update_check(self, form: dict, sess: str) -> str:
         if self.settings != "edit":
             return READ_ONLY
@@ -439,8 +452,9 @@ class Page:
                  f"<link rel='stylesheet' href='{_e(self.stylesheet)}'>" if self.stylesheet
                  else f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
                       f"<style>{_CSS}</style>")
-        out = [f"<!doctype html><html><head><meta charset='utf-8'><title>FlowState review</title>"
-               f"{style}</head><body><h1>FlowState review</h1>"
+        name = _e(install_name.get())
+        out = [f"<!doctype html><html><head><meta charset='utf-8'><title>FlowState review: {name}</title>"
+               f"{style}</head><body><h1>FlowState review <span class='inst'>· {name}</span></h1>"
                + (f"<form method='post' action='{_e(self.sign_out)}'><input type='hidden' "
                   f"name='csrf' value='{_e(csrf)}'><button>Sign out</button></form>"
                   if self.sign_out else "") +
@@ -663,6 +677,7 @@ class Page:
             return f"Pause {scope[4:]}"
         return {"phone_approvals": "Phone approval links", "popup_clients": "Popup apps",
                 "config:self_update": "Updates by flowstate update",
+                install_name.SCOPE: "Name of this FlowState",
                 "config:update_check": "Daily update check"}.get(scope, scope)
 
     def recent_changes(self, limit: int = 8) -> list:
@@ -692,6 +707,26 @@ class Page:
                        "settings are shown read-only: open <code>flowstate review-page</code> in "
                        "your terminal to change these (this page opened from a link, which "
                        "anything on this computer could open too).</p>")
+        # -- this FlowState
+        out.append("<h3 class='group'>This FlowState</h3>")
+        name = install_name.get()
+        rename = (f"<form method='post' action='{self.base}/settings/name'>{hidden}<div class='row'>"
+                  f"<input type='text' name='name' maxlength='{install_name.MAX_LEN}' required "
+                  f"value='{_e(name)}' aria-label='New name' autocomplete='off'>"
+                  "<button class='go'>Save name</button>"
+                  + ("" if install_name.is_default() else
+                     "<button name='op' value='reset' formnovalidate>Back to "
+                     f"&quot;{_e(install_name.DEFAULT)}&quot;</button>")
+                  + "</div></form>") if edit else ""
+        out.append(self._row(
+            "Name of this FlowState",
+            "The name you see for this FlowState on its pages and, with the relay, on "
+            "flowstatemcp.com (\"Open what's waiting for you on ...\"). Only a label: your relay "
+            "address stays the same. 1 to 40 characters, plain text.",
+            f"<b>{_e(name)}</b>" + (" (the default)." if install_name.is_default() else "."), rename,
+            "In a terminal: <code>flowstate name \"New name\"</code>, or <code>flowstate name "
+            "--reset</code>. With the relay, the name is sent to it (on its signed-in connection) "
+            "so the site can show it to you."))
         # -- review
         out.append("<h3 class='group'>Review</h3>")
         m = review_mode.get(db, None)
@@ -992,6 +1027,7 @@ def create_app(page: Page):
           for name, fn in (("approvals", page.set_approvals), ("relay-chat", page.set_relay_chat),
                            ("phone", page.set_phone), ("popup", page.set_popup),
                            ("self-update", page.set_self_update),
+                           ("name", page.set_display_name),
                            ("update-check", page.set_update_check),
                            ("confirm", page.confirm), ("cancel", page.cancel))],
     ])

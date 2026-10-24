@@ -186,6 +186,7 @@ def test_bad_values_change_nothing(page, with_relay):
 ROUTES = {"approvals": {"scope": "", "state": "on"}, "relay-chat": {"state": "off"},
           "phone": {"state": "off"}, "popup": {"op": "add", "name": "x-app"},
           "self-update": {"state": "off"}, "update-check": {"state": "off"},
+          "name": {"name": "Renamed"},
           "confirm": {"token": "x", "setting": "approvals", "scope": "", "state": "off"},
           "cancel": {"token": "x"}}
 
@@ -373,7 +374,8 @@ def test_open_link_page_shows_settings_read_only(backend, seeded_db, cfg, with_r
     csrf = CSRF.search(html).group(1)
     sec = html.split("<h2>Settings</h2>", 1)[1]
     assert "open <code>flowstate review-page</code>" in sec
-    for route in ("approvals", "relay-chat", "phone", "popup", "self-update", "update-check"):
+    for route in ("approvals", "relay-chat", "phone", "popup", "self-update", "update-check",
+                  "name"):
         assert f"/settings/{route}" not in sec, route              # no forms for these
     assert 'action="/mode"' in sec                                 # review mode as before
     before = log(db)

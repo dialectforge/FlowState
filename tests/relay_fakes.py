@@ -392,6 +392,7 @@ class FakeTunnelRelay:
         self.sni_seen, self.controls, self.pending = [], {}, {}
         self.connects = 0
         self.hellos = []
+        self.names = []                     # "name" messages (a renamed FlowState, task 43)
         self.rejects = []
         self._ready = threading.Event()
         self._writers = set()
@@ -449,6 +450,8 @@ class FakeTunnelRelay:
                     m = json.loads(line)
                     if m["type"] == "ping" and self.mode != "silent":
                         writer.write(json.dumps({"type": "pong", "seq": m.get("seq")}).encode() + b"\n")
+                    elif m["type"] == "name":
+                        self.names.append(m.get("name"))
                     elif m["type"] == "reject":
                         self.rejects.append(m)
                         _, fut = self.pending.pop(m.get("stream"), (None, None))
