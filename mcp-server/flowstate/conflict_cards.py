@@ -855,24 +855,28 @@ def phone_card(db_path: Path, item: dict) -> Optional[dict]:
 
 # ---------------------------------------------------------------- MCP Apps registration
 def register(server) -> None:
-    """The ui:// document and its reader. Listed so a host can prefetch it."""
+    """The ui:// documents (this card's and the review card's) and their reader. Listed so a
+    host can prefetch them."""
     from mcp.server.lowlevel.helper_types import ReadResourceContents
     from mcp.types import Resource
 
+    from . import review_card_ui
     from .conflict_card_ui import CARD_HTML, MIME, UI_META, UI_URI
+    docs = {UI_URI: ("Disagreement card", "The in-chat card for two entries that disagree.", CARD_HTML),
+            review_card_ui.UI_URI: ("Review card", "The in-chat card for an item waiting for the "
+                                    "user's OK (Approve or Reject).", review_card_ui.CARD_HTML)}
 
     @server.list_resources()
     async def list_resources():
-        res = Resource(uri=UI_URI, name="Disagreement card",
-                       description="The in-chat card for two entries that disagree.",
-                       mimeType=MIME)
-        return [res.model_copy(update={"meta": UI_META})]
+        return [Resource(uri=uri, name=name, description=about, mimeType=MIME
+                         ).model_copy(update={"meta": UI_META})
+                for uri, (name, about, _doc) in docs.items()]
 
     @server.read_resource()
     async def read_resource(uri):
-        if str(uri) != UI_URI:
+        if str(uri) not in docs:
             raise ValueError(f"Unknown resource: {uri}")
-        return [ReadResourceContents(CARD_HTML, MIME, UI_META)]
+        return [ReadResourceContents(docs[str(uri)][2], MIME, UI_META)]
 
 
 def app_tool():
@@ -982,10 +986,12 @@ def client_has_ui() -> bool:
 
 
 def with_app_tool(tools: list) -> list:
-    """MCP Apps hosts also get the card's two tools: show (model) and resolve (app only)."""
+    """MCP Apps hosts also get each card's two tools: show (model) and resolve (app only),
+    for the disagreement card and the review card (review_cards.py)."""
     if not client_has_ui():
         return tools
-    return list(tools) + [show_tool(), app_tool()]
+    from . import review_cards
+    return list(tools) + [show_tool(), app_tool(), review_cards.show_tool(), review_cards.app_tool()]
 
 
 def paint(result, ui):

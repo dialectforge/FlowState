@@ -312,8 +312,10 @@ def review_list(args: dict, walk: bool, scopes) -> dict:
         return e.payload
     if walk:
         plan = prepare(out, S.backend.db_path, scopes, pid, after)
-        if isinstance(plan, dict) and plan.get("_walk", {}).get("cards"):
-            plan.update(_card_pointer(out["items"][:WALK_MAX]))
+        if isinstance(plan, dict) and "_walk" in plan:
+            shown = out["items"][:WALK_MAX]
+            plan.update(_card_pointer(shown))
+            plan["_walk"]["boxed_pointer"] = _card_pointer(shown, review=False)   # after boxes
         return plan
     page = _page(out, after, "list")   # one line per item; item_id= for one in full
     db = S.backend.db_path
@@ -330,20 +332,28 @@ def review_list(args: dict, walk: bool, scopes) -> dict:
             cards.append({"review_item_id": packed["review_item_id"], "text": packed["text"]})
     if cards:
         result["conflict_cards"] = cards
-        if out["status"] == "pending":
-            result.update(_card_pointer(out["items"]))
+    if out["status"] == "pending":
+        result.update(_card_pointer(out["items"]))
     return result
 
 
-def _card_pointer(items: list) -> dict:
-    """show_card for the waiting disagreements (MCP Apps hosts only; conflict_cards.pointer).
-    Cards in several projects: the first project's; the list names the rest."""
-    from . import conflict_cards
-    waiting = [it for it in items if it.get("kind") == "disagreement" and it.get("status") == "pending"]
-    if not waiting:
-        return {}
-    project = waiting[0].get("project")
-    return conflict_cards.pointer(project, [it["id"] for it in waiting if it.get("project") == project])
+def _card_pointer(items: list, review: bool = True) -> dict:
+    """show_card for the waiting items on MCP Apps hosts: show_conflict_card for
+    disagreements (conflict_cards.pointer), show_review_card for the rest (review_cards.pointer;
+    not with review=False), both calls when both wait. Items in several projects: the first
+    project's; the list names the rest."""
+    from . import conflict_cards, review_cards
+
+    def first(group: list, fn) -> dict:
+        if not group:
+            return {}
+        project = group[0].get("project")
+        return fn(project, [it["id"] for it in group if it.get("project") == project])
+    waiting = [it for it in items if it.get("status") == "pending"]
+    dis = first([it for it in waiting if it.get("kind") == "disagreement"], conflict_cards.pointer)
+    rest = first([it for it in waiting if it.get("kind") != "disagreement"],
+                 review_cards.pointer) if review else {}
+    return review_cards.both(dis, rest)
 
 
 def _safe_card(db_path: Path, it: dict):
@@ -647,8 +657,9 @@ async def walk(result: dict, session, client: str) -> dict:
         return _plain_answer(result, ways, "This app answered FlowState's box at once, faster "
                                            "than a person could, so no box was shown.", local)
     left = await asyncio.to_thread(S._safe_call, _pending_total, db, plan.get("project_id"))
-    for k in ("items", "showing", "next_page"):
+    for k in ("items", "showing", "next_page", "show_card", "card_note"):
         result.pop(k, None)
+    result.update(plan.get("boxed_pointer") or {})   # the boxes asked the rest: cards only for disagreements
     result["walked"] = done
     result["still_waiting"] = left
     if left:

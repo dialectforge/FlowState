@@ -48,6 +48,7 @@ WRITES = {
     ("link", "add"): None,
     ("link", "flag_conflict"): None,
     ("resolve_conflict_card", None): "item_id",
+    ("resolve_review_card", None): "item_id",   # review_cards.py: the card's buttons
     ("todo", "block"): "todo_id",
     ("todo", "unblock"): "todo_id",
     ("todo", "claim"): "todo_id",       # claims.py: who is working on it, until when

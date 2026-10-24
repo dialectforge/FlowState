@@ -81,3 +81,20 @@ def reject(db_path: Path, item: dict, reason: str, user_request: str, client: st
         out.update(S._safe_call(conflict_cards.on_reject, db_path, item, client) or {})
     return out
 
+
+def for_card(db_path: Path, client: str):
+    """The review card's decide(item, decision, reason) (review_cards.resolve_card): the same
+    approve / reject as manage_review, with the tap as the recorded request. Errors come back
+    as their payload."""
+    from . import deletes, safety
+
+    def decide(item: dict, decision: str, reason: str) -> dict:
+        words = f"The user tapped {'Approve' if decision == 'approve' else 'Reject'} on the review card."
+        try:
+            if decision == "reject":
+                return reject(db_path, item, reason, words, client)
+            done: dict = {}
+            return {**approve(db_path, item, {}, words, client, done, path="card"), **done}
+        except (review.ReviewError, deletes.DeleteError, safety.SafetyError) as e:
+            return e.payload
+    return decide

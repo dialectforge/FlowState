@@ -37,7 +37,7 @@ from . import ledger
 from . import legacy_args
 from . import links
 from . import review
-from . import review_apply, review_mode
+from . import review_apply, review_cards, review_mode
 from . import safety
 from . import saves
 from . import tasks
@@ -375,9 +375,12 @@ def handle_call(name: str, args: dict, client: str = "unknown", meta: Optional[d
                        _one_commit(name, args))
     # something now waits in the review queue: say how the user decides it (after the save).
     # The card's own tools show or decide a card; they queue nothing.
-    if name in ("show_conflict_card", "resolve_conflict_card"):
+    if name in CARD_TOOLS:
         return result
     return waiting.queue_guidance(result, backend.db_path, client)
+
+
+CARD_TOOLS = ("show_conflict_card", "resolve_conflict_card", "show_review_card", "resolve_review_card")
 
 
 def _one_commit(name: str, args: dict) -> bool:
@@ -385,7 +388,7 @@ def _one_commit(name: str, args: dict) -> bool:
     safety copy first) and undo (it restores with foreign-key checks off)."""
     key = (name, args.get("action"))
     return writes_text(name, args) and not (
-        name in receipts.NO_RECEIPT or name in ("delete_request", "review_approve")
+        name in receipts.NO_RECEIPT or name in ("delete_request", "review_approve", "resolve_review_card")
         or key in _DELETE_ACTIONS or key == ("history", "undo"))
 
 
@@ -459,6 +462,11 @@ def _handle(name: str, args: dict, client: str, meta: dict) -> Any:
         result = conflict_cards.resolve_card(db_path, args, client)
     elif name == "show_conflict_card":
         result = conflict_cards.show(db_path, args, pid)
+    elif name == "resolve_review_card":
+        result = review_cards.resolve_card(db_path, args, pid, client,
+                                           review_apply.for_card(db_path, client))
+    elif name == "show_review_card":
+        result = review_cards.show(db_path, args, pid)
     elif name == "review_mode":
         result = _review_mode(args, client)
     elif name == "history":

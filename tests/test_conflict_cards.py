@@ -126,7 +126,7 @@ def test_card_ui_is_declared_on_a_model_visible_tool_not_on_results(backend, mon
     assert ui["resolve_conflict_card"]["visibility"] == ["app"]
     show = next(t for t in tools if t.name == "show_conflict_card")
     assert show.annotations.readOnlyHint is True
-    assert [str(r.uri) for r in res] == [UI_URI]
+    assert [str(r.uri) for r in res] == [UI_URI, "ui://flowstate/review-card.html"]   # 2.4.4
     assert body.contents[0].mimeType == MIME and "<!DOCTYPE html>" in body.contents[0].text
     # the card's data rides on show_conflict_card only; log_work answers carry text + a pointer
     older = decide(S, "Use JWT tokens for API auth", app="Claude")
