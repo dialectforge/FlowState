@@ -37,7 +37,7 @@ from . import ledger
 from . import legacy_args
 from . import links
 from . import review
-from . import review_mode
+from . import review_apply, review_mode
 from . import safety
 from . import saves
 from . import tasks
@@ -1080,6 +1080,8 @@ def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
     done: dict = {}
     try:
         item = review.get_item(backend.db_path, int(args["item_id"]))
+        if item is None:
+            return {"error": "record_not_found", "message": f"No review item with id {args['item_id']}."}
         agent = identity.current() is not None   # None: command line, review page, popup, phone
         locked = approvals.user_only(item) and item["status"] == "pending"
         if locked and agent and (no := provenance.agent_refusal(backend.db_path, item, name)):
@@ -1100,28 +1102,13 @@ def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
                     return {"error": DELETE_REFUSAL[0], "message": DELETE_REFUSAL[1]}
                 deletes.check_approval(item, args.get("confirm_name"))
         if name == "review_reject":
-            out = review.reject(backend.db_path, int(args["item_id"]), args.get("reason") or "",
-                                user_request, client)
+            out = review_apply.reject(backend.db_path, item, args.get("reason") or "",
+                                      user_request, client)
             if (item or {}).get("kind") != "disagreement" and (
                     locked or approvals.logs_every_decision(client, agent)):   # chat walk, phone list too
                 _safe_call(approvals.log_decision, backend.db_path, item,
                            "agent" if agent else approvals.path_of(client), client, "rejected")
-            if out.get("kind") == "conflict":   # the user says the two decisions fit together
-                out.update(conflicts.dismiss(backend.db_path, int(args["item_id"]), client))
-            elif out.get("kind") == "disagreement":
-                out.update(_safe_call(conflict_cards.on_reject, backend.db_path, item, client) or {})
             return out
-
-        def apply(item: dict, payload: dict):   # a source tag is the queuing app's say-so
-            r = _log_work(item["project_id"], payload, None, (item.get("app") or client, item.get("model")))
-            if isinstance(r, dict) and "error" in r:
-                raise review.ReviewError(r["error"], r.get("message", "could not create the record"))
-            rec = r.get("record") if isinstance(r, dict) else None
-            rid = rec.get("id") if isinstance(rec, dict) else None
-            if rid is not None:
-                _safe_call(history.record_created, backend.db_path, payload["kind"], rid,
-                           "approve", client)
-            return _RECORD_TABLE[payload["kind"]], rid
 
         move_to = None
         if args.get("move_to") not in (None, ""):
@@ -1130,38 +1117,8 @@ def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
                 return {"error": "project_not_found", "message": f"No single project matches "
                         f"{args['move_to']!r}.", "candidates": res.get("candidates", [])}
             move_to = res["project"]["id"]
-
-        def apply_cleanup(item: dict, _edits: dict):
-            return cleanup.apply(backend.db_path, item, client, move_to)
-
-        def apply_edit(item: dict, _edits: dict):
-            from .markdown_io import apply_edit as do
-            return do(backend.db_path, item, client)
-
-        def apply_conflict(item: dict, _edits: dict):
-            done["note"] = ("Kept as a possible conflict; it stays in the brief until a decision "
-                            "replaces one of them (log_work replaces= or manage_links supersedes). "
-                            "Ask the user which one stands.")
-            return conflicts.confirm(backend.db_path, item)
-
-        def apply_delete(item: dict, _edits: dict):
-            done.update(deletes.execute(backend.db_path, item, client, args.get("confirm_name")))
-            return deletes.TYPES[done["deleted"]["record_type"]][0], done["deleted"]["id"]
-
-        def apply_setting(item: dict, _edits: dict):
-            return review_mode.apply_queued(backend.db_path, item, client)
-
-        edits = {k: args.get(k) for k in ("summary", "details", "priority", "category", "component")}
-        if safety.needs_copy(item):   # a verified copy first, or no change at all
-            done["safety_copy"] = safety.copy_before(backend.db_path).name
-        def apply_disagreement(item: dict, _edits: dict):
-            return conflict_cards.apply_keep(backend.db_path, item, args.get("keep"), client)
-
-        out = review.approve(backend.db_path, int(args["item_id"]), user_request, client, apply, edits,
-                             others={"cleanup": apply_cleanup, "edit": apply_edit,
-                                     "delete": apply_delete, "conflict": apply_conflict,
-                                     "setting": apply_setting, "disagreement": apply_disagreement,
-                                     "source": lambda it, _e: provenance.confirm(backend.db_path, it)})
+        out = review_apply.approve(backend.db_path, item, args, user_request, client, done,
+                                   move_to=move_to)
         if (item or {}).get("kind") != "disagreement" and (locked or approvals.logs_every_decision(client, agent)):
             _safe_call(approvals.log_decision, backend.db_path, item, approvals.path_of(client),
                        client, "approved")
