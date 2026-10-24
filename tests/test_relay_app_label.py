@@ -86,22 +86,24 @@ def test_relay_write_without_a_client_name_is_relay_unknown_app(backend, cursor_
     assert "Cursor" not in queued(db, "Add a health check")[0][0]
 
 
-def test_local_lan_caller_is_unchanged(backend, cursor_token):
+def test_local_lan_caller_gets_the_same_rule(backend, cursor_token):   # 2.4.4, task 47
     db = backend.backend.db_path
     http_calls(db, cursor_token, [suggest("Use Kafka for events")], "Grok Bot", relay=False)
-    assert queued(db, "Use Kafka for events") == [("Cursor", "Cursor", "remote_token")]
+    assert queued(db, "Use Kafka for events") == \
+        [("Grok Bot", "lan (signed in as Cursor)", "remote_token")]
 
 
-def test_stdio_and_lan_resolve_rules_are_unchanged():
+def test_stdio_and_lan_resolve_rules():
     class Tok:
         identity_source, client_name, workspace = "remote_token", "Phone", None
     assert identity.resolve("Claude Desktop").app == "Claude Desktop"
     assert identity.resolve("Grok", True, Tok(), {}).as_dict() == \
-        {"app": "Phone", "model": None, "machine": "Phone", "identity_source": "remote_token"}
+        {"app": "Grok", "model": None, "machine": "lan (signed in as Phone)",
+         "identity_source": "remote_token"}
     tunneled = identity.resolve("Grok", True, Tok(), {}, listener="public")   # task 44
     assert (tunneled.app, tunneled.machine, tunneled.credential) == \
         ("Grok", "tunnel (signed in as Phone)", "Phone")
-    assert identity.resolve("Grok", True, Tok(), {}).credential is None
+    assert identity.resolve("Grok", True, Tok(), {}).credential == "Phone"   # LAN too (task 47)
     relayed = identity.resolve("Grok", True, Tok(), {}, listener="relay")
     assert (relayed.app, relayed.machine, relayed.credential) == \
         ("Grok", "relay (signed in as Phone)", "Phone")

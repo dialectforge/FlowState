@@ -65,7 +65,7 @@ def public(seeded_db):
     s.stop()
 
 
-def test_lan_app_key_identity_comes_from_the_key(lan, seeded_db):
+def test_lan_app_key_records_the_apps_name_and_the_key(lan, seeded_db):
     kid, key = _add_key(seeded_db, "Cursor laptop", workspace="laptop-ws")
     out = _calls(lan.base, key, [
         ("todo", {"action": "update", "todo_id": 1, "status": "in_progress", "project": "Alpha"}),
@@ -76,11 +76,14 @@ def test_lan_app_key_identity_comes_from_the_key(lan, seeded_db):
         name="I Am Someone Else")
     assert not out[0][0] and not out[1][0], out
     assert out[2][0] and json.loads(out[2][1])["error"] == "not_allowed_remotely"
+    # 2.4.4 (task 47): the app's own name; the key's name and workspace in machine (the
+    # header can't override the key's workspace)
+    ws = "laptop-ws (signed in as Cursor laptop)"
     assert _q(seeded_db, "SELECT app, model, machine, identity_source FROM record_history") == \
-        [("Cursor laptop", "header-model", "laptop-ws", "app_key"),     # the edit
-         ("Cursor laptop", "arg-model", "laptop-ws", "app_key")]        # the change it created
+        [("I Am Someone Else", "header-model", ws, "app_key"),     # the edit
+         ("I Am Someone Else", "arg-model", ws, "app_key")]        # the change it created
     assert _last_activity(seeded_db, "log_work") == \
-        ("Cursor laptop", "arg-model", "laptop-ws", "app_key", kid)
+        ("I Am Someone Else", "arg-model", ws, "app_key", kid)
 
 
 def test_lan_key_without_workspace_uses_the_header(lan, seeded_db):
@@ -88,7 +91,7 @@ def test_lan_key_without_workspace_uses_the_header(lan, seeded_db):
     _calls(lan.base, key, [("rules", {"action": "add", "project": "Alpha", "rule": "Be kind"})],
            headers={"X-FlowState-Workspace": "phone-ws"})
     assert _q(seeded_db, "SELECT app, model, machine, identity_source FROM project_rules") == \
-        [("Phone", None, "phone-ws", "app_key")]
+        [("Self Named App", None, "phone-ws (signed in as Phone)", "app_key")]
 
 
 def test_read_only_key_and_revoked_key(lan, seeded_db, monkeypatch):
@@ -121,11 +124,12 @@ def test_shared_lan_token_still_works_as_legacy(lan, seeded_db):
     assert who["rows"][0]["identity"] == "shared token (legacy)"
 
 
-def test_remote_token_on_lan_as_before(lan, seeded_db):
+def test_remote_token_on_lan_records_the_apps_name_and_the_token(lan, seeded_db):
     _, tok = _store(seeded_db).add_token_client("Old Mac", ["flowstate:read", "flowstate:write"])
     out = _calls(lan.base, tok, [("log_work", {"project": "Alpha", "kind": "todo", "summary": "t"})])
     assert not out[0][0], out
-    assert _last_activity(seeded_db, "log_work")[:4] == ("Old Mac", None, "Old Mac", "remote_token")
+    assert _last_activity(seeded_db, "log_work")[:4] == \
+        ("Self Named App", None, "lan (signed in as Old Mac)", "remote_token")
 
 
 def test_public_listener_refuses_lan_keys_and_keeps_oauth_and_tokens(public, seeded_db):

@@ -9,7 +9,8 @@
     flowstate token status | migrate --from FILE
     flowstate scan-secrets      [--db FILE]
     flowstate remote            status | passphrase | add-client --name N [--read-only] |
-                                clients | revoke --client ID | allow-redirect --name HOST
+                                clients | rename OLD NEW | revoke --client ID |
+                                allow-redirect --name HOST
     flowstate keys              add --name N [--read-only] [--workspace W] | list |
                                 revoke --id ID | --name N   (per-app LAN keys: app_keys.py)
     flowstate relay             enroll --code C | run | status | renew | enable | disable |
@@ -304,8 +305,29 @@ def cmd_remote(a) -> int:
         for c in rows:
             state = "REVOKED " + _when(c["revoked_at"]) if c["revoked_at"] else \
                 ("waiting for approval" if not c["approved_at"] else "active")
+            was = store.former_names(c["id"])
             say(f"{c['id']}  {c['name']!r}  {c['kind']}  {c['scopes']}  added {_when(c['created_at'])}"
-                f"  last used {_when(c['last_used_at'])}  {state}")
+                f"  last used {_when(c['last_used_at'])}  {state}"
+                + (f"  (was {', '.join(repr(n) for n in was)})" if was else ""))
+        return 0
+    if a.action == "rename":
+        names = list(a.names or [])
+        if len(names) != 2:
+            say("Usage: flowstate remote rename <old name or id> <new name> (quote names with "
+                "spaces; see `flowstate remote clients`)")
+            return 1
+        try:
+            cid, was, now = store.rename_client(*names)
+        except ValueError as e:
+            say(f"Not renamed: {e}.")
+            return 1
+        say(f"{cid}: renamed from {was!r} to {now!r}. Same token; the app keeps working without "
+            f"any change.")
+        say(f"What it saved before keeps the name {was!r}; what it saves from now on says {now!r}. "
+            f"It is still the same app for its own review items and undo.")
+        if _carry_pause(a, was, now):
+            say(f"{was!r} was paused, so {now!r} is paused too (flowstate apps resume --app "
+                f"{now!r} to undo that).")
         return 0
     if a.action == "revoke":
         if not a.client_id:
@@ -328,6 +350,22 @@ def cmd_remote(a) -> int:
         say(f"OAuth apps may now return to https://{host}/...")
         return 0
     return 1
+
+
+def _carry_pause(a, was: str, now: str) -> bool:
+    """A paused token stays paused under its new name (the pause switch is keyed by name).
+    True if it was paused."""
+    from . import activity
+    db = _db(a)
+    if not db.exists():
+        return False
+    try:
+        if not activity.is_paused(db, was) or activity.is_paused(db, now):
+            return False
+        activity.set_paused(db, now, True, "cli (rename)")
+        return True
+    except sqlite3.Error:
+        return False
 
 
 # ---------------------------------------------------------------- parser
@@ -382,9 +420,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--db")
     p.set_defaults(fn=cmd_scan)
 
-    p = sub.add_parser("remote", help="remote access: passphrase, per-app tokens, revoke")
-    p.add_argument("action", choices=["status", "passphrase", "add-client", "clients", "revoke",
-                                      "allow-redirect"])
+    p = sub.add_parser("remote", help="remote access: passphrase, per-app tokens, rename, revoke",
+                       description="rename OLD NEW: give a token or OAuth app a new name; the "
+                                   "same token keeps working (OLD may be its id)")
+    p.add_argument("action", choices=["status", "passphrase", "add-client", "clients", "rename",
+                                      "revoke", "allow-redirect"])
+    p.add_argument("names", nargs="*", metavar="NAME",
+                   help="rename: the app's current name (or id), then its new name")
+    p.add_argument("--db", help="rename: the database whose pause switch to carry over")
     p.add_argument("--name", help="add-client: app name; allow-redirect: host")
     p.add_argument("--read-only", action="store_true", help="add-client: read-only access")
     p.add_argument("--days", type=int, help="add-client: token expires after N days")

@@ -116,7 +116,7 @@ def apps(db_path: Path) -> list[dict]:
             rows[r["app"]]["paused_changed_at"] = r["changed_at"]
         if identity.has_column(conn, "activity_log", "identity_source"):
             for r in conn.execute("SELECT DISTINCT app, machine, identity_source FROM activity_log "
-                                  "WHERE identity_source IN ('oauth_client', 'remote_token')"):
+                                  "WHERE identity_source IN ('oauth_client', 'remote_token', 'app_key')"):
                 signed = identity.via(r["machine"], r["identity_source"])
                 if signed and r["app"] in rows and signed not in rows[r["app"]].setdefault("via", []):
                     rows[r["app"]]["via"].append(signed)
@@ -129,7 +129,7 @@ def apps(db_path: Path) -> list[dict]:
 
 
 def app_label(a: dict) -> str:
-    """An apps() row for people: 'Grok Bot (via Cursor)' when it came in on relay / own-tunnel
+    """An apps() row for people: 'Grok Bot (via Cursor)' when it came in on keys, tokens or
     sign-ins of another name (pausing either name stops it), else the name."""
     others = [v for v in a.get("via") or [] if v.casefold() != (a["app"] or "").casefold()]
     return f"{a['app']} (via {', '.join(others)})" if others else a["app"]

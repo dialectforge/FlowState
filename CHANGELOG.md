@@ -114,6 +114,31 @@
   AGENTS.md, README), with how to replace a shared token (`flowstate remote clients`, a new
   token per app, then revoke the old one). The docs' example token is now "my-laptop-app"
   instead of "Cursor", and `flowstate remote add-client` says to use each token in one app.
+- **`flowstate remote rename "<old name>" "<new name>"`** gives a remote token or OAuth app a new
+  name without making a new token: the same token keeps working and nothing changes in the app.
+  The old name may also be the id from `flowstate remote clients`. Refused, with a sentence
+  saying why: no active app of that name (or several; then rename by id), an empty or
+  secret-looking new name, or a name another app has or had before a rename. Past records keep
+  the name they were saved under; new ones show the new name. The safeguards follow the token,
+  not the name: a paused token stays paused under its new name, it still can't decide review
+  items it queued under its old name, and undo still lets it take back only its own records
+  (old names are kept in the settings database's new `client_names` table, so `remote clients`
+  can show them as "was ..."; the FlowState database is not changed).
+- **Both names on the LAN too.** Per-app keys (`flowstate keys add`) and remote tokens used on
+  the LAN listener now follow the same rule as the relay and the tunnel: the app recorded is
+  the name the app sends (else the key's or token's name), and the key's or token's name is
+  recorded beside it in the machine column: "<the key's workspace> (signed in as <key name>)",
+  "lan (signed in as <name>)" without a workspace or for a remote token. Every place that shows
+  "Grok Bot (via Cursor)" for relay and tunnel callers now does it for these too, one name when
+  they match; a key's workspace still shows as "on <workspace>" where pages show the machine.
+  Pausing the key's or token's name stops it, it can't decide its own review items by sending
+  another name, and undo is keyed to the key or token (a key and a remote token of the same
+  name are different callers). Before, these recorded the key's or token's name as the app;
+  those rows show as they were saved and still count as that key's or token's own. The shared
+  LAN token is unchanged: the name the app sends, "shared token (legacy)" on Who did what.
+- Who did what's app filter (the review page and `manage_history(action="who", by_app=...)`)
+  also finds rows by the key's, token's or OAuth app's name they came in on, so filtering by a
+  key's name still finds what it wrote.
 - `flowstate update self-update on|off`: whether `flowstate update` may update this computer,
   from the terminal (`config.json` `"self_update"`, the same setting as on the review page's
   Settings). With no word it shows the value and where it comes from: `config.json`, the

@@ -76,24 +76,33 @@ claude.ai or ChatGPT work through Cloudflare Access Managed OAuth; whether the p
    name next to it ("Grok Bot (via my-laptop-app)"), but pausing or revoking the token stops
    all of them.
 5. **Every app can be cut off on its own:** `flowstate remote clients` lists them with
-   "last used"; `flowstate remote revoke --client <id>` stops it at once. To rename a token
-   or replace one that several apps share, find it in `flowstate remote clients`, give each
-   app its own (`remote add-client --name "<new name>"`), then revoke the old one.
+   "last used"; `flowstate remote revoke --client <id>` stops it at once. To give a token
+   (or an OAuth app) a better name, `flowstate remote rename "<old name>" "<new name>"` (the
+   old name may be its id from `remote clients`): the same token keeps working, nothing in the
+   app changes. A name another app has, or had before a rename, is refused. What the app saved
+   before keeps the old name; what it saves from now on shows the new one. A paused token stays
+   paused under its new name, and it is still the same app for its own review items and undo.
+   To replace one token that several apps share, find it in `flowstate remote clients`, give
+   each app its own (`remote add-client --name "<new name>"`), then revoke the old one.
 
    **LAN keys vs remote tokens.** `flowstate keys add --name "<app>" [--read-only]` makes a
    per-app key for the **local/LAN** listener only (prefix `fs_lk_`); it is refused on the
    public URL, just like the LAN token. `flowstate remote add-client` makes a per-app
    **remote** token (prefix `fs_ct_`) for the public listener (it also works on the LAN
-   listener, as before). On the LAN listener both record the app's name from the key or token,
-   not from what the app says (the machine recorded is the client's name). On your own tunnel
-   and through the relay one sign-in is often shared by several apps (or named after another
-   app), so there the app recorded is the name the connecting app sends ("Tunnel (unknown
-   app)" / "Relay (unknown app)" if it sends none) and the machine is "tunnel (signed in as
-   <the token's or OAuth app's name>)" / "relay (signed in as ...)". Pages, cards and the
-   brief show both names when they differ, e.g. "Grok Bot (via my-laptop-app)"; pausing either
-   name stops its writes, and a different name on the same sign-in still counts as the same
-   app (it can't decide its own review items or take back another app's records). Changes made with the
-   shared LAN token are marked "shared token (legacy)". Every change keeps the app, the model
+   listener, as before). A key or token is often shared by several apps (or named after another
+   app), so everywhere (LAN, your own tunnel, the relay) the app recorded is the name the
+   connecting app sends, and the key's or token's name is recorded beside it, in the machine
+   column: "<the key's workspace> (signed in as <key name>)" (or "lan (signed in as ...)"
+   without a workspace) for a LAN key, "lan (signed in as <token name>)" for a remote token on
+   the LAN, "tunnel (signed in as ...)" / "relay (signed in as ...)" on the tunnel and the
+   relay. An app that sends no name is recorded as the key's or token's name on the LAN, and
+   as "Tunnel (unknown app)" / "Relay (unknown app)" on the tunnel and the relay. Pages, cards
+   and the brief show both names when they differ, e.g. "Grok Bot (via my-laptop-app)", and
+   one name when they are the same; pausing either name stops its writes, and a different name
+   on the same key or token still counts as the same app (it can't decide its own review items
+   or take back another app's records). Changes recorded before 2.4.4 show as they were saved
+   (on the LAN: the key's or token's name as the app). Changes made with the shared LAN token
+   are marked "shared token (legacy)" and show the name the app sends, as before. Every change keeps the app, the model
    (only when the app supplies it, for example with an `X-FlowState-Model` header) and how the
    app was identified; see "Who did what" on the review page.
 6. **Guard rails:**

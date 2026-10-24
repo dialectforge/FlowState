@@ -73,9 +73,14 @@ def test_shown_names_both_only_when_they_differ():
 def test_a_lan_app_cant_fake_a_via_with_its_workspace_header():
     fake = "relay (signed in as Cursor)"
     assert identity.via(fake, "shared_token") is None
-    assert identity.via(fake, "app_key") is None
     assert identity.via(fake, "self_reported") is None
     assert identity.shown("Grok Bot", fake, "shared_token") == "Grok Bot"
+    # a per-app key's header workspace can't put a sign-in of its own in front (task 47)
+    key = type("T", (), {"identity_source": "app_key", "client_name": "My key",
+                         "workspace": None})()
+    ident = identity.resolve("Grok Bot", True, key, {"x-flowstate-workspace": fake})
+    assert identity.via(ident.machine, "app_key") == "My key"
+    assert identity.shown("Grok Bot", ident.machine, "app_key") == "Grok Bot (via My key)"
 
 
 # ---------------------------------------------------------------- part 2: own tunnel
@@ -112,10 +117,10 @@ def test_a_renamed_tunnel_app_cant_decide_its_own_item():
     assert refused and refused["error"] == "own_item"
 
 
-def test_lan_remote_tokens_are_unchanged(backend, cursor_token):
+def test_lan_remote_tokens_get_the_same_rule(backend, cursor_token):   # 2.4.4, task 47
     db = backend.backend.db_path
-    http_calls(db, cursor_token, [suggest("LAN token as before")], "Grok Bot", relay=False)
-    assert queued(db, "LAN token as before") == [("Cursor", "Cursor", "remote_token")]
+    http_calls(db, cursor_token, [suggest("LAN token too")], "Grok Bot", relay=False)
+    assert queued(db, "LAN token too") == [("Grok Bot", "lan (signed in as Cursor)", "remote_token")]
 
 
 def test_undo_take_back_is_keyed_to_the_sign_in_not_the_claimed_name():

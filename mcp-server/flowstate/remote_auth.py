@@ -8,7 +8,7 @@ Three kinds of caller:
     app, each revocable on its own. For apps that take a fixed "Authorization: Bearer"
     header (Cursor, Claude Code, the xAI API, ...).
   * per-app LAN keys (`flowstate keys add --name NAME [--read-only]`, app_keys.py): the
-    same idea for the local / LAN listener only; the recorded app name comes from the key.
+    same idea for the local / LAN listener only; the key's name is recorded beside the app's.
     Never accepted on the public listener.
   * OAuth clients (claude.ai / ChatGPT connectors): MCP authorization (OAuth 2.1, PKCE
     S256, dynamic client registration, RFC 8707 resource binding, refresh-token rotation).
@@ -119,6 +119,9 @@ CREATE TABLE IF NOT EXISTS app_keys (                                 -- see app
     id TEXT PRIMARY KEY, name TEXT NOT NULL, hash TEXT NOT NULL UNIQUE,
     read_only INTEGER NOT NULL DEFAULT 0, workspace TEXT, created_at REAL NOT NULL,
     last_used_at REAL, revoked_at REAL);
+CREATE TABLE IF NOT EXISTS client_names (                             -- names before a rename
+    client_id TEXT NOT NULL, name TEXT NOT NULL, until REAL NOT NULL);
+CREATE INDEX IF NOT EXISTS client_names_client ON client_names(client_id);
 """
 
 
@@ -224,6 +227,57 @@ class AuthStore:
                              "last_used_at, revoked_at FROM clients ORDER BY created_at").fetchall()
         return [dict(r) for r in rows]
 
+    def rename_client(self, old: str, new: str) -> tuple[str, str, str]:
+        """Give a live app (remote token or OAuth app) a new name, same token: (client id,
+        old name, new name). `old` is its name or id. Refused (ValueError, a sentence to
+        show): no such app, several of that name, an empty or secret-looking new name, or one
+        another app has, or had before a rename. The old name is kept in client_names, so the
+        app is still the one that wrote what it saved under it (identity.same_sign_in)."""
+        from .identity import MAX_LEN, clean
+        old = " ".join((old or "").split())
+        wanted = " ".join((new or "").split())
+        if not old:
+            raise ValueError("say which app: flowstate remote rename <old name> <new name>")
+        if not wanted:
+            raise ValueError("the new name is empty; give the app a name")
+        if len(wanted) > MAX_LEN:
+            raise ValueError(f"the new name is longer than {MAX_LEN} characters")
+        if clean(wanted) != wanted:
+            raise ValueError("the new name looks like it holds a secret; pick a plain name")
+        with self._conn() as c:
+            live = c.execute("SELECT id, name FROM clients WHERE revoked_at IS NULL").fetchall()
+            hits = [r for r in live if r["id"] == old] or \
+                [r for r in live if r["name"] == old] or \
+                [r for r in live if r["name"].casefold() == old.casefold()]
+            if not hits:
+                raise ValueError(f"no active app is named {old!r} (see `flowstate remote clients`)")
+            if len(hits) > 1:
+                raise ValueError(f"{len(hits)} active apps are named {old!r} ("
+                                 + ", ".join(r["id"] for r in hits)
+                                 + "); rename one by its id: flowstate remote rename <id> "
+                                 + repr(wanted))
+            cid, was = hits[0]["id"], hits[0]["name"]
+            if wanted == was:
+                raise ValueError(f"{cid} is already named {was!r}; nothing changed")
+            taken = [r["id"] for r in live if r["id"] != cid
+                     and r["name"].casefold() == wanted.casefold()]
+            taken += [r["client_id"] for r in c.execute(
+                "SELECT client_id, name FROM client_names WHERE client_id != ?", (cid,))
+                if r["name"].casefold() == wanted.casefold()]
+            if taken:
+                raise ValueError(f"the name {wanted!r} is taken (by {taken[0]}, now or before a "
+                                 f"rename); pick another")
+            c.execute("INSERT INTO client_names (client_id, name, until) VALUES (?, ?, ?)",
+                      (cid, was, time.time()))
+            c.execute("UPDATE clients SET name = ? WHERE id = ?", (wanted, cid))
+        return cid, was, wanted
+
+    def former_names(self, client_id: str) -> list[str]:
+        """The names this app had before `flowstate remote rename`, oldest first."""
+        with self._conn() as c:
+            return [r["name"] for r in c.execute(
+                "SELECT name FROM client_names WHERE client_id = ? ORDER BY until", (client_id,))]
+
     def revoke_client(self, client_id: str) -> bool:
         now = time.time()
         with self._conn() as c:
@@ -316,6 +370,7 @@ class FSAccessToken(AccessToken):
     client_name: str = ""
     identity_source: str = ""        # see identity.py: app_key, oauth_client, remote_token, ...
     workspace: Optional[str] = None  # per-app LAN keys: the machine / workspace it was made for
+    former_names: list[str] = []     # its names before `flowstate remote rename` (identity.aka)
 
 
 class FlowStateOAuthProvider:
@@ -408,7 +463,7 @@ class FlowStateOAuthProvider:
             return None
         if row["kind"] == "access" and row["resource"] != self.resource_url:
             return None  # audience check: only tokens issued for this server
-        return _token_obj(token, row)
+        return _token_obj(token, row, self.store)
 
     async def revoke_token(self, token) -> None:
         row = self.store.lookup(token.token, ("access", "refresh"))
@@ -423,11 +478,12 @@ class FlowStateOAuthProvider:
                                  "explicit": params.redirect_uri_provided_explicitly})
 
 
-def _token_obj(token: str, row) -> FSAccessToken:
+def _token_obj(token: str, row, store: Optional[AuthStore] = None) -> FSAccessToken:
     return FSAccessToken(token=token, client_id=row["client_id"], scopes=row["scopes"].split(),
                          expires_at=int(row["expires_at"]) if row["expires_at"] else None,
                          resource=row["resource"], client_name=row["client_name"],
-                         identity_source="oauth_client" if row["kind"] == "access" else "remote_token")
+                         identity_source="oauth_client" if row["kind"] == "access" else "remote_token",
+                         former_names=store.former_names(row["client_id"]) if store else [])
 
 
 class TokenChecker:
@@ -459,7 +515,7 @@ class TokenChecker:
             if not self.provider or row["resource"] != self.provider.resource_url:
                 return None
         self.store.touch(row["client_id"])
-        return _token_obj(token, row)
+        return _token_obj(token, row, self.store)
 
 
 # ---------------------------------------------------------------- consent page

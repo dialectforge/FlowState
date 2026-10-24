@@ -4,8 +4,9 @@
     flowstate keys list
     flowstate keys revoke --id ID | --name NAME
 
-Each app gets its own key, so FlowState records the app's name from the key, not from what
-the app says about itself. A read-only key can call read tools only. Revoking a key stops it
+Each app gets its own key. FlowState records the name the app sends and, beside it, the key's
+name (identity.resolve: machine "<workspace> (signed in as <key name>)"), which the app can't
+change; pages show "Grok Bot (via <key name>)" when the two differ. A read-only key can call read tools only. Revoking a key stops it
 at once (the next request gets 401). Keys work on the LAN listener only, never on the
 public (tunnel) listener; the old shared LAN token keeps working as before.
 

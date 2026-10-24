@@ -238,8 +238,9 @@ prompt `flowstate-start`.
   (50 per page) and undo a change from there (the normal undo, with the page's CSRF and origin
   checks). AIs can read the same list with `manage_history(action="who")`.
 - **Per-app keys for the local/LAN HTTP server**: `flowstate keys add --name "<app>"` gives
-  each app its own key (optionally read-only), so the recorded app name comes from the key, not
-  from what the app says. The key is shown once and only a hash is kept; a revoked key is
+  each app its own key (optionally read-only). FlowState records the name the app sends and the
+  key's name beside it, which the app can't change ("Grok Bot (via my-laptop-key)" when they
+  differ, one name when they match). The key is shown once and only a hash is kept; a revoked key is
   refused (401) at once. Keys aren't accepted on the public listener, and can't use `manage_data_git` or
   attach files. The old shared LAN token still works; its changes are marked "shared token (legacy)".
 
@@ -306,7 +307,8 @@ prompt `flowstate-start`.
 - **Optional remote access**: for cloud AIs (claude.ai, ChatGPT and others), a public listener
   behind your own Cloudflare Tunnel with OAuth 2.1 sign-in that you approve with an owner
   passphrase, plus revocable per-app tokens (optionally read-only; use one token per app,
-  `flowstate remote clients` lists them). See
+  `flowstate remote clients` lists them, `flowstate remote rename OLD NEW` renames one without
+  making a new token). See
   [docs/REMOTE-ACCESS.md](docs/REMOTE-ACCESS.md).
 - **Fewer or more tools**: 12 tools are listed by default. `--tools core` (or
   `FLOWSTATE_TOOLS=core`) lists only the 6 everyday ones to save context; `--tools full` adds the
@@ -475,6 +477,7 @@ the venv active). Add `-h` to any command for its options.
 | `relay chat-approvals [on\|off]` | May AIs connected through the relay approve and reject review items in the chat? Off by default (phone only). Turning it `on` asks for `y` in this terminal; with no argument it shows the setting |
 | `review-page` | Review page in your browser (127.0.0.1 only): approve / edit / reject, "Who did what" (with undo), and a Settings section for every setting (see "Where to change settings"). You can also just click the link in your AI's answer (see "Where to see what's waiting for you") |
 | `keys add --name N [--read-only] [--workspace W]` / `keys list` / `keys revoke --id ID` (or `--name N`) | Per-app keys for the local/LAN HTTP server; the key is shown once, only a hash is kept; a revoked key stops at once |
+| `remote add-client --name N [--read-only]` / `remote clients` / `remote rename OLD NEW` / `remote revoke --client ID` | Per-app remote tokens (and OAuth apps). `rename` gives one a new name and keeps the same token working (OLD may be its id); a name another app has or had is refused; past records keep the old name; a paused one stays paused |
 | `apps list` / `apps activity` / `apps pause --app NAME` / `apps resume --app NAME` | Which app did what; stop one app from writing |
 | `backup [--offsite]` / `restore <file> [--to <new file>]` | Back up now / restore into a new, verified file |
 | `schedule-backups [--time HH:MM] [--offsite]` / `schedule-backups --remove` | Nightly backup on / off |
@@ -595,9 +598,10 @@ protocol is in [docs/relay-protocol.md](docs/relay-protocol.md).
   sends. "Who did what" says so in its identity column ("self-reported", "shared token (legacy)").
 - **Only per-app keys, per-app remote tokens and approved OAuth apps give an identity an app
   can't pick for itself.** Even then the model, and for a key without a workspace the machine,
-  are the app's own say-so. On your own tunnel and through the relay the app name is the one
-  the app sends (a token there is often shared); the token's or OAuth app's name is recorded
-  with it and shown next to it when they differ, e.g. "Grok Bot (via my-laptop-app)". Changes recorded before this was added show "not recorded".
+  are the app's own say-so. The app name is the one the app sends (a key or token is often
+  shared); the key's, token's or OAuth app's name is recorded with it and shown next to it when
+  they differ, e.g. "Grok Bot (via my-laptop-app)". That second name is the part the app can't
+  pick. Changes recorded before this was added show "not recorded".
 - **"Only when the user asks" is enforced by wording**, not cryptography: approving review items,
   changing the review mode and removing rules require the AI to quote your words, but a
   misbehaving AI could make them up. With approvals off (the default) that includes deletes:

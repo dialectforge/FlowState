@@ -234,15 +234,19 @@ def test_resolve_rules():
             self.identity_source, self.client_name, self.workspace = src, name, ws
     h = {"x-flowstate-model": "hdr-model", "x-flowstate-workspace": "hdr-ws"}
     r = identity.resolve
+    # 2.4.4 (task 47): the app's own name, the key's name beside its workspace
     assert r("Claimed", True, Tok("app_key", ws="key-ws"), h).as_dict() == \
-        {"app": "Key App", "model": "hdr-model", "machine": "key-ws", "identity_source": "app_key"}
-    assert r("Claimed", True, Tok("app_key"), h, "arg-model").machine == "hdr-ws"
+        {"app": "Claimed", "model": "hdr-model", "machine": "key-ws (signed in as Key App)",
+         "identity_source": "app_key"}
+    assert r("unknown", True, Tok("app_key"), h).app == "Key App"   # no name sent: the key's
+    assert r("Claimed", True, Tok("app_key"), h, "arg-model").machine == \
+        "hdr-ws (signed in as Key App)"
     assert r("Claimed", True, Tok("app_key"), h, "arg-model").model == "arg-model"
     assert r("Claimed", True, Tok("shared_token", "owner (LAN token)"), h).as_dict() == \
         {"app": "Claimed", "model": "hdr-model", "machine": "hdr-ws",
          "identity_source": "shared_token"}
     assert r("Claimed", True, Tok("oauth_client", "claude.ai"), h).as_dict() == \
-        {"app": "claude.ai", "model": "hdr-model", "machine": "claude.ai",
+        {"app": "Claimed", "model": "hdr-model", "machine": "lan (signed in as claude.ai)",
          "identity_source": "oauth_client"}
     assert r("Claimed", True, Tok("remote_token", "Phone"), {}).model is None
     assert identity.label("shared_token") == "shared token (legacy)"

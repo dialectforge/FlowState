@@ -134,6 +134,7 @@ All commands run with the venv Python: `<venv python> -m flowstate <command>`.
 | review page (user) | `flowstate review-page` (127.0.0.1:8770 only; opens the browser with a one-time link; includes "Who did what"), or the "FlowState review" desktop shortcut setup makes (runs that command; opens the page FlowState already has open, if any). Without a command: the `http://127.0.0.1:<port>/` link in the brief and in `manage_review(action="walk")`'s answer, shown only to apps on the same computer (FlowState starts the page on first need, 127.0.0.1 only; `FLOWSTATE_REVIEW_PORT`) |
 | tunnel review page (user, own tunnel) | `https://<your tunnel>/review/tunnel` on the public listener (`--public-url`), signed in with the owner passphrase (`flowstate remote passphrase`); the same page, user-only items included; agent tokens don't open it; see `docs/REMOTE-ACCESS.md` section 4 |
 | phone review list (user, relay) | the bookmarkable `https://flowstatemcp.com/review/<handle>` in the brief and the walk's answer when the relay is enrolled and phone links are on (`approvals phone on\|off`); see `docs/APPROVALS.md` section 5 |
+| rename a remote token (user) | `flowstate remote rename "<old name or id>" "<new name>"`: same token, new name; refused if another app has or had the name; past records keep the old name; a paused one stays paused |
 | per-app keys for the local/LAN HTTP server (user) | `flowstate keys add --name NAME [--read-only] [--workspace W]` (shows the key once) / `keys list` / `keys revoke --id ID` (or `--name NAME`) |
 | pause an app (user) | `flowstate apps list` / `apps pause --app NAME` / `apps resume --app NAME` |
 
@@ -302,8 +303,9 @@ the user deletes the token file themselves once the server works without it.
 **Per-app keys (recommended).** Instead of giving every app the one shared token, give each
 app its own key: `<venv python> -m flowstate keys add --name "<app>" [--read-only]
 [--workspace "<machine or workspace>"]`. The key is shown once (only a hash is kept); the user
-pastes it into that app as its bearer token. FlowState then records the app's name from the
-key, not from what the app says. A read-only key can only read; `keys revoke --id <id>` (or
+pastes it into that app as its bearer token. FlowState then records the name the app sends
+plus the key's name, which the app can't change ("Grok Bot (via my-laptop-key)" when they
+differ, one name when they match). A read-only key can only read; `keys revoke --id <id>` (or
 `--name <app>`) stops a key at once (it then gets 401); `keys list` shows them (never the key).
 Keys work on the local/LAN listener only, never on the public one, and can't use `manage_data_git`,
 attach files, or ask for or approve deletes. The shared token keeps working as before; changes made with it are marked
@@ -329,9 +331,10 @@ Client snippets for HTTP (replace `<url>`; keep the token out of shared files):
 Per-app tokens (each revocable on its own, optionally read-only):
 `<venv python> -m flowstate remote add-client --name "<app>" [--read-only]`, then
 `remote clients` / `remote revoke --client <id>`. Recommend one token per app to the user:
-on the tunnel and the relay FlowState records the name the app sends and shows the token's
-name next to it when they differ ("Grok Bot (via my-laptop-app)"), so a token shared by
-several apps can't tell them apart. To rename or replace a shared token: find it in
+on the LAN, the tunnel and the relay FlowState records the name the app sends and shows the
+token's name next to it when they differ ("Grok Bot (via my-laptop-app)"), so a token shared by
+several apps can't tell them apart. To rename a token (same token, new name):
+`flowstate remote rename "<old name>" "<new name>"`. To replace a shared token: find it in
 `flowstate remote clients`, make one per app with `remote add-client`, then revoke the old one. For cloud AIs over HTTPS (claude.ai,
 ChatGPT, Grok) see `docs/REMOTE-ACCESS.md`: a `--public-url` listener on 127.0.0.1 behind a
 Cloudflare Tunnel, with OAuth 2.1 sign-in approved by the owner passphrase. Don't set up a
@@ -437,9 +440,10 @@ don't show server instructions:
    on it; `search` without a query lists the newest records.
 12. Every recorded change keeps the app, the model (only if supplied), the machine or
    workspace, and how the app was identified (`app_key`, `oauth_client`, `remote_token`,
-   `shared_token` or `self_reported`). Through the relay the app is the name the connecting app
-   sends (else "Relay (unknown app)") and the machine is "relay (signed in as <key or OAuth
-   app name>)". `manage_history(action="who", by_app=..., by_model=...,
+   `shared_token` or `self_reported`). With a key, token or OAuth sign-in the app is the name
+   the connecting app sends (else the key's or token's name on the LAN, "Relay (unknown app)"
+   through the relay) and the machine says what it signed in as: "relay (signed in as <token
+   or OAuth app name>)", "lan (signed in as ...)", or "<workspace> (signed in as <key name>)". `manage_history(action="who", by_app=..., by_model=...,
    by_machine=..., since=..., until=...)` lists who did what (read-only).
 13. Several agents can work on one project at once. Before you start a todo,
    `manage_todos(action="claim", project=..., todo_id=<id>)` (`minutes`, default 15, max 120;

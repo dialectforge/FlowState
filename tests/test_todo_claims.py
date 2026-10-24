@@ -438,7 +438,8 @@ def test_session_comes_from_the_mcp_session_header_over_http():
     a = identity.resolve("x", http=True, token=Tok(), headers={"mcp-session-id": "abc123"})
     b = identity.resolve("x", http=True, token=Tok(), headers={"mcp-session-id": "def456"})
     assert (a.session, b.session) == ("abc123", "def456")
-    assert a.as_dict() == b.as_dict() == {"app": "Cursor", "model": None, "machine": "mac-mini",
+    assert a.as_dict() == b.as_dict() == {"app": "x", "model": None,
+                                          "machine": "mac-mini (signed in as Cursor)",
                                           "identity_source": "app_key"}   # logs unchanged
     assert identity.resolve("Cursor").session == identity.PROCESS_SESSION
 

@@ -141,11 +141,14 @@ def _norm(text: str) -> str:
 
 
 def _own(item: Optional[dict], ident) -> bool:
-    """Did this caller's app (on the same machine, when recorded) queue the item? Through the
-    relay or the own tunnel the app name is the app's own say-so, so the same sign-in (machine
-    "relay / tunnel (signed in as ...)") counts as the same caller whatever name it sends now."""
-    if item and ident is not None and getattr(ident, "credential", None) and \
-            item.get("machine") and item["machine"] == ident.machine:
+    """Did this caller's app (on the same machine, when recorded) queue the item? With a key,
+    token or sign-in (LAN, relay, own tunnel) the app name is the app's own say-so, so the same
+    sign-in counts as the same caller whatever name it sends now, and under any name the token
+    had (`flowstate remote rename`; identity.same_sign_in)."""
+    if item and getattr(ident, "credential", None) and (
+            (item.get("machine") and item["machine"] == ident.machine)
+            or identity.same_sign_in(item.get("app"), item.get("machine"),
+                                     item.get("identity_source"), ident)):
         return True
     if not item or ident is None or not item.get("app") or item["app"] != ident.app:
         return False

@@ -4,27 +4,31 @@ Every recorded change (edit history, review queue items and decisions, links, ha
 hard rules, review-mode changes, the activity log) stores the same four values, taken from
 here so nothing records identity in two different ways:
 
-  app              the app's name. From the per-app key / remote token / OAuth client when
-                   there is one (the app can't pick it), else the MCP client name it sends.
-                   Through the relay, and with a remote token / OAuth sign-in on the owner's
-                   own tunnel (--public-url), the sign-in is often shared or reused by several
-                   apps, so there it is the MCP client name the app sends, else "Relay
-                   (unknown app)" / "Tunnel (unknown app)"; the sign-in's name goes into
-                   `machine` and `credential`.
+  app              the app's name: the MCP client name the app sends. A per-app key, remote
+                   token or OAuth sign-in is often shared or reused by several apps (or named
+                   after another app), so its name would credit the wrong app; it goes into
+                   `machine` and `credential` instead. When the app sends no name: the LAN
+                   key's / token's name, "Relay (unknown app)" / "Tunnel (unknown app)".
+                   Before 2.4.4 LAN keys and LAN remote tokens recorded the key's / token's
+                   name here; those rows show as they are.
   model            the AI model name, ONLY when the caller supplies it: the `model` argument,
                    else the X-FlowState-Model header (HTTP), else FLOWSTATE_MODEL (stdio).
                    Never guessed; NULL otherwise.
-  machine          stdio: FLOWSTATE_WORKSPACE, else this computer's host name. LAN/local
-                   HTTP: the key's workspace, else the X-FlowState-Workspace header. Remote
-                   (OAuth / remote tokens on the LAN listener): the client's name. Relay:
-                   "relay (signed in as <client's name>)"; own tunnel: "tunnel (signed in as
-                   <client's name>)". shown() reads the sign-in back from there, so pages
-                   say "Grok Bot (via Cursor)" when the two names differ.
+  machine          stdio: FLOWSTATE_WORKSPACE, else this computer's host name. Shared LAN
+                   token: the X-FlowState-Workspace header. Per-app key: "<the key's
+                   workspace, else the header> (signed in as <key name>)", or "lan (signed in
+                   as <key name>)" with neither. Remote token / OAuth client on the LAN
+                   listener: "lan (signed in as <client's name>)"; relay: "relay (signed in
+                   as ...)"; own tunnel: "tunnel (signed in as ...)". shown() reads the
+                   sign-in back from there, so pages say "Grok Bot (via Cursor)" when the
+                   two names differ.
   identity_source  app_key | oauth_client | remote_token | shared_token | self_reported
 
-Plus `credential` (not stored): the per-app key's / token's / OAuth client's own name, when
-the app name came from somewhere else (relay, own tunnel); a paused app name stops it too,
-and same_caller() treats the same sign-in as the same caller whatever name it sends.
+Plus `credential` (not stored): the per-app key's / token's / OAuth client's own name (every
+caller but stdio and the shared LAN token); a paused app name stops it too, and same_caller()
+/ same_sign_in() treat the same sign-in as the same caller whatever name it sends. And
+`aka`: the names that token had before `flowstate remote rename`, so a renamed token is still
+the caller that wrote its older rows (own review items, undo).
 
 Plus `session` (not a stored column of the logs above; todo claims use it to tell two
 sessions of one app apart): stdio = this server process, HTTP = the MCP session id.
@@ -50,7 +54,9 @@ TUNNEL_UNKNOWN = "Tunnel (unknown app)"
 # own say-so and the sign-in it used goes into machine (see resolve)
 SIGNED_IN = {"relay": ("relay", RELAY_UNKNOWN), "public": ("tunnel", TUNNEL_UNKNOWN)}
 SIGN_IN_SOURCES = ("oauth_client", "remote_token")
-_VIA = re.compile(r"^(?:relay|tunnel) \(signed in as (.+?)\)?$")
+VIA_SOURCES = SIGN_IN_SOURCES + ("app_key",)   # rows whose machine may carry "(signed in as X)"
+_VIA = re.compile(r"^(?:(.*?) )?\(signed in as (.+?)\)?$")
+_PLACES = ("relay", "tunnel", "lan")   # machine words that are a listener, not a workspace
 LABELS = {"app_key": "per-app key", "oauth_client": "OAuth app", "remote_token": "remote token",
           "shared_token": "shared token (legacy)", "self_reported": "self-reported"}
 FIELDS = ("app", "model", "machine", "identity_source")
@@ -66,6 +72,11 @@ class Identity:
     identity_source: str
     session: Optional[str] = None
     credential: Optional[str] = None
+    aka: tuple = ()
+
+    def sign_ins(self) -> set:
+        """The sign-in names this caller has had (now and before a rename), any case."""
+        return {n.casefold() for n in (self.credential, *self.aka) if n}
 
     def as_dict(self) -> dict:
         """The four recorded fields (not the session)."""
@@ -113,6 +124,7 @@ def resolve(client: str, http: bool = False, token=None, headers: Optional[dict]
     session = clean(headers.get("mcp-session-id"))
     source = getattr(token, "identity_source", "") if token is not None else ""
     name = clean(getattr(token, "client_name", "")) or "unknown"
+    aka = tuple(n for n in (clean(x) for x in getattr(token, "former_names", None) or ()) if n)
     if listener == "relay" or (listener == "public" and source in SIGN_IN_SOURCES):
         # one OAuth sign-in or remote token can sit behind several apps (or be named after
         # another app), so its name would credit the wrong app: the app's own name instead,
@@ -121,15 +133,28 @@ def resolve(client: str, http: bool = False, token=None, headers: Optional[dict]
         signed_in = f"{word} (signed in as {name})" if token is not None else word
         return Identity(_sent_name(client) or unknown, model, clean(signed_in),
                         source or "self_reported", session,
-                        name if token is not None else None)
-    if source == "app_key":
-        return Identity(name, model, clean(getattr(token, "workspace", None)) or workspace,
-                        "app_key", session)
-    if source in ("oauth_client", "remote_token"):
-        return Identity(name, model, name, source, session)
+                        name if token is not None else None, aka if token is not None else ())
+    if source == "app_key":   # the same rule on the LAN: the app's name, the key beside it
+        place = clean(getattr(token, "workspace", None)) or workspace
+        return Identity(_sent_name(client) or name, model, _signed_in(place, name), "app_key",
+                        session, name, aka)
+    if source in SIGN_IN_SOURCES:   # a remote token / OAuth client on the LAN listener
+        return Identity(_sent_name(client) or name, model, _signed_in("lan", name), source,
+                        session, name, aka)
     # the one shared LAN token: the app name is only the app's own say-so
     return Identity(clean(client) or "unknown", model, workspace,
                     "shared_token" if token is not None else "self_reported", session)
+
+
+def _signed_in(place: Optional[str], name: str) -> Optional[str]:
+    """"<place> (signed in as <name>)" within MAX_LEN, the sign-in's name kept whole. A
+    workspace (it may come from a header) can't carry a sign-in of its own."""
+    place = (place or "lan").replace("(", "").replace(")", "").strip() or "lan"
+    tail = f" (signed in as {name})"
+    room = MAX_LEN - len(tail)
+    if room < 4:
+        return clean(f"{place[:12]}{tail}")
+    return clean(place[:room].rstrip() + tail)
 
 
 def local(app: str) -> Identity:
@@ -241,14 +266,38 @@ def on_behalf_of(app: str, machine: Optional[str] = None, source: Optional[str] 
                     source if source in SOURCES else "self_reported")
 
 
-def via(machine: Optional[str], source: Optional[str]) -> Optional[str]:
-    """The sign-in (remote token / OAuth client) name a relay or own-tunnel call came in on,
-    read back from the machine column resolve() wrote; None for every other caller (only
-    those two sources, so a LAN app can't fake one with its workspace header)."""
-    if source not in SIGN_IN_SOURCES or not isinstance(machine, str):
-        return None
+def _split(machine: Optional[str], source: Optional[str]) -> tuple:
+    """(place, sign-in name) of a machine column resolve() wrote "(signed in as ...)" into,
+    else (machine, None). Only for key / token / OAuth rows, so an app on the shared token
+    can't fake a sign-in with its workspace header."""
+    if source not in VIA_SOURCES or not isinstance(machine, str):
+        return machine, None
     m = _VIA.match(machine)
-    return m.group(1) if m else None
+    return (m.group(1), m.group(2)) if m else (machine, None)
+
+
+def via(machine: Optional[str], source: Optional[str]) -> Optional[str]:
+    """The sign-in (per-app key, remote token, OAuth client) name a call came in on, read back
+    from the machine column resolve() wrote; None for every other caller and for rows from
+    before 2.4.4 (LAN) / task 44 (own tunnel)."""
+    return _split(machine, source)[1]
+
+
+def same_sign_in(app: Optional[str], machine: Optional[str], source: Optional[str],
+                 ident: Optional["Identity"]) -> bool:
+    """Was this row written through the caller's own key / token / sign-in (under any name it
+    had, `flowstate remote rename`)? Rows from before 2.4.4 on a LAN key or token recorded the
+    key's name as the app, so that name counts for those. A key and a token of the same name
+    are different sign-ins."""
+    if ident is None or not ident.credential:
+        return False
+    if (source == "app_key") != (ident.identity_source == "app_key"):
+        return False
+    signed = via(machine, source)
+    if signed is None and source in VIA_SOURCES and \
+            not str(machine or "").startswith(("relay", "tunnel")):
+        signed = app   # an older LAN row: the app column held the key's / token's name
+    return bool(signed) and signed.casefold() in ident.sign_ins()
 
 
 def shown(app: Optional[str], machine: Optional[str] = None, source: Optional[str] = None,
@@ -257,11 +306,13 @@ def shown(app: Optional[str], machine: Optional[str] = None, source: Optional[st
     differs ("Grok Bot (via Cursor)"), since the app name there is only its own claim.
     on_machine=True adds " on <machine>" for other callers. Old rows show as they are."""
     name = app or fallback
-    signed = via(machine, source)
+    place, signed = _split(machine, source)
     if signed:
         if name in (RELAY_UNKNOWN, TUNNEL_UNKNOWN):
             return f"{name[:-1]}, via {signed})"
-        return name if signed.casefold() == name.casefold() else f"{name} (via {signed})"
+        who = name if signed.casefold() == name.casefold() else f"{name} (via {signed})"
+        # a per-app key's workspace is a real place; "lan" / "relay" / "tunnel" are not
+        return f"{who} on {place}" if on_machine and place and place not in _PLACES else who
     return f"{name} on {machine}" if on_machine and machine else name
 
 
@@ -277,13 +328,13 @@ def same_caller(app: Optional[str], machine: Optional[str], source: Optional[str
                 ident: Optional[Identity]) -> bool:
     """Did this caller's app write a row (its recorded app, machine, identity source)? For
     permissions only the writer has (undo taking back a created record). A caller that came
-    in on a sign-in (relay, own tunnel) is matched by that sign-in, never by the name it sends
-    (it can send any name); a row written through a sign-in matches only that sign-in; other
-    rows by app name, as before."""
+    in on a key / token / sign-in is matched by that sign-in (same_sign_in, renames
+    included), never by the name it sends (it can send any name); a row written through a
+    sign-in matches only that sign-in; other rows by app name, as before."""
     if ident is None:
         return False
     if ident.credential or via(machine, source):
-        return bool(ident.credential) and bool(machine) and machine == ident.machine
+        return same_sign_in(app, machine, source, ident)
     return bool(app) and app == ident.app
 
 
