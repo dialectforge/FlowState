@@ -81,6 +81,9 @@ table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #eee;pad
 .keep-row form{display:block;margin:.35rem 0}.keep-row button,.delcard+form button{min-height:44px;border-radius:999px;padding:.6rem 1rem}
 .done{color:#1f5f5b}.ainote{color:#62656b;font-size:.95rem}
 .kids,.fields{margin:.3rem 0 .6rem;padding-left:1.2rem}
+.state{font-size:.8rem;border:1px solid #cfd8d6;border-radius:999px;padding:0 .5rem;color:#1f5f5b;white-space:nowrap}
+.state.st-removed,.state.st-gone{color:#8a2d22;border-color:#e2c4bf}.state.st-changed{color:#62656b}
+.recbtn{display:inline;margin:0 .3rem 0 0}.recbtn button{padding:.15rem .7rem;margin:.25rem 0 0;border-radius:999px;font-size:.85rem}
 @media (min-width:800px){.sides{flex-direction:row;align-items:stretch}.side{flex:1}}
 .settings h2,.confirm h2{font-family:ui-serif,Georgia,serif;font-weight:500;font-size:1.35rem}
 .settings h3.group{font-family:ui-serif,Georgia,serif;font-weight:500;font-size:1.1rem;color:#1f5f5b;margin:1.4rem 0 .2rem}
@@ -240,6 +243,17 @@ class Page:
                                 "user_request": self.user_words.format(what="Reject")}, self.client)
         return res.get("message") if isinstance(res, dict) and "error" in res else \
             f"{'Not kept' if item['kind'] == 'session_summary' else 'Rejected'} #{item['id']}."
+
+    def record(self, form: dict) -> str:
+        """Keep / Remove / Bring back on one record of a waiting session summary
+        (session_records.py), as the user, labelled with this page."""
+        from . import session_records
+        try:
+            res = session_records.decide(self.db_path, int(form["item_id"]), form.get("record"),
+                                         form.get("action") or "", self.client)
+        except session_records.RecordError as e:
+            return e.payload["message"]
+        return f"#{res['item_id']}: {res['message']}"
 
     def set_mode(self, form: dict) -> str:
         pid = int(form["project_id"]) if form.get("project_id") else None
@@ -568,11 +582,14 @@ class Page:
                     out.append(f"""<form method="post" action="{self.base}/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">{confirm}
 <button>Approve: delete it</button></form>""")
                 elif it["kind"] == "session_summary":   # Keep / Don't keep: what they really do
-                    out.append(self._contents(it))
-                    out.append(f"""<p><strong>{review.KEEP_QUESTION}</strong> {review.KEEP_HOW} You can edit it first.</p>
+                    block, listed = self._contents(it, hidden)
+                    out.append(block)
+                    how, keep = (review.KEEP_ALL_HOW, review.KEEP_ALL) if listed else \
+                        (review.KEEP_HOW, review.KEEP)
+                    out.append(f"""<p><strong>{review.KEEP_QUESTION}</strong> {_e(how)} You can edit it first.</p>
 <form method="post" action="{self.base}/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
 <textarea name="summary" rows="2">{_e(review.strip_tag(it['summary']))}</textarea><textarea name="details" rows="2" placeholder="details">{_e(it['details'])}</textarea>
-<button>{review.KEEP} (with any edits)</button></form>""")
+<button>{_e(keep)} (with any edits)</button></form>""")
                 else:
                     out.append(f"""<form method="post" action="{self.base}/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
 <textarea name="summary" rows="2">{_e(it['summary'])}</textarea><textarea name="details" rows="2" placeholder="details">{_e(it['details'])}</textarea>{move}
@@ -595,7 +612,7 @@ class Page:
                 else:
                     out.append(f"<p>{_e(review.strip_tag(it['summary']))}</p>")
                     if it["kind"] == "session_summary":
-                        out.append(self._contents(it))
+                        out.append(self._contents(it)[0])
                 if it.get("reject_reason"):
                     out.append(f"<p class='meta'>Reason: {_e(it['reject_reason'])}</p>")
             out.append("</div>")
@@ -627,13 +644,25 @@ class Page:
         """This computer's local time on the local page; UTC, labelled, on the tunnel page."""
         return who.local_time(utc) if self.settings != "off" else f"{utc} UTC"
 
-    def _contents(self, it: dict) -> str:
-        """What a session summary's session saved (session_contents.py), escaped. This
-        computer's local time on the local page; UTC, labelled, on the tunnel page (its reader
-        may be anywhere)."""
-        from . import session_contents
+    def _contents(self, it: dict, hidden: str = "") -> tuple:
+        """(html, whether records are listed): what a session summary's session saved
+        (session_contents.py), escaped, with each waiting record's Keep / Remove / Bring back
+        forms when `hidden` (the CSRF field) is given. This computer's local time on the local
+        page; UTC, labelled, on the tunnel page (its reader may be anywhere)."""
+        from . import session_contents, session_records
         local = who.local_time if self.settings != "off" else None
-        return session_contents.html(session_contents.for_item(self.db_path, it), local)
+        c = session_contents.for_item(self.db_path, it)
+
+        def buttons(e: dict) -> str:
+            return "<div>" + "".join(
+                f'<form class="recbtn" method="post" action="{self.base}/record">{hidden}'
+                f'<input type="hidden" name="item_id" value="{it["id"]}">'
+                f'<input type="hidden" name="record" value="{_e(e["key"])}">'
+                f'<input type="hidden" name="action" value="{a}">'
+                f'<button>{session_records.ACTION_WORDS[a]}</button></form>'
+                for a in e["actions"]) + "</div>"
+        return (session_contents.html(c, local, buttons=buttons if hidden else None),
+                bool(c and c["entries"]))
 
     def _recent_activity(self) -> str:
         out = ["<h2>Recent activity</h2><table><tr><th>When (UTC)</th><th>App</th><th>Tool</th><th>Project</th><th>Result</th></tr>"]
@@ -1021,6 +1050,7 @@ def create_app(page: Page):
         Route("/ping", ping, methods=["GET"]),
         Route("/approve", action(page.approve), methods=["POST"]),
         Route("/reject", action(page.reject), methods=["POST"]),
+        Route("/record", action(page.record), methods=["POST"]),
         Route("/mode", action(page.set_mode), methods=["POST"]),
         Route("/app", action(page.set_app), methods=["POST"]),
         Route("/undo", action(page.undo, back="who"), methods=["POST"]),

@@ -366,7 +366,8 @@ you have turned approvals on.
    can also show what's waiting as cards in the chat (`show_review_card`, up to 5 at a time,
    oldest first). Each card says what the item is, what saving it would do, which app wrote it
    and when, with **Approve** and **Reject** (Reject asks for an optional short reason in the
-   card itself; a session summary says **Keep** / **Don't keep**). Your tap is saved and logged
+   card itself; a session summary says **Keep all** / **Don't keep**, and each of its records
+   has its own Keep / Remove, see below). Your tap is saved and logged
    as a card decision; the AI can't tap for you, and the card's button tool is hidden from it.
    Disagreements keep their own card (Keep A / Keep B / Keep both). Items only you decide
    (with approvals on: an AI's deletes and turning review off; and every "did you say this?"
@@ -374,6 +375,18 @@ you have turned approvals on.
    relay, taps follow the same rule as chat approvals: off (the default) means the card
    refuses and gives your phone link. In apps without MCP Apps nothing changes: the AI shows
    the plain list.
+   **Session summaries: Keep all, or Keep / Remove one record.** A session summary lists the
+   records the session saved. They were saved when the AI wrote them, so each one has its own
+   **Keep** (marks it reviewed) and **Remove** (takes it back) on the review page, the tunnel
+   page, your phone and the review card. Remove takes a safety copy first and goes into the edit
+   history: **Bring back** restores it while the summary waits, and
+   `manage_history(action="undo", ...)` does at any time. A record that is gone, or was changed
+   after the session, shows that and has no buttons; one the session only updated can only be
+   kept. **Keep all** keeps the summary (you can edit its line first) and every record you
+   haven't removed; **Don't keep** decides only the summary and removes nothing. The summary
+   waits for one of those two even when every record is decided. In a terminal:
+   `flowstate review records <id>` and `flowstate review record <id> change:12 keep|remove|restore`.
+   Your AI sees each record's state but can't decide records.
 2. **A link to the review page on the computer where FlowState runs (apps on that computer).**
    When something waits, and your AI app runs on the same computer as FlowState, the brief
    your AI reads, and the walk's answer, include a link like `http://127.0.0.1:8770/`. Click it
@@ -472,6 +485,7 @@ the venv active). Add `-h` to any command for its options.
 | Command | What it does |
 |---|---|
 | `review [--project NAME]` | List what waits in the review queue |
+| `review records ID` / `review record ID TYPE:ID keep\|remove\|restore` | A session summary's records with their state / keep, remove (safety copy, undoable) or bring back one; asks for your `y` here |
 | `approve ID [ID ...]` / `reject ID [--reason TEXT]` | Decide review items; asks you to type `y` in this terminal (piped input doesn't count) |
 | `approvals [on\|off] [--project P]` | Opt-in approvals (off by default). `on`: an AI's deletes and turning review off wait for you. Turning them `off` asks for `y` in this terminal. Also `approvals phone on\|off` and `approvals popup add\|remove NAME` |
 | `relay chat-approvals [on\|off]` | May AIs connected through the relay approve and reject review items in the chat? Off by default (phone only). Turning it `on` asks for `y` in this terminal; with no argument it shows the setting |

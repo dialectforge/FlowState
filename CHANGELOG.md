@@ -49,6 +49,31 @@
   days); after that they say only the counts are known. All of it is escaped text (HTML
   escaping on the pages, textContent in the scripts); the phone page shows nothing it couldn't
   before (record text from this project's memory, no paths, keys or tokens).
+- **Keep all, and Keep / Remove for each record of a session summary.** The records a session
+  lists were saved when the AI wrote them, so the only way to drop a bad one used to be asking
+  the AI to undo it. Now each record has its own **Keep** (marks it reviewed) and **Remove**
+  (takes it back) on the local and tunnel review pages, the phone list, the phone approve page
+  and the in-chat review card, with a line saying the records are already saved. Remove goes
+  through the user's delete path: a verified safety copy first, then the record and what belongs
+  to it (a problem's solution and attempts, a decision's links) as one edit in the edit history,
+  so it can be restored: **Bring back** on the same pages (while the summary waits), or
+  `manage_history(action="undo", ...)` at any time. A removed record shows as "removed by you";
+  one that is already gone or was changed after the session shows that and has no buttons. Only
+  records the session created can be removed there; one it only updated is Keep only.
+- The summary's own Keep is now **Keep all**: it keeps the summary line (edit-before-keep still
+  works) and marks every record you haven't decided kept; removed records stay removed.
+  **Don't keep** decides only the summary line and removes nothing. With every record decided,
+  the summary still waits for its own Keep all / Don't keep. The session's saved note ends with
+  "Removed by the user: change #12 "..."" when you removed any.
+- Only you decide records, as with review decisions: there is no tool for the AI. The card's
+  per-record buttons use its app-only `resolve_review_card` (decision `keep_record` /
+  `remove_record` / `restore_record`) with the card's rules (no chat text, MCP Apps hosts only;
+  through the relay phone only unless chat approvals are on). In a terminal:
+  `flowstate review records <id>` lists a summary's records with their state, and
+  `flowstate review record <id> <type:id> keep|remove|restore` decides one (asks for your `y`).
+  Each decision is logged ("record removed: change #12", with where it was made) and shown in
+  `manage_review` lists as read-only states ("[2 records: 1 kept, 1 removed by you]";
+  `record_states` with `item_id`). Stored in the review item (ids only); no migration.
 - A **Settings** section on the review page that `flowstate review-page` opens (this computer
   only). It lists every user setting in plain words with its current value, and lets you change
   it there: review mode (whole install and per project; the existing form, moved in), app

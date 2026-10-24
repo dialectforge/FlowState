@@ -30,6 +30,8 @@ per-item /approve links don't use /review/start and are unchanged.
   POST /review/open      checks the grant and uses up its one-use code; starts a session:
                          cookie fs_review_phone (HttpOnly, Secure, SameSite=Strict, 15 min,
                          path /review) plus a page token for the body; answers with the list
+  POST /review/record    {token, item_id, record, action}: a session summary's per-record Keep /
+                         Remove / Bring back (session_records.py), the same session and token
   POST /review/decide    {token, item_id, decision, confirm_name?, reason?}: the session cookie
                          and its token; Approve or Reject through the user-only path
                          (popup.as_user, label "phone (<handle>)"), logged in approval_log
@@ -160,7 +162,15 @@ JS = r"""(function () {
       card.appendChild(el("p", "", it.question));
       if (it.summary) { card.appendChild(el("p", "", it.summary)); }
       if (it.details) { card.appendChild(el("p", "muted", it.details)); }
-      if (it.contents) { card.appendChild(saved(it.contents)); }
+      if (it.contents) {
+        card.appendChild(saved(it.contents, function (e, action, btns) {
+          post("/review/record", {token: token, item_id: it.id, record: e.key, action: action}).then(function (r) {
+            if (r.j && r.j.items) { show(r.j.items, r.j.total); }
+            if (r.ok) { $("status").textContent = r.j.message; }
+            else { btns.forEach(function (x) { x.disabled = false; }); say("Not done", r.j.message || "", true); }
+          }, function () { say("Not done", "Your FlowState didn't answer.", true); });
+        }));
+      }
       card.appendChild(el("p", "faint", "From " + it.queued_by + ", " + localTime(it.queued_at)));
       var name = null;
       if (it.needs_name) {
@@ -422,7 +432,31 @@ def routes(db_path_fn):
         return answer({"ok": True, "message": f"{done} #{item_id}.", "items": listing,
                        "total": total})
 
+    async def record(request):
+        """Keep / Remove / Bring back on one record of a waiting session summary."""
+        db = db_path_fn()
+        try:
+            body = await _body(request)
+            sess = sessions.check(request.cookies.get(COOKIE), body.get("token"))
+            item_id = body.get("item_id")
+            if not isinstance(item_id, int) or isinstance(item_id, bool) \
+                    or not isinstance(body.get("record"), str) or not isinstance(body.get("action"), str):
+                raise approvals.ApprovalError("bad_request", "Choose Keep or Remove for a record.")
+        except approvals.ApprovalError as e:
+            return refuse(e)
+        from .approve_page import record_as_user
+        res = await asyncio.to_thread(record_as_user, db, item_id, body["record"], body["action"],
+                                      f"phone ({sess['handle']})")
+        listing = await asyncio.to_thread(items, db)
+        total = await asyncio.to_thread(_total, db)
+        if "error" in res:
+            return answer({"error": res["error"], "message": res["message"], "items": listing,
+                           "total": total}, 409)
+        return answer({"ok": True, "message": f"#{item_id}: {res['message']}", "items": listing,
+                       "total": total})
+
     return [Route("/review/assets/{name}", asset, methods=["GET"]),
+            Route("/review/record", record, methods=["POST"]),
             Route("/review/start", start, methods=["GET"]),
             Route("/review", shell, methods=["GET"]),
             Route("/review/open", open_, methods=["POST"]),

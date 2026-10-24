@@ -245,8 +245,12 @@ def _plain(it: dict, room: int = LINE_MAX, status: bool = False) -> str:
 
 
 KEEP_NOTE = ('A session summary asks the user "Keep this session summary?": approve keeps it as '
-             "the session's record (edits allowed); reject means don't keep it (the session keeps "
-             "only a note saying so); nothing is deleted.")
+             "the session's record (edits allowed) and every listed record the user hasn't "
+             "removed (Keep all); reject means don't keep it (the session keeps only a note "
+             "saying so); nothing is deleted. Each listed record's own Keep / Remove is the "
+             "user's alone, on the review page, their phone, the review card or "
+             "`flowstate review record` in their terminal; the record states shown here are "
+             "read-only for you.")
 
 
 def _keep_note(items: list) -> dict:
@@ -267,10 +271,26 @@ def _lines(items: list, status: bool = False, db_path: Optional[Path] = None) ->
             if db_path is not None and it.get("kind") == "delete":
                 out.append(deletes.list_line(db_path, it, status))
                 continue
+            if db_path is not None and it.get("kind") == "session_summary":
+                tail = _records_tail(db_path, it)
+                if tail:
+                    out.append(_plain(it, max(60, room - len(tail)), status) + tail)
+                    continue
         except Exception:  # noqa: BLE001 - a list line must not fail the whole answer
             log.warning("review line for #%s skipped", it.get("id"))
         out.append(_plain(it, room, status))
     return out
+
+
+def _records_tail(db_path: Path, it: dict) -> str:
+    """' [3 records: 1 kept, 1 removed by you, 1 not decided yet]' for a session summary's line."""
+    from . import session_contents, session_records
+    c = session_contents.for_item(db_path, it)
+    if not c or not c["entries"]:
+        return ""
+    states = session_records.count_line(c["entries"])
+    return (f" [{c['total']} record{'s' if c['total'] != 1 else ''}: "
+            + (states[len("records: "):] if states else "none decided yet") + "]")
 
 
 def _page(listing: dict, after: Optional[int], action: str) -> dict:
@@ -393,6 +413,12 @@ def _one_item(db_path: Path, item_id, pid: Optional[int], named) -> dict:
         saved = [x for x in [session_contents.when_line(c)] if x] + session_contents.lines(c)
         if saved:
             it["saved_records"] = saved
+        if c and c["entries"]:   # read-only: each record's Keep / Remove is the user's
+            it["record_states"] = [{"record": e["key"], "state": e.get("state") or "undecided"}
+                                   for e in c["entries"]]
+            answer["record_note"] = ("Each record's Keep / Remove is the user's alone (review "
+                                     "page, phone, review card, or `flowstate review record` in "
+                                     "their terminal); you can't decide records.")
     elif it.get("kind") == "disagreement":
         packed = _safe_card(db_path, it)
         if packed:
@@ -582,6 +608,10 @@ def _form(it: dict, i: int, n: int) -> tuple[str, dict]:
         saved = [x for x in [session_contents.when_line(c)] if x] + session_contents.lines(c)
         if saved:
             details = "\n".join(([details] if details else []) + saved)
+        if c and c["entries"]:   # the box is Keep all; one record: the review page or phone
+            from .review import KEEP_ALL, KEEP_ALL_HOW
+            KEEP, KEEP_HOW = KEEP_ALL, KEEP_ALL_HOW + (" To keep or remove one record, use the "
+                                                       "review page or your phone.")
     msg = (f"Waiting for you ({i} of {n}), {it['project']}, {_KIND.get(it['kind'], it['kind'])} "
            f"#{it['id']} from {who}:\n{strip_tag(it.get('summary'))}" + (f"\n{details}" if details else "")
            + (f"\n{KEEP_QUESTION} {KEEP_HOW}\nTick {KEEP} and submit to keep it; submit it unticked "

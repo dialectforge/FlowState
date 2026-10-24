@@ -23,6 +23,11 @@ KEEP_QUESTION = "Keep this session summary?"
 KEEP_HOW = ("Keep saves it as the session's record. Don't keep marks it rejected, and the "
             "session keeps only a note saying so; nothing is deleted.")
 KEEP, DONT_KEEP = "Keep", "Don't keep"
+# With records listed (session_records.py): Keep keeps the summary and every record not removed.
+KEEP_ALL = "Keep all"
+KEEP_ALL_HOW = ("Keep all saves the summary as the session's record and marks every record you "
+                "haven't removed kept. Don't keep marks the summary rejected and leaves the "
+                "records as they are; nothing is deleted.")
 
 
 def _now() -> str:
@@ -228,6 +233,16 @@ def _set_session(db_path: Path, session_id: int, summary: str, decision: str,
         conn.close()
 
 
+def _with_removed(db_path: Path, item: dict, text: str) -> str:
+    """The session's saved note, plus which of its records the user removed (session_records)."""
+    from . import session_records
+    try:
+        extra = session_records.note_for(db_path, item)
+    except sqlite3.Error:
+        extra = ""
+    return f"{text} {extra}" if extra else text
+
+
 def strip_tag(text: str) -> str:
     text = (text or "").strip()
     return text[len(AUTO_TAG):].strip() if text.startswith(AUTO_TAG) else text
@@ -247,7 +262,11 @@ def approve(db_path: Path, item_id: int, user_request: str, client: str,
         if item["kind"] == "session_summary":
             if item["session_id"] is None:
                 raise ReviewError("session_missing", "The session for this summary no longer exists.")
-            _set_session(db_path, item["session_id"], strip_tag(summary), "approved", item_id)
+            from . import session_records   # Keep all: every record not removed is kept too
+            session_records.keep_rest(db_path, item, client)
+            _set_session(db_path, item["session_id"], _with_removed(db_path, item,
+                                                                    strip_tag(summary)),
+                         "approved", item_id)
             table, rid = "sessions", item["session_id"]
         elif item["kind"] in RECORD_KINDS:
             payload = json.loads(item["payload"] or "{}")
@@ -281,8 +300,8 @@ def reject(db_path: Path, item_id: int, reason: str, user_request: str, client: 
     item = _claim(db_path, item_id, "rejected", client, user_request, reason[:500])
     if item["kind"] == "session_summary" and item["session_id"] is not None:
         # The text stays in the review item; the session says what happened to it.
-        _set_session(db_path, item["session_id"],
-                     f"[auto-captured summary rejected: {reason[:200]}; kept as review item "
-                     f"#{item_id}]", "rejected", item_id)
+        _set_session(db_path, item["session_id"], _with_removed(
+                     db_path, item, f"[auto-captured summary rejected: {reason[:200]}; kept as "
+                                    f"review item #{item_id}]"), "rejected", item_id)
     return {"rejected": item_id, "kind": item["kind"], "reason": reason[:500],
             "note": "Kept in the review queue as rejected; nothing was deleted."}

@@ -7,7 +7,8 @@ documents apart leaves the conflict card exactly as it was. Both share one page 
 
 The host loads it when show_review_card is called (that tool's definition names it) and passes
 the result's structuredContent ({cards: [...], more, note}). Buttons call resolve_review_card
-with tools/call through the host. A card with decide_here false (an item only the user
+with tools/call through the host (a session summary's records each have Keep / Remove /
+Bring back too: the same tool, decision keep_record / remove_record / restore_record). A card with decide_here false (an item only the user
 decides on their phone or review page) has no buttons. Nothing is loaded from the network,
 and memory text is written with textContent.
 """
@@ -25,6 +26,9 @@ REVIEW_CSS = r""".item{border:1px solid var(--line);border-radius:12px;padding:1
 .saved .ex{color:var(--muted);font-size:14px;margin:2px 0 0}
 .sess{color:var(--muted);font-size:14px;margin:0 0 6px}
 .does{color:var(--muted);font-size:14px;margin:12px 0 0}
+.state{display:inline-block;margin-left:8px;font-size:12px;border:1px solid var(--line);border-radius:999px;padding:0 8px;color:var(--accent)}
+.state.st-removed,.state.st-gone{color:var(--danger,#8a2d22)}.state.st-changed{color:var(--muted)}
+.recrow{display:flex;gap:8px;margin:6px 0 2px}.recrow button{min-height:36px;padding:4px 14px;font-size:14px}
 .locked{margin:12px 0 0}
 .link{overflow-wrap:anywhere;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px}
 .why{display:flex;flex-direction:column;gap:6px;margin-top:14px}
@@ -45,7 +49,9 @@ REVIEW_JS = r"""  // ---- drawing
     }
     return y.toLocaleTimeString([], {timeStyle: "short"});
   }
-  function drawSaved(item, c) {      // what a session saved: each record, as text
+  var ACT = {keep: "Keep", remove: "Remove", restore: "Bring back"};
+  function drawSaved(item, c, index) {   // what a session saved: each record, as text; with
+                                         // `index` (a waiting card) each record's buttons
     if (c.started_utc) {
       item.appendChild(el("p", "sess", "Session " + localTime(c.started_utc) +
         (c.ended_utc ? " to " + endTime(c.started_utc, c.ended_utc) : "") + (c.app ? ", by " + c.app : "")));
@@ -55,12 +61,24 @@ REVIEW_JS = r"""  // ---- drawing
       return;
     }
     item.appendChild(el("p", "sess", "What this session saved (" + c.total + "):"));
+    if (c.explain && index !== undefined) { item.appendChild(el("p", "sess", c.explain)); }
     var ul = el("ul", "saved");
     c.entries.forEach(function (e) {
       var li = el("li", "");
       li.appendChild(el("strong", "", e.head || ""));
+      if (e.state) { li.appendChild(el("span", "state st-" + e.state, e.state_label || e.state)); }
       if (e.excerpt) { li.appendChild(el("p", "ex", e.excerpt)); }
       if (e.solution) { li.appendChild(el("p", "ex", "Solution: " + e.solution)); }
+      if (index !== undefined && e.actions && e.actions.length) {   // the record's own buttons
+        var row = el("div", "recrow");
+        e.actions.forEach(function (a) {
+          var b = el("button", "ghost small", ACT[a] || a);
+          b.type = "button";
+          b.addEventListener("click", function () { chooseRecord(index, e.key, a, item); });
+          row.appendChild(b);
+        });
+        li.appendChild(row);
+      }
       ul.appendChild(li);
     });
     item.appendChild(ul);
@@ -73,7 +91,7 @@ REVIEW_JS = r"""  // ---- drawing
     item.appendChild(el("p", "kind", view.kind_label || "Review item"));
     item.appendChild(el("p", "text", view.text || ""));
     if (view.details) { item.appendChild(el("p", "details", view.details)); }
-    if (view.contents) { drawSaved(item, view.contents); }
+    if (view.contents) { drawSaved(item, view.contents, view.resolved || !view.decide_here ? undefined : index); }
     item.appendChild(el("p", "who", "From " + (view.who || "an app") + (view.when ? ", " + view.when : "")));
     box.appendChild(item);
     if (view.does) { box.appendChild(el("p", "does", view.does)); }
@@ -155,6 +173,32 @@ REVIEW_JS = r"""  // ---- drawing
     box.appendChild(el("p", "err", text || "Not saved."));
     setButtons(box, true);
     reportSize();
+  }
+  function chooseRecord(index, record, action, item) {   // Keep / Remove / Bring back: one record
+    var view = cards[index];
+    if (!view) { return; }
+    var box = item.parentNode;
+    setButtons(box, false);
+    var args = {item_id: view.item_id, decision: action + "_record", record: record,
+                project: view.project || ""};
+    request("tools/call", {name: "resolve_review_card", arguments: args}, function (error, result) {
+      if (error) { showError(box, error.message || "Not saved."); return; }
+      var sc = (result && result.structuredContent) || {};
+      var fresh = sc.cards && sc.cards[0];
+      if (!result || result.isError || !fresh) {
+        var text = result && result.content && result.content[0] && result.content[0].text;
+        try { text = JSON.parse(text).message || text; } catch (e) { /* plain text */ }
+        showError(box, text || "Not saved.");
+        return;
+      }
+      cards[index] = fresh;
+      var drawn = drawCard(fresh, index);
+      var said = "";
+      try { said = JSON.parse(result.content[0].text).note || ""; } catch (e) { said = ""; }
+      if (said) { drawn.appendChild(el("p", "done", said)); }
+      box.parentNode.replaceChild(drawn, box);
+      reportSize();
+    });
   }
   function choose(index, decision, why, box) {
     var view = cards[index];

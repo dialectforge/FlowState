@@ -233,6 +233,13 @@ def contents(conn, item: dict) -> dict:
     recs = recs or []
     out["entries"] = [entry(conn, t, i, v) for t, i, v in recs]
     out["total"] = len(out["entries"])
+    if item.get("kind", "session_summary") == "session_summary":
+        from . import session_records
+        try:   # each record's Keep / Remove state (session_records.py)
+            session_records.annotate(conn, item, out["entries"])
+        except sqlite3.Error:
+            pass
+        out["pending"] = item.get("status", "pending") == "pending"
     return out
 
 
@@ -261,13 +268,19 @@ NONE_NOTE = ("FlowState has no list of the records this session saved (a summary
 
 def head(e: dict) -> str:
     """'change #12 "Fix login redirect" (Auth)' / 'problem #3 "Login loop", solved'."""
-    words = f'{e["kind_label"]} #{e["id"]}' + (f' "{e["title"]}"' if not e["gone"] else
-                                               f' {e["title"]}')
+    quoted = not e["gone"] or (e.get("state") == "removed" and e["title"])
+    words = f'{e["kind_label"]} #{e["id"]}' + (f' "{e["title"]}"' if quoted else f' {e["title"]}')
     if e.get("component"):
         words += f" ({e['component']})"
     if e["verb"] and e["verb"] not in ("saved", "queued"):
         words += f", {e['verb']}"
     return words
+
+
+def state_tag(e: dict) -> str:
+    """' [kept]' / ' [removed by you]' / ...: the record's Keep / Remove state, if decided or
+    not decidable (session_records.annotate); '' while it waits."""
+    return f" [{e['state_label']}]" if e.get("state") else ""
 
 
 def lines(c: Optional[dict], limit: int = MAX_SHOWN) -> list:
@@ -276,9 +289,11 @@ def lines(c: Optional[dict], limit: int = MAX_SHOWN) -> list:
         return []
     if not c["entries"]:
         return [NONE_NOTE]
-    out = [f"What this session saved ({c['total']}):"]
+    from .session_records import count_line
+    states = count_line(c["entries"])
+    out = [f"What this session saved ({c['total']}" + (f"; {states}" if states else "") + "):"]
     for e in c["entries"][:limit]:
-        out.append("- " + head(e) + (f": {e['excerpt']}" if e["excerpt"] else ""))
+        out.append("- " + head(e) + state_tag(e) + (f": {e['excerpt']}" if e["excerpt"] else ""))
         if e["solution"]:
             out.append(f"  Solution: {e['solution']}")
     if c["total"] > limit:
@@ -311,7 +326,11 @@ def public(c: Optional[dict], limit: int = MAX_SHOWN, send: Optional[int] = None
         return None
     send = max(limit, send or limit)
     keys = ("kind", "kind_label", "id", "verb", "title", "excerpt", "component", "solution", "gone")
-    return {"entries": [{k: e[k] for k in keys} | {"head": head(e)} for e in c["entries"][:send]],
+    extra = ("key", "state", "state_label", "actions")   # session_records.annotate
+    from .session_records import EXPLAIN
+    return {"entries": [{k: e[k] for k in keys} | {k: e[k] for k in extra if k in e}
+                        | {"head": head(e)} for e in c["entries"][:send]],
+            "explain": EXPLAIN if c["entries"] and c.get("pending") else "",
             "shown": limit, "total": c["total"], "more": max(0, c["total"] - send),
             "source": c["source"],
             "started_utc": c["started_utc"], "ended_utc": c["ended_utc"], "app": c["app"],
@@ -319,9 +338,10 @@ def public(c: Optional[dict], limit: int = MAX_SHOWN, send: Optional[int] = None
             "note": "" if c["entries"] else NONE_NOTE}
 
 
-def html(c: Optional[dict], local=None, limit: int = MAX_SHOWN) -> str:
+def html(c: Optional[dict], local=None, limit: int = MAX_SHOWN, buttons=None) -> str:
     """The block for the server-rendered pages: all text escaped; past `limit` the rest is in
-    a <details> the reader opens (no script, so it works under any CSP)."""
+    a <details> the reader opens (no script, so it works under any CSP). `buttons(entry)`
+    gives a record's Keep / Remove / Bring back forms (the review pages)."""
     if not c:
         return ""
     e_ = _html.escape
@@ -335,12 +355,22 @@ def html(c: Optional[dict], local=None, limit: int = MAX_SHOWN) -> str:
 
     def li(e: dict) -> str:
         s = f"<li><b>{e_(head(e))}</b>"
+        if e.get("state"):
+            s += f" <span class='state st-{e_(e['state'] or 'open')}'>{e_(e['state_label'])}</span>"
         if e["excerpt"]:
             s += f"<br><span class='meta'>{e_(e['excerpt'])}</span>"
         if e["solution"]:
             s += f"<br><span class='meta'>Solution: {e_(e['solution'])}</span>"
+        if buttons and e.get("actions"):
+            s += buttons(e)
         return s + "</li>"
-    out.append(f"<p class='meta'>What this session saved ({c['total']}):</p><ul>")
+    from .session_records import EXPLAIN, count_line
+    states = count_line(c["entries"])
+    out.append(f"<p class='meta'>What this session saved ({c['total']}"
+               + (f"; {e_(states)}" if states else "") + "):</p>")
+    if buttons and c.get("pending"):
+        out.append(f"<p class='meta'>{e_(EXPLAIN)}</p>")
+    out.append("<ul>")
     out.extend(li(e) for e in c["entries"][:limit])
     out.append("</ul>")
     rest = c["entries"][limit:]

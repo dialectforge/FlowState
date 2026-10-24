@@ -1,6 +1,8 @@
 """The user-only review step (2.4.0), registered by cli.py:
 
     flowstate review   [--project P] [--all] [--db FILE]     list what waits for you (read-only)
+    flowstate review records ID                              a session summary's records, with state
+    flowstate review record ID TYPE:ID keep|remove|restore   decide one record (asks you to confirm)
     flowstate approve  ID [ID ...] [--db FILE]               asks you to confirm, then approves
     flowstate reject   ID [ID ...] [--reason TEXT] [--db FILE]  asks you to confirm, then rejects
     flowstate approvals [status|on|off] [--project P] [--clear]   user-only approvals (approvals.py)
@@ -104,6 +106,10 @@ def _describe(item: dict, project: str, db: Path = None) -> list:
         from . import session_contents
         c = session_contents.for_item(db, {**item, "project": project})
         lines.extend("  " + x for x in [session_contents.when_line(c)] + session_contents.lines(c) if x)
+        if c and c["entries"] and item.get("status") == "pending":
+            from .review import KEEP_ALL_HOW
+            lines.append(f"  Approving is Keep all: {KEEP_ALL_HOW} One record: "
+                         f"`flowstate review record {item['id']} TYPE:ID keep|remove`.")
     return lines
 
 
@@ -120,6 +126,8 @@ def _project_name(db: Path, pid) -> str:
 def cmd_review(a) -> int:
     from . import review
     from .cli_more import _project_id
+    if a.sub:
+        return _records(a)
     db = _db(a)
     res = review.list_items(db, _project_id(db, a.project), "all" if a.all else "pending", a.limit)
     items = res.get("items") or []
@@ -131,6 +139,78 @@ def cmd_review(a) -> int:
         say(f"#{it['id']:<5} {it.get('project') or it.get('project_id')}: {it['kind']}{mark}, by "
             f"{it.get('app') or it.get('source') or '?'}: {_one_line(it.get('summary'), 80)}")
     say("Decide one with `flowstate approve <id>` or `flowstate reject <id>` (asks you to confirm here).")
+    return 0
+
+
+RECORD_USE = ("Use: flowstate review records ID (list a session summary's records) or "
+              "flowstate review record ID TYPE:ID keep|remove|restore")
+
+
+def _records(a) -> int:
+    """`review records ID`: a session summary's records and their state (read-only).
+    `review record ID TYPE:ID keep|remove|restore`: decide one, confirmed with y here."""
+    from . import review, session_contents, session_records
+    from . import server as S
+    rest = list(a.rest or [])
+    if not rest or not str(rest[0]).isdigit() or (a.sub == "records" and len(rest) != 1) \
+            or (a.sub == "record" and (len(rest) != 3 or rest[2] not in session_records.ACTION_WORDS)):
+        say(RECORD_USE)
+        return 2
+    db = _db(a)
+    item = review.get_item(db, int(rest[0]))
+    if not item or item["kind"] != "session_summary":
+        say(f"FAILED: no session summary #{rest[0]}." if not item else
+            f"Review item #{rest[0]} is a {item['kind']}, not a session summary; it has no records.")
+        return 1
+    project = _project_name(db, item["project_id"])
+    c = session_contents.for_item(db, {**item, "project": project})
+    entries = (c or {}).get("entries") or []
+    if a.sub == "records":
+        say(f"Session summary #{item['id']} in {project} ({item['status']}): "
+            f"{_one_line(review.strip_tag(item.get('summary')), 200)}")
+        if not entries:
+            say(session_contents.NONE_NOTE)
+            return 0
+        for e in entries:
+            acts = "/".join(e.get("actions") or [])
+            say(f"  {e['key']:<16} {e.get('state_label', '')}: {session_contents.head(e)}"
+                + (f"  [{acts}]" if acts else ""))
+        if item["status"] == "pending":
+            say(session_records.EXPLAIN)
+            say(f"Decide one with `flowstate review record {item['id']} TYPE:ID keep|remove|restore` "
+                f"(asks you to confirm here); `flowstate approve {item['id']}` keeps all.")
+        return 0
+    record, action = rest[1], rest[2]
+    got = session_records.parse(record)
+    e = next((x for x in entries if got and (x["kind"], x["id"]) == got), None)
+    if e is None:
+        say(f"FAILED: {record} is not one of the records #{item['id']} lists "
+            f"(`flowstate review records {item['id']}` lists them).")
+        return 1
+    tty = open_terminal()
+    if tty is None:
+        say("Refused: `flowstate review record` asks you to confirm in a terminal, and there is "
+            "none here (piped input doesn't count). Run it yourself in a terminal window.")
+        return 2
+    try:
+        tty.tell(f"Session summary #{item['id']} in {project}: {session_contents.head(e)}"
+                 f" ({e.get('state_label', '')})")
+        word = session_records.ACTION_WORDS[action]
+        extra = " It is deleted after a safety copy; restore brings it back." \
+            if action == "remove" else ""
+        if tty.ask(f"{word} {e['key']}?{extra} Type y to confirm: ").lower() not in ("y", "yes"):
+            say("Not confirmed; nothing changed.")
+            return 1
+    finally:
+        tty.close()
+    S.init_backend(db)   # migrations first, the same code as the review page
+    S.backend.tracker = None
+    try:
+        res = session_records.decide(db, item["id"], e["key"], action, CLIENT)
+    except session_records.RecordError as err:
+        say(f"FAILED: {err.payload['message']}")
+        return 1
+    say(res["message"])
     return 0
 
 
@@ -267,7 +347,13 @@ def cmd_approvals(a) -> int:
 
 
 def register(sub) -> None:
-    p = sub.add_parser("review", help="list what waits in the review queue (read-only)")
+    p = sub.add_parser("review", help="list what waits in the review queue (read-only); "
+                                      "records / record: a session summary's records")
+    p.add_argument("sub", nargs="?", choices=["records", "record"],
+                   help="records ID: list a session summary's records; record ID TYPE:ID "
+                        "keep|remove|restore: decide one (you confirm in this terminal)")
+    p.add_argument("rest", nargs="*",
+                   help="with records / record: the item id, then TYPE:ID and keep|remove|restore")
     p.add_argument("--project", help="one project (name or id); default: all")
     p.add_argument("--all", action="store_true", help="also decided items")
     p.add_argument("--limit", type=int, default=50)

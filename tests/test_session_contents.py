@@ -281,7 +281,7 @@ def test_phone_pages_open_the_rest_in_place():
     assert "fetch(" not in block and "post(" not in block            # no network to expand
     assert ".saved{" in approve_page.CSS and ".btn.more{" in approve_page.CSS
     assert 'id="saved"' in approve_page.SHELL
-    assert '$("saved").appendChild(saved(it.contents))' in approve_page.JS
+    assert 'box.appendChild(saved(c, function' in approve_page.JS and 'drawSaved(it.contents)' in approve_page.JS
 
 
 def test_approve_page_sends_all_records(backend):

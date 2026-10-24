@@ -63,6 +63,22 @@ Closed in task 31: "Docs say the phone keys are placeholders". CHANGELOG 2.4.0, 
 honest limits and docs/APPROVALS.md section 3 now say what `approvals.py` does: it pins
 `fsa-1` and `fsa-2`.
 
+## From per-record Keep / Remove on session summaries (task 48, branch `feature/review-card`)
+
+- **The phone approve page never gets a session summary today.** Per-item phone links
+  (`/approve/<item>`) are made only for user-only items (`approvals.verify_grant`), so a
+  summary reaches the phone through the phone list (`/review`, which has `/review/record`).
+  `/approve/<item>/record` is in place and tested for the day summaries get their own links.
+- **"Changed since" sees FlowState's own edits only.** A record counts as changed after the
+  session when the edit history has a row for it after the session ended (other than the
+  user's own Remove / Bring back). An edit made outside FlowState, or one in the same second
+  the session ended, isn't seen.
+- **The chat walk's box is Keep all only.** It can't hold a button per record; it says to use
+  the review page or the phone for one record.
+- **Bring back only while the summary waits.** After Keep all / Don't keep the records show
+  their state without buttons; a removed one comes back with `manage_history(action="undo")`.
+- **The card shows the first 10 records with buttons**; the rest are on the review page.
+
 ## From the update check and `flowstate update` (tasks 40/41, branches `dev/t40-update-check`, `dev/t40-self-update`)
 
 Open (need John or a spare machine; none can be closed from a test):

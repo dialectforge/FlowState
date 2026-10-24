@@ -20,7 +20,10 @@ buttons). The safety rules are the disagreement card's:
     with approvals on, every "did you say this?" check), and every delete, is shown without
     buttons, with the phone or review-page link, and refused if resolve is called anyway;
   - a decision goes through the same apply functions as manage_review (review_apply.py) and
-    is logged in approval_log with path "card", whatever the kind.
+    is logged in approval_log with path "card", whatever the kind;
+  - a session summary's records each have Keep / Remove / Bring back (session_records.py):
+    the same tool with decision keep_record / remove_record / restore_record and `record`,
+    after the same checks, recorded as the user on the card ("card (<app>)").
 
 Card taps are not cryptographically proven to be a person, as with the disagreement card.
 """
@@ -78,7 +81,7 @@ def _words(it: dict, project: str, db_path: Path) -> dict:
     """title, kind label, what approving / rejecting does, and the two button labels."""
     kind, p = it["kind"], _payload(it)
     reject = "Reject marks it rejected and saves nothing; it stays listed as rejected."
-    if kind == "session_summary":
+    if kind == "session_summary":   # Keep all once records are listed (view())
         return {"title": review.KEEP_QUESTION, "kind_label": "Session summary",
                 "does": review.KEEP_HOW, "approve_label": review.KEEP,
                 "reject_label": review.DONT_KEEP}
@@ -167,6 +170,10 @@ def view(db_path: Path, it: dict, project: str) -> dict:
             out["contents"] = session_contents.public(c)
             out["contents_text"] = [x for x in [session_contents.when_line(c)] if x] \
                 + session_contents.lines(c)
+            if c["entries"]:   # each record has its own Keep / Remove; Keep keeps all
+                out.update(approve_label=review.KEEP_ALL, does=review.KEEP_ALL_HOW)
+                if out["contents"].get("explain"):
+                    out["contents_text"].append(out["contents"]["explain"])
     if out["resolved"]:
         out["detail"] = _outcome(it)
     elif locked(it):
@@ -189,7 +196,10 @@ def plain(v: dict) -> str:
     elif not v["decide_here"]:
         lines.append(v["locked_note"] + (f" {v['link']}" if v.get("link") else ""))
     else:
-        lines.append(f"Buttons: {v['approve_label']} / {v['reject_label']}.")
+        lines.append(f"Buttons: {v['approve_label']} / {v['reject_label']}"
+                     + (", and Keep / Remove on each record" if any(
+                         e.get("actions") for e in (v.get("contents") or {}).get("entries", []))
+                        else "") + ".")
     return "\n".join(lines)
 
 
@@ -339,8 +349,12 @@ def resolve_card(db_path: Path, args: dict, pid: Optional[int], client: str,
         if args.get(key) not in (None, ""):
             return {"error": "not_a_card_tap", "message": NOT_TAP}
     decision = args.get("decision")
-    if decision not in ("approve", "reject"):
-        return {"error": "decision_required", "message": 'decision is "approve" or "reject".'}
+    if decision not in ("approve", "reject") + RECORD_DECISIONS:
+        return {"error": "decision_required", "message": 'decision is "approve" or "reject" '
+                '(or a record\'s keep_record / remove_record / restore_record).'}
+    if (decision in RECORD_DECISIONS) != isinstance(args.get("record"), str):
+        return {"error": "bad_request", "message": "record (type:id) goes with keep_record / "
+                "remove_record / restore_record only."}
     if args.get("item_id") is None:
         return {"error": "item_id_required", "message": "Name the review item (item_id)."}
     why = args.get("reject_reason")
@@ -373,6 +387,8 @@ def resolve_card(db_path: Path, args: dict, pid: Optional[int], client: str,
         link, note = _where(db_path, it)
         return {"error": "user_only", "message": f"Nothing was decided on review item #{item_id}. "
                 + note + (f" {link}" if link else ""), **({"link": link} if link else {})}
+    if decision in RECORD_DECISIONS:
+        return _record_tap(db_path, it, args["record"], decision, client)
     out = decide(it, decision, why or DEFAULT_REASON)
     if isinstance(out, dict) and "error" in out:
         return out
@@ -388,6 +404,32 @@ def resolve_card(db_path: Path, args: dict, pid: Optional[int], client: str,
     return res
 
 
+RECORD_DECISIONS = ("keep_record", "remove_record", "restore_record")
+
+
+def _record_tap(db_path: Path, it: dict, record: str, decision: str, client: str) -> dict:
+    """A tap on one record's Keep / Remove / Bring back (session_records.py), after the same
+    checks as Approve / Reject. Recorded as the user on the card ("card (<app>)"), path card."""
+    from . import session_records
+    tok = identity.set_current(None)
+    try:
+        res = session_records.decide(db_path, it["id"], record, decision.split("_")[0],
+                                     f"card ({client})"[:80], path="card")
+    except session_records.RecordError as e:
+        return e.payload
+    finally:
+        identity.reset(tok)
+    from . import waiting
+    fresh = waiting._item_view(db_path, it["id"]) or it
+    v = view(db_path, fresh, fresh["project"])
+    text = plain(v)
+    return {"record_decided": res["record"], "now": res["now"] or "undecided",
+            "note": res["message"], "text": text,
+            "review_cards": [{"review_item_id": it["id"], "text": text}],
+            "_ui": {"structured": {"cards": [v]}},
+            **{k: res[k] for k in ("safety_copy", "undo") if k in res}}
+
+
 # ---------------------------------------------------------------- tool definitions
 def app_tool():
     """Hidden from the model (visibility app). Hosts that advertise MCP Apps still receive it."""
@@ -397,11 +439,14 @@ def app_tool():
     tool = Tool(
         name="resolve_review_card",
         description="Save the user's tap on a review card (Approve, or Reject with an optional "
-                    "reason typed in the card). Apps call this from the card. A person decides; "
+                    "reason typed in the card; on a session summary also one record's Keep / "
+                    "Remove / Bring back). Apps call this from the card. A person decides; "
                     "chat text is refused. Returns the saved outcome.",
         inputSchema={"type": "object", "properties": {
             "item_id": {"type": "integer", "description": "The review item the card is showing."},
-            "decision": {"type": "string", "enum": ["approve", "reject"]},
+            "decision": {"type": "string", "enum": ["approve", "reject", *RECORD_DECISIONS]},
+            "record": {"type": "string", "description": "keep_record / remove_record / "
+                       "restore_record only: the session summary's record (type:id)."},
             "project": {"type": "string", "description": "The project name the card is showing."},
             "reject_reason": {"type": "string", "maxLength": REASON_MAX,
                               "description": "Reject only: the reason typed in the card."},
