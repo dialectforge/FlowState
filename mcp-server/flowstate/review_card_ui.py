@@ -21,6 +21,9 @@ REVIEW_CSS = r""".item{border:1px solid var(--line);border-radius:12px;padding:1
 .text{margin:0 0 8px;overflow-wrap:anywhere}
 .details{margin:0 0 8px;color:var(--muted);font-size:14px;overflow-wrap:anywhere;white-space:pre-line}
 .who{color:var(--muted);font-size:14px;margin:0}
+.saved{margin:0 0 8px;padding-left:18px}.saved li{margin:6px 0;overflow-wrap:anywhere}
+.saved .ex{color:var(--muted);font-size:14px;margin:2px 0 0}
+.sess{color:var(--muted);font-size:14px;margin:0 0 6px}
 .does{color:var(--muted);font-size:14px;margin:12px 0 0}
 .locked{margin:12px 0 0}
 .link{overflow-wrap:anywhere;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px}
@@ -30,6 +33,39 @@ REVIEW_CSS = r""".item{border:1px solid var(--line);border-radius:12px;padding:1
 background:var(--card);color:var(--ink);min-height:44px;width:100%}"""
 
 REVIEW_JS = r"""  // ---- drawing
+  function localTime(utc) {          // the reader's own time; UTC, labelled, if it can't
+    var d = utc ? new Date(String(utc).replace(" ", "T") + "Z") : null;
+    if (!d || isNaN(d.getTime())) { return utc ? utc + " UTC" : ""; }
+    return d.toLocaleString([], {dateStyle: "medium", timeStyle: "short"});
+  }
+  function endTime(a, b) {          // the end alone when the session ends the day it began
+    var x = new Date(String(a).replace(" ", "T") + "Z"), y = new Date(String(b).replace(" ", "T") + "Z");
+    if (isNaN(x.getTime()) || isNaN(y.getTime()) || x.toDateString() !== y.toDateString()) {
+      return localTime(b);
+    }
+    return y.toLocaleTimeString([], {timeStyle: "short"});
+  }
+  function drawSaved(item, c) {      // what a session saved: each record, as text
+    if (c.started_utc) {
+      item.appendChild(el("p", "sess", "Session " + localTime(c.started_utc) +
+        (c.ended_utc ? " to " + endTime(c.started_utc, c.ended_utc) : "") + (c.app ? ", by " + c.app : "")));
+    }
+    if (!c.entries || !c.entries.length) {
+      if (c.note) { item.appendChild(el("p", "details", c.note)); }
+      return;
+    }
+    item.appendChild(el("p", "sess", "What this session saved (" + c.total + "):"));
+    var ul = el("ul", "saved");
+    c.entries.forEach(function (e) {
+      var li = el("li", "");
+      li.appendChild(el("strong", "", e.head || ""));
+      if (e.excerpt) { li.appendChild(el("p", "ex", e.excerpt)); }
+      if (e.solution) { li.appendChild(el("p", "ex", "Solution: " + e.solution)); }
+      ul.appendChild(li);
+    });
+    item.appendChild(ul);
+    if (c.more) { item.appendChild(el("p", "sess", c.more + " more on the review page.")); }
+  }
   function drawCard(view, index) {
     var box = el("div", "card");
     box.appendChild(el("h1", "", view.title || "Waiting for your OK"));
@@ -37,6 +73,7 @@ REVIEW_JS = r"""  // ---- drawing
     item.appendChild(el("p", "kind", view.kind_label || "Review item"));
     item.appendChild(el("p", "text", view.text || ""));
     if (view.details) { item.appendChild(el("p", "details", view.details)); }
+    if (view.contents) { drawSaved(item, view.contents); }
     item.appendChild(el("p", "who", "From " + (view.who || "an app") + (view.when ? ", " + view.when : "")));
     box.appendChild(item);
     if (view.does) { box.appendChild(el("p", "does", view.does)); }

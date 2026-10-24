@@ -569,6 +569,12 @@ def _form(it: dict, i: int, n: int) -> tuple[str, dict]:
     who = it.get("app") or it.get("source") or "an app"
     from .review import DONT_KEEP, KEEP, KEEP_HOW, KEEP_QUESTION, strip_tag
     keep = it["kind"] == "session_summary"   # Keep / Don't keep: what approve / reject do
+    if keep:   # what the session saved, so the box isn't a blind Keep / Don't keep
+        from . import server as S, session_contents
+        c = session_contents.for_item(S.backend.db_path, it)
+        saved = [x for x in [session_contents.when_line(c)] if x] + session_contents.lines(c)
+        if saved:
+            details = "\n".join(([details] if details else []) + saved)
     msg = (f"Waiting for you ({i} of {n}), {it['project']}, {_KIND.get(it['kind'], it['kind'])} "
            f"#{it['id']} from {who}:\n{strip_tag(it.get('summary'))}" + (f"\n{details}" if details else "")
            + (f"\n{KEEP_QUESTION} {KEEP_HOW}\nTick {KEEP} and submit to keep it; submit it unticked "

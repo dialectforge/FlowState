@@ -161,6 +161,13 @@ def view(db_path: Path, it: dict, project: str) -> dict:
            "details": _cut(it.get("details"), DETAILS_MAX), "who": _who(it),
            "when": _pretty(it.get("created_at")), "resolved": it["status"] != "pending",
            "decide_here": False, "link": "", "locked_note": "", "detail": "", **words}
+    if it["kind"] == "session_summary":   # what the session saved, not just its counts
+        from . import session_contents
+        c = session_contents.for_item(db_path, {**it, "project": project})
+        if c is not None:
+            out["contents"] = session_contents.public(c)
+            out["contents_text"] = [x for x in [session_contents.when_line(c)] if x] \
+                + session_contents.lines(c)
     if out["resolved"]:
         out["detail"] = _outcome(it)
     elif locked(it):
@@ -174,6 +181,7 @@ def plain(v: dict) -> str:
     lines = [v["title"], f"{v['kind_label']} #{v['item_id']} in {v['project']}: {v['text']}"]
     if v.get("details"):
         lines.append(v["details"])
+    lines.extend(v.get("contents_text") or [])
     lines.append("From " + v["who"] + (f", {v['when']}" if v.get("when") else ""))
     if v.get("does"):
         lines.append(v["does"])

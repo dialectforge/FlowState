@@ -119,6 +119,11 @@ JS = r"""(function () {
       else { say("Not done", r.j.message || "Something went wrong.", true); }
     }, function () { say("Not done", "Your FlowState didn't answer.", true); });
   }
+  function localTime(utc) {          // the reader's own time; UTC, labelled, if it can't
+    var d = utc ? new Date(String(utc).replace(" ", "T") + "Z") : null;
+    if (!d || isNaN(d.getTime())) { return utc ? utc + " UTC" : ""; }
+    return d.toLocaleString([], {dateStyle: "medium", timeStyle: "short"});
+  }
   if (!grant) { say("This link is incomplete", "Open it again from the chat.", true); return; }
   post("/open", {grant: grant}).then(function (r) {
     if (!r.ok) { say("Can't show this request", r.j.message || "", true); return; }
@@ -128,8 +133,8 @@ JS = r"""(function () {
     say(it.question, "");
     $("project").textContent = it.project;
     $("summary").textContent = it.summary;
-    $("details").textContent = it.details || "";
-    $("who").textContent = "Asked by " + it.queued_by + ", " + it.queued_at + " UTC";
+    $("details").textContent = [it.details, it.contents_text].filter(Boolean).join("\n\n");
+    $("who").textContent = "Asked by " + it.queued_by + ", " + localTime(it.queued_at);
     $("name-row").hidden = !needsName;
     $("item").hidden = false;
     if (it.card && it.card.sides) {
@@ -207,6 +212,11 @@ def view(db_path, item_id: int) -> dict:
     else:
         question = f"{app} wants to {ask}."
     keep = item["kind"] == "session_summary"
+    contents = None
+    if keep:   # what the session saved: titles and excerpts, not just counts
+        from . import session_contents
+        c = session_contents.for_item(db_path, {**item, "project": project})
+        contents = session_contents.public(c)
     out = {"id": item["id"], "project": project, "kind": item["kind"], "question": question,
            "summary": summary, "details": details,
            "yes": review.KEEP if keep else "Approve", "no": review.DONT_KEEP if keep else "Reject",
@@ -215,6 +225,12 @@ def view(db_path, item_id: int) -> dict:
            "needs_name": item["kind"] == "delete" and p.get("record_type") == "project"}
     if card:
         out["card"] = card
+    if contents is not None:
+        from . import session_contents
+        out["contents"] = contents
+        out["contents_text"] = "\n".join(
+            [session_contents.when_line(c)] + session_contents.lines(c)).strip()
+    out["queued_at_utc"] = out["queued_at"]
     return out
 
 

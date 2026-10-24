@@ -69,6 +69,8 @@ h1{font-size:1.4rem}h2{font-size:1.1rem;margin-top:2rem;border-bottom:1px solid 
 button{padding:.35rem .9rem;margin:.3rem .4rem 0 0}.ok{color:#0a6b0a}.err{color:#b00020}
 table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #eee;padding:.25rem;text-align:left;font-size:.9rem}
 .row{display:flex;gap:1rem}.row>*{flex:1}
+.contents ul{margin:.3rem 0 .5rem 1.2rem;padding:0}.contents li{margin:.3rem 0;overflow-wrap:anywhere}
+.contents details summary{cursor:pointer;color:#444;font-size:.9rem}
 .disagree,.delcard{background:#fbfaf7;border:1px solid #e7e4dd;border-radius:12px;padding:14px 16px;margin:.4rem 0}
 .disagree h3,.delcard .headline{font-family:ui-serif,Georgia,serif;font-weight:500;font-size:1.35rem;margin:.2rem 0 .8rem}
 .sides{display:flex;flex-direction:column;gap:12px}
@@ -518,7 +520,7 @@ class Page:
         if not items:
             out.append("<p>Nothing here.</p>")
         for it in items:
-            out.append(f"""<div class="item"><div class="meta">#{it['id']} · {_e(it['kind'])} · {_e(it['project'])} · from {_e(it['source'])} · {_e(it['created_at'])} · {_e(it['status'])}</div>""")
+            out.append(f"""<div class="item"><div class="meta">#{it['id']} · {_e(it['kind'])} · {_e(it['project'])} · from {_e(it['source'])} · {_e(self._when(it['created_at']))} · {_e(it['status'])}</div>""")
             if it["status"] == "pending":
                 move = ""
                 if it["kind"] == "cleanup" and '"misfiled"' in (it.get("payload") or ""):
@@ -552,6 +554,7 @@ class Page:
                     out.append(f"""<form method="post" action="{self.base}/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">{confirm}
 <button>Approve: delete it</button></form>""")
                 elif it["kind"] == "session_summary":   # Keep / Don't keep: what they really do
+                    out.append(self._contents(it))
                     out.append(f"""<p><strong>{review.KEEP_QUESTION}</strong> {review.KEEP_HOW} You can edit it first.</p>
 <form method="post" action="{self.base}/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
 <textarea name="summary" rows="2">{_e(review.strip_tag(it['summary']))}</textarea><textarea name="details" rows="2" placeholder="details">{_e(it['details'])}</textarea>
@@ -577,6 +580,8 @@ class Page:
                     out.append(deletes.html_for(self.db_path, it))
                 else:
                     out.append(f"<p>{_e(review.strip_tag(it['summary']))}</p>")
+                    if it["kind"] == "session_summary":
+                        out.append(self._contents(it))
                 if it.get("reject_reason"):
                     out.append(f"<p class='meta'>Reason: {_e(it['reject_reason'])}</p>")
             out.append("</div>")
@@ -603,6 +608,18 @@ class Page:
         out.append(self._recent_activity())
         out.append("</body></html>")
         return "".join(out)
+
+    def _when(self, utc: str) -> str:
+        """This computer's local time on the local page; UTC, labelled, on the tunnel page."""
+        return who.local_time(utc) if self.settings != "off" else f"{utc} UTC"
+
+    def _contents(self, it: dict) -> str:
+        """What a session summary's session saved (session_contents.py), escaped. This
+        computer's local time on the local page; UTC, labelled, on the tunnel page (its reader
+        may be anywhere)."""
+        from . import session_contents
+        local = who.local_time if self.settings != "off" else None
+        return session_contents.html(session_contents.for_item(self.db_path, it), local)
 
     def _recent_activity(self) -> str:
         out = ["<h2>Recent activity</h2><table><tr><th>When (UTC)</th><th>App</th><th>Tool</th><th>Project</th><th>Result</th></tr>"]

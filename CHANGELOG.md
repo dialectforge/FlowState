@@ -5,6 +5,25 @@
 (Part of 2.4.4, which is not tagged yet: fold these into the 2.4.4 section at release prep.)
 
 - No new dependencies and no database migration.
+- **Session summaries show what the session saved.** A summary waiting for review used to say
+  only "saved 1 change; also problem solved", so Keep / Don't keep was a blind choice. Now every
+  place that shows one (the local review page, the tunnel review page, the phone list, the
+  phone approve page, the in-chat review card and its text, and the chat walk's boxes) lists
+  each record the session saved: its kind, id, title and the first 200 characters of its text,
+  the component, and for a solved problem the solution. It also shows the app and the session's
+  start and end time: in the reader's own time on the phone and the card, in this computer's
+  local time on the local page, and in UTC, labelled, on the tunnel page. Past 10 records the
+  rest are counted ("3 more"); the local and tunnel pages open them in place.
+- The summary line itself (what lists and the review queue show) now names up to five records,
+  e.g. `Records: change #12 "Sign-in keeps the page you were on"; problem #3 "Users loop back to
+  the sign-in page" (saved, solved).`
+- New summaries store the ids of what was saved (from the run ledger, ids only, never the text)
+  with their review item; the text is read from the records when shown, so an edited record
+  shows as it is now and a deleted one says "no longer in FlowState". Summaries queued before
+  this change fall back to the run ledger while it still has the session (the activity log's
+  days); after that they say only the counts are known. All of it is escaped text (HTML
+  escaping on the pages, textContent in the scripts); the phone page shows nothing it couldn't
+  before (record text from this project's memory, no paths, keys or tokens).
 - A **Settings** section on the review page that `flowstate review-page` opens (this computer
   only). It lists every user setting in plain words with its current value, and lets you change
   it there: review mode (whole install and per project; the existing form, moved in), app

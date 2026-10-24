@@ -65,7 +65,8 @@ def test_stdio_session_opens_and_closes_on_disconnect(seeded_db):
     assert rows == [("shutdown",)]
     summary = _rows(seeded_db, "SELECT summary FROM sessions")[0][0]
     assert summary.startswith("[auto-captured, needs review]")
-    assert summary.endswith(" session in Alpha: saved 1 change.") and "idle" not in summary
+    assert summary.endswith(' session in Alpha: saved 1 change. Records: change #2 "transport test change".')
+    assert "idle" not in summary
 
 
 @pytest.fixture

@@ -288,9 +288,22 @@ class AutoSessions:
         name = conn.execute("SELECT name FROM projects WHERE id = ?",
                             (row["project_id"],)).fetchone()
         project = name[0] if name else f"project #{row['project_id']}"
-        summary = build_summary(row["client"], project, events, trimmed)
+        # The records it saved, by id (run ledger): named in the summary, stored with the
+        # review item so every page can show what they are (session_contents.py).
+        from . import session_contents
+        try:
+            recs = session_contents.refs(conn, row["session_id"])
+            named = session_contents.short_names(
+                [session_contents.entry(conn, *r) for r in recs[:session_contents.NAMED]])
+            if len(recs) > session_contents.NAMED and named:
+                named += f"; and {len(recs) - session_contents.NAMED} more"
+        except sqlite3.Error:
+            recs, named = None, ""
+        summary = build_summary(row["client"], project, events, trimmed, named)
         outcomes = {"auto_captured": True, "needs_review": True, "close_reason": reason,
                     "client": row["client"], "calls": row["call_count"]}
+        if recs:
+            outcomes["records"] = len(recs)
         from .review_mode import get_with
         if not trimmed and is_housekeeping(events):
             # Nothing new was saved (reads, undo, review decisions...): a plain record for
@@ -313,7 +326,8 @@ class AutoSessions:
             from .review import add_item
             from .identity import on_behalf_of
             item = add_item(self.db_path, row["project_id"], "session_summary", summary,
-                            payload={"close_reason": reason, "calls": row["call_count"]},
+                            payload={"close_reason": reason, "calls": row["call_count"],
+                                     **({"records": recs} if recs else {})},
                             source=row["client"], session_id=row["session_id"], conn=conn,
                             ident=on_behalf_of(row["client"]))
             if item is not None:
@@ -391,9 +405,11 @@ def _and(parts: list) -> str:
     return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
 
 
-def build_summary(client: str, project: str, events: list, trimmed: bool = False) -> str:
-    """Short, plain summary from the event log: what the session saved, counted by kind.
-    Starts with AUTO_TAG (the caller swaps it for OFF_TAG / SKIP_TAG)."""
+def build_summary(client: str, project: str, events: list, trimmed: bool = False,
+                  named: str = "") -> str:
+    """Short, plain summary from the event log: what the session saved, counted by kind, then
+    `named` (session_contents.short_names: which records). Starts with AUTO_TAG (the caller
+    swaps it for OFF_TAG / SKIP_TAG)."""
     saved, suggested, other, chores = {}, {}, {}, {}
     for e in events:
         if e.startswith("read:"):
@@ -424,6 +440,8 @@ def build_summary(client: str, project: str, events: list, trimmed: bool = False
         parts.append("nothing new saved" + (f" ({_and([_n(v, k) for k, v in chores.items()])})"
                                             if chores else ""))
     text = f"{AUTO_TAG} {client} session in {project}: " + "; ".join(parts) + "."
+    if named:
+        text += f" Records: {named}."
     if trimmed:
         text += f" Only its last {MAX_EVENTS} saves were counted."
     if len(text) > MAX_SUMMARY:
