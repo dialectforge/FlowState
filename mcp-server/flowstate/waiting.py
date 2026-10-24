@@ -64,9 +64,13 @@ def _wanted_port() -> Optional[int]:
 
 
 def _state_file(db_path: Path) -> Path:
+    """Which port serves this database's page. Under FLOWSTATE_HOME when it is set (a test or
+    second install keeps it out of the per-OS data folder), else the per-OS data folder."""
     from . import paths
     from .review_page import db_tag
-    return paths.data_root() / "review-page" / f"{db_tag(db_path)}.json"
+    home = (os.environ.get("FLOWSTATE_HOME") or "").strip()
+    root = Path(home).expanduser() if home else paths.data_root()
+    return root / "review-page" / f"{db_tag(db_path)}.json"
 
 
 def _ping(port: int, db_path: Path) -> bool:

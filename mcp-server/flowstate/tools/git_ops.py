@@ -72,6 +72,9 @@ Thumbs.db
 # Local backups (don't sync conflict backups)
 *.local-backup-*
 
+# This computer's review-page port note (waiting.py)
+review-page/
+
 # Large media (optional - user can toggle)
 # *.mp4
 # *.mov
