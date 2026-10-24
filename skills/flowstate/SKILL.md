@@ -121,6 +121,12 @@ never guess or invent one. `manage_history(action="who", ...)` shows who did wha
   (`https://<tunnel>/review/tunnel`, owner passphrase) if they run their own tunnel. An app on
   another computer gets no 127.0.0.1 link (it would open that computer itself); pass on what
   the answer says.
+- **Review cards** (apps that draw MCP Apps cards, such as Claude Desktop): when a
+  `manage_review` list or walk answer has `show_card` naming `show_review_card(...)`, or the
+  user asks to see what's waiting, call it; the user taps Approve or Reject on the cards
+  themselves. It only shows; never decide for them, and don't ask them to type the answer in
+  the chat instead. If `show_card` is a list, call each (disagreements use
+  `show_conflict_card`). In apps without cards, show the plain list as above.
 - **Writes come with a receipt** (`receipt.saved`). If a write times out, don't repeat it:
   the next FlowState answer says whether it saved.
 - **Delete only when the user wants something gone**: `manage_projects(action="delete" |

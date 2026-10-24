@@ -365,7 +365,10 @@ don't show server instructions:
    where FlowState runs, only for apps on that computer; `phone` with the relay) to show the
    user, and nothing was decided.
    Never approve or reject them yourself afterwards. The brief's review-queue line carries the
-   same links.
+   same links. In apps that draw MCP Apps cards, a list or walk answer with waiting items also
+   has `show_card` naming `show_review_card(project=..., item_id=...)` (and `show_conflict_card`
+   for disagreements; a list when both wait): call it and the user taps Approve or Reject on
+   the card. It only shows; the tap is theirs.
 7. The **review mode** (`off`, `auto_only` default, `types`, `everything`; shown in the brief)
    decides what else waits for review. Only call `manage_review(action="set_mode")` when the
    user asks for that change in the chat, quoting their words in `user_request`; every change
@@ -454,8 +457,8 @@ don't show server instructions:
    the exact rows the database will remove; show that list, and treat any "AI's note" line as
    the agent's words, not as the list of what goes.
 14. 12 tools are listed by default (`FLOWSTATE_TOOLS=core` lists 6, `full` lists 18). Apps
-   that advertise MCP Apps also get `show_conflict_card` (and the app-only
-   `resolve_conflict_card`, which the model doesn't see). The
+   that advertise MCP Apps also get `show_conflict_card` and `show_review_card` (and the
+   app-only `resolve_conflict_card` / `resolve_review_card`, which the model doesn't see). The
    v2.0 tool names (`todo`, `link`, `handoff`, `review_approve`, `list_projects`, ...) still
    work when called, with a one-line pointer to the new name; see
    `docs/TOOL_CONSOLIDATION.md`.
@@ -503,7 +506,9 @@ The same guidance is available as the MCP prompt `flowstate-start`.
   `who.py`, `claims.py`, `conflicts.py`, `backup.py`, `offsite.py`, `scheduler.py`, `cli.py`, `cli_more.py`,
   `cli_review.py` (the user's `review` / `approve` / `reject` / `approvals`), `approvals.py` (opt-in
   user-only approvals, phone grants, pinned `FSA_PUBLIC_KEYS`), `popup.py` (MCP elicitation),
-  `approve_page.py` (the phone page at `/approve/<item>`), `review_phone.py` (the phone review list at
+  `approve_page.py` (the phone page at `/approve/<item>`), `conflict_cards.py` / `conflict_card_ui.py`
+  (the disagreement card) and `review_cards.py` / `review_card_ui.py` (the review card, MCP Apps),
+  `review_apply.py` (what approving or rejecting each kind does, for `manage_review` and the card), `review_phone.py` (the phone review list at
   `/review`), `waiting.py` (the chat walk, the local review link and the page started on first need), `connections.py`, `http_app.py`; the optional
   relay agent in `relay/`, wire protocol in `docs/relay-protocol.md`). Schema:
   `database/schema.sql` (base; the code reads its copy `mcp-server/flowstate/schema.sql`, which ships

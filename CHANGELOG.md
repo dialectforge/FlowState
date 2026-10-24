@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+- No new dependencies and no database migration. `flowstate update` from 2.4.3 needs no new
+  `.venv`.
+- Review cards in the chat. Hosts that support MCP Apps (such as Claude Desktop) now get a card
+  for everything else that waits in the review queue: session summaries, suggestions, imports,
+  clean-up ideas, markdown edits and possible conflicts. The AI calls a new read-only tool,
+  `show_review_card` (one item, or up to 5 waiting items of a project, oldest first, with
+  `more`), whose definition names `ui://flowstate/review-card.html`. Each card says what the
+  item is, what saving it would do, which app wrote it and when, with Approve and Reject; Reject
+  asks for a short optional reason inside the card. Disagreements keep their own card:
+  `show_review_card` points to `show_conflict_card` for them. `manage_review` list and walk
+  answers on those hosts include the call to make (`show_card`; both calls when both kinds
+  wait). Apps without MCP Apps see no new tool and the same plain text as before.
+- The card's buttons call `resolve_review_card`, hidden from the model (`visibility: ["app"]`)
+  like `resolve_conflict_card`, with the same rules: chat text (`user_request`, `message`,
+  `text`, `reason`) is refused, so are apps without MCP Apps, and through the relay a tap is
+  phone only unless `flowstate relay chat-approvals on`. Items only the user decides (with
+  approvals on: deletes and turning review off; every "did you say this?" check) and every
+  delete show without buttons, with the phone or review-page link, and are refused if the tool
+  is called anyway. Every card decision is logged in the approvals log with path `card`, for
+  every kind. Approving or rejecting runs the same step as `manage_review` (one shared module,
+  `review_apply.py`); `manage_review`'s own rules are unchanged. Card taps are not
+  cryptographically proven to be a person, as with the disagreement card.
+- Fix: the review page's port note (`review-page/<db>.json`) now goes under `FLOWSTATE_HOME`
+  when that is set, instead of always the per-OS data folder, so a second install or a test
+  database no longer writes into the main one's folder. New data-folder git repos ignore
+  `review-page/`.
+
 ## 2.4.3 - 2026-10-23
 
 - No new dependencies. One additive database migration (023: three new tables for

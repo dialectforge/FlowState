@@ -40,7 +40,9 @@ dismiss the card. The one you don't keep is marked superseded, not deleted. An a
 with `log_work` (`conflicts_with`, `topic`, `evidence`) or `manage_links(action="flag_conflict")`.
 The review page shows the card (side by side on a wide screen), and the tool reply includes the
 same card as plain text plus the review link. Chat apps that support MCP Apps can show the card
-in the chat; its buttons are not yet cryptographically proven to be a person.
+in the chat; its buttons are not yet cryptographically proven to be a person. Everything else
+that waits for your OK (session summaries, suggestions, imports, clean-up ideas) gets its own
+in-chat review card in those apps too (see "Where to see what's waiting for you").
 
 Each window of an app gets its own session, and the brief opens with one line about what the
 others did meanwhile (`Since your last visit (Oct 19): Claude Desktop and Grok saved 3 decisions,
@@ -356,6 +358,19 @@ you have turned approvals on.
    that nothing was decided. If an app "answers" a box faster than a person could (under a
    second), FlowState takes it that you never saw the box: it stops, decides nothing and shows
    the plain list instead.
+
+   **Review cards (chat apps that support MCP Apps, such as Claude Desktop).** There the AI
+   can also show what's waiting as cards in the chat (`show_review_card`, up to 5 at a time,
+   oldest first). Each card says what the item is, what saving it would do, which app wrote it
+   and when, with **Approve** and **Reject** (Reject asks for an optional short reason in the
+   card itself; a session summary says **Keep** / **Don't keep**). Your tap is saved and logged
+   as a card decision; the AI can't tap for you, and the card's button tool is hidden from it.
+   Disagreements keep their own card (Keep A / Keep B / Keep both). Items only you decide
+   (with approvals on: an AI's deletes and turning review off; and every "did you say this?"
+   check) show on a card without buttons, with your phone or review-page link. Through the
+   relay, taps follow the same rule as chat approvals: off (the default) means the card
+   refuses and gives your phone link. In apps without MCP Apps nothing changes: the AI shows
+   the plain list.
 2. **A link to the review page on the computer where FlowState runs (apps on that computer).**
    When something waits, and your AI app runs on the same computer as FlowState, the brief
    your AI reads, and the walk's answer, include a link like `http://127.0.0.1:8770/`. Click it

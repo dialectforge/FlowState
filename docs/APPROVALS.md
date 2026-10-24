@@ -122,6 +122,21 @@ chat by default. What the code enforces (`waiting.phone_only`, called first in
   pair fits together, is audited as `automatic`. Card taps are not cryptographically proven to
   be a person yet. That check is a known follow-up; a host that lets the model call the
   app-only tool by name can still save a resolution.
+- Review cards (2.4.4) are the same design for every other kind in the queue (session
+  summaries, suggestions, imports, clean-ups, markdown edits, possible conflicts). The AI calls
+  `show_review_card` (read-only, listed only to MCP Apps hosts; its definition names
+  `ui://flowstate/review-card.html`): one item, or up to 5 waiting ones, oldest first, with
+  `more`. A disagreement is never shown there: the answer points to `show_conflict_card`. The
+  buttons, Approve and Reject (with an optional reason typed in the card, at most 300
+  characters), call the app-only `resolve_review_card`. It refuses `user_request`, `message`,
+  `text` and `reason` (`not_a_card_tap`; only the card's own `reject_reason` is taken), refuses
+  clients without MCP Apps, and through the relay follows chat approvals (off: `phone_only`
+  with the phone link). User-only items (`user_only` above) and every delete are drawn without
+  buttons, with the phone link or, on this computer, the review page link; `resolve_review_card`
+  refuses them (`user_only`) even if called. A decision runs the same apply step as
+  `manage_review` approve / reject (`review_apply.py`) and every one is logged in `approval_log`
+  with path `card`, whatever the kind. The same limit applies: a tap is not proven to be a
+  person.
 
 ## What a queued delete shows
 
