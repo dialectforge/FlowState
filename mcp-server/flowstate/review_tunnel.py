@@ -209,7 +209,8 @@ def routes(db_path_fn, store, public_url: str):
     origin = f"{u.scheme}://{u.netloc}".lower()
     sessions = Sessions()
     page = review_page.Page(db_path_fn, port=0, base=PATH, client=CLIENT, user_words=USER_WORDS,
-                            stylesheet=f"{PATH}/page.css", sign_out=f"{PATH}/sign-out")
+                            stylesheet=f"{PATH}/page.css", sign_out=f"{PATH}/sign-out",
+                            settings="off")   # never the Settings section on the public page
     acts = {"approve": page.approve, "reject": page.reject, "mode": page.set_mode,
             "app": page.set_app, "undo": page.undo}
 

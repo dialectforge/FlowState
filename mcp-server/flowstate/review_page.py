@@ -34,14 +34,16 @@ import hashlib
 import hmac
 import html
 import json
+import os
 import secrets
 import sqlite3
+import time
 from pathlib import Path
 from typing import Callable, Optional, Union
 from urllib.parse import urlencode
 
 from . import dbconn
-from . import activity, history, review, review_mode, who
+from . import activity, approvals, history, identity, review, review_mode, updates, who
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8770   # 8766 = LAN server, 8767 = public listener
@@ -66,7 +68,25 @@ table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #eee;pad
 .keep-row form{display:block;margin:.35rem 0}.keep-row button,.delcard+form button{min-height:44px;border-radius:999px;padding:.6rem 1rem}
 .done{color:#1f5f5b}.ainote{color:#62656b;font-size:.95rem}
 .kids,.fields{margin:.3rem 0 .6rem;padding-left:1.2rem}
-@media (min-width:800px){.sides{flex-direction:row;align-items:stretch}.side{flex:1}}"""
+@media (min-width:800px){.sides{flex-direction:row;align-items:stretch}.side{flex:1}}
+.settings h2,.confirm h2{font-family:ui-serif,Georgia,serif;font-weight:500;font-size:1.35rem}
+.settings h3.group{font-family:ui-serif,Georgia,serif;font-weight:500;font-size:1.1rem;color:#1f5f5b;margin:1.4rem 0 .2rem}
+.set{background:#fbfaf7;border:1px solid #e7e4dd;border-radius:12px;padding:12px 16px;margin:.6rem 0}
+.set h4{font-family:ui-serif,Georgia,serif;font-weight:500;font-size:1.15rem;margin:.1rem 0 .3rem}
+.set p{margin:.3rem 0}.set .now b{color:#1f5f5b}.note{color:#62656b;font-size:.9rem}
+.set form{margin:.4rem 0}.set ul{margin:.3rem 0;padding-left:1.2rem}
+.set button,.confirm button{min-height:44px;border-radius:999px;padding:.5rem 1.1rem;border:1px solid #1f5f5b;background:#fff;color:#1f5f5b;font-size:1rem}
+.set button.go,.confirm button.go{background:#1f5f5b;color:#fff}
+.set button:disabled{border-color:#c9c9c9;color:#8a8a8a;background:#f3f3f3}
+.set.unused{opacity:.65}
+.set .inline{display:inline}.set li form{display:inline;margin-left:.4rem}
+.set li button{min-height:36px;padding:.2rem .8rem}
+.confirm{max-width:38rem}.confirm .set{background:#fff8ec;border-color:#e9d8b4}
+@media (max-width:600px){html{-webkit-text-size-adjust:100%}body{overflow-wrap:anywhere}
+button{min-height:44px;font-size:1rem}input,select,textarea{min-height:44px;font-size:1rem;max-width:100%}
+input[type=checkbox]{min-height:0;width:1.3rem;height:1.3rem;vertical-align:middle}
+.row{flex-wrap:wrap}.row>*{min-width:8rem}table{display:block;max-width:100%;overflow-x:auto}
+.set li button{min-height:44px}}"""
 
 
 def _e(v) -> str:
@@ -74,6 +94,42 @@ def _e(v) -> str:
 
 
 MAX_SESSIONS = 20   # open-link mode: the oldest browser session goes first
+CONFIRM_SECONDS = 5 * 60   # a settings confirm page must be answered within this
+MAX_CONFIRMS = 50
+SETTING_WORDS = "set on the FlowState review page"
+READ_ONLY = ("These settings can only be changed on the page `flowstate review-page` opens; "
+             "nothing changed.")
+NO_RELAY = "Only used with the FlowState relay (not set up here); nothing changed."
+_clock = time.time
+
+
+class _Html(str):
+    """An action's answer that is a whole page (the settings confirm step), not a flash line."""
+
+
+# Environment-only settings, shown read-only (set in the app's MCP config): name, plain words,
+# default. Never a secret here: FLOWSTATE_TOKEN and the like are not listed and never shown.
+ENV_SETTINGS = (
+    ("FLOWSTATE_REVIEW_PORT", "The port of this review page when FlowState starts it for a link.",
+     "8770; taken: any free port"),
+    ("FLOWSTATE_IDLE_MINUTES", "Close an automatic session after this many idle minutes.", "120"),
+    ("FLOWSTATE_CALL_TIMEOUT", "Seconds before a slow call answers \"carry on without FlowState\".",
+     "15"),
+    ("FLOWSTATE_STALE_DAYS", "Facts not checked for this many days are listed for re-checking.", "60"),
+    ("FLOWSTATE_TOOLS", "How many tools apps see: core, the default set, or full.", "the default set"),
+    ("FLOWSTATE_MODEL", "The model name recorded when a local app gives none.", "none"),
+    ("FLOWSTATE_WORKSPACE", "The machine name recorded with each change.", "this computer's name"),
+)
+# Settings with their own terminal commands (some hold keys or passphrases, so never here)
+TERMINAL_SETTINGS = (
+    ("Nightly backups", "flowstate schedule-backups [--time HH:MM] / --remove"),
+    ("Off-site copy on GitHub", "flowstate offsite setup --repo OWNER/REPO / offsite disable"),
+    ("Per-app keys for the HTTP server", "flowstate keys add / list / revoke"),
+    ("Remote access (passphrase, app tokens)", "flowstate remote ..."),
+    ("HTTP token", "flowstate token migrate / status"),
+    ("Git commit capture", "flowstate git-capture ..."),
+    ("The relay itself", "flowstate relay enroll / enable / disable / forget"),
+)
 
 
 def db_tag(db_path) -> str:
@@ -89,7 +145,7 @@ class Page:
     def __init__(self, db_path: Union[Path, Callable[[], Path]], port: int = DEFAULT_PORT,
                  open_link: bool = False, base: str = "", client: str = CLIENT,
                  user_words: str = USER_WORDS, stylesheet: Optional[str] = None,
-                 sign_out: Optional[str] = None):
+                 sign_out: Optional[str] = None, settings: Optional[str] = None):
         self._db = db_path if callable(db_path) else Path(db_path)
         self.port = port
         self.open_link = open_link
@@ -101,6 +157,13 @@ class Page:
         self.stylesheet, self.sign_out = stylesheet, sign_out
         self.launch_key: Optional[str] = None if open_link else secrets.token_urlsafe(32)
         self.sessions: dict[str, str] = {}   # cookie value -> csrf token
+        # The Settings section: "edit" on the page `flowstate review-page` opens (a launch-key
+        # session), "read" on the open-link page (anything on this computer can get a session
+        # there without a key), "off" anywhere else (the tunnel page: not rendered, no routes)
+        self.settings = settings or ("off" if base else "read" if open_link else "edit")
+        if self.settings not in ("off", "read", "edit"):
+            raise ValueError("settings must be off, read or edit")
+        self.confirms: dict[str, dict] = {}   # hash of a confirm token -> session, change, time
 
     @property
     def db_path(self) -> Path:
@@ -179,8 +242,174 @@ class Page:
     def set_app(self, form: dict) -> str:
         app = form.get("app", "")
         paused = form.get("paused") == "1"
+        was = activity.is_paused(self.db_path, app)
         activity.set_paused(self.db_path, app, paused, self.client)
+        self._log(f"app:{app.strip()[:70]}", "paused" if was else "running",
+                  "paused" if paused else "running")
         return f"{app}: {'paused' if paused else 'resumed'}."
+
+    # ------------------------------------------------------------ settings (local page only)
+    def _log(self, scope: str, old: Optional[str], new: Optional[str]) -> None:
+        """One review_mode_log row for a setting changed here (the settings that don't log
+        themselves: app pauses, phone links, popup apps, config.json)."""
+        conn = self._conn()
+        try:
+            if not review_mode.available(conn):
+                return
+            identity.insert(conn, "review_mode_log", {
+                "scope": scope, "old_mode": old, "new_mode": new, "client": self.client[:80],
+                "caller": self.client[:80], "user_request": SETTING_WORDS,
+                "changed_at": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())}, self.client)
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _project_ids(self) -> set:
+        return {p["id"] for p in self.projects()}
+
+    def _approvals_change(self, form: dict) -> tuple:
+        scope, state = str(form.get("scope", "")).strip(), form.get("state")
+        if state not in ("on", "off", "clear"):
+            raise ValueError("state")
+        if scope and (not scope.isdigit() or int(scope) not in self._project_ids()):
+            raise ValueError("scope")
+        if state == "clear" and not scope:
+            raise ValueError("clear needs a project")
+        return ("approvals", scope, state)
+
+    def _relay_change(self, form: dict) -> tuple:
+        if form.get("state") not in ("on", "off"):
+            raise ValueError("state")
+        return ("relay_chat", "", form["state"])
+
+    def _needs_confirm(self, change: tuple) -> bool:
+        """The page's stand-in for the terminal's `y`, in the same cases as the commands:
+        approvals off (or clearing a project's own setting while it is on), relay chat
+        approvals on."""
+        what, scope, state = change
+        if what == "approvals":
+            pid = int(scope) if scope else None
+            return state == "off" or (state == "clear" and approvals.is_on(self.db_path, pid))
+        return what == "relay_chat" and state == "on" and not approvals.relay_chat_on(self.db_path)
+
+    def _apply(self, change: tuple) -> str:
+        what, scope, state = change
+        if what == "approvals":
+            pid = int(scope) if scope else None
+            res = approvals.set_on(self.db_path, None if state == "clear" else state == "on", pid,
+                                   self.client, SETTING_WORDS)
+            where = "the whole install" if pid is None else self._name(pid)
+            return f"Approvals are now {res['now']} for {where}."
+        if not approvals.relay_set_up():
+            return NO_RELAY
+        res = approvals.set_relay_chat(self.db_path, state == "on", self.client, SETTING_WORDS)
+        return f"Chat approvals through the relay are now {res['now']}."
+
+    def _name(self, pid: int) -> str:
+        return next((p["name"] for p in self.projects() if p["id"] == pid), f"project {pid}")
+
+    def _ask(self, sess: str, change: tuple) -> "_Html":
+        """The confirm page: a fresh single-use token bound to this session and this change."""
+        tok, now = secrets.token_urlsafe(24), _clock()
+        self.confirms = {k: v for k, v in self.confirms.items()
+                         if now - v["at"] < CONFIRM_SECONDS}
+        while len(self.confirms) >= MAX_CONFIRMS:
+            self.confirms.pop(next(iter(self.confirms)))
+        self.confirms[hashlib.sha256(tok.encode()).hexdigest()] = {
+            "sess": sess, "change": change, "at": now}
+        return _Html(self.render_confirm(self.sessions[sess], tok, change))
+
+    def set_approvals(self, form: dict, sess: str):
+        if self.settings != "edit":
+            return READ_ONLY
+        change = self._approvals_change(form)
+        return self._ask(sess, change) if self._needs_confirm(change) else self._apply(change)
+
+    def set_relay_chat(self, form: dict, sess: str):
+        if self.settings != "edit":
+            return READ_ONLY
+        if not approvals.relay_set_up():
+            return NO_RELAY
+        change = self._relay_change(form)
+        return self._ask(sess, change) if self._needs_confirm(change) else self._apply(change)
+
+    def confirm(self, form: dict, sess: str) -> str:
+        """The confirm page's Yes. The token is used up whatever happens next; it must belong to
+        this session, be younger than CONFIRM_SECONDS and name exactly the change posted."""
+        if self.settings != "edit":
+            return READ_ONLY
+        entry = self.confirms.pop(hashlib.sha256(str(form.get("token", "")).encode()).hexdigest(),
+                                  None)
+        try:
+            posted = (self._approvals_change(form) if form.get("setting") == "approvals"
+                      else self._relay_change(form) if form.get("setting") == "relay_chat"
+                      else None)
+        except ValueError:
+            posted = None
+        if entry is None or not hmac.compare_digest(entry["sess"], sess) \
+                or _clock() - entry["at"] >= CONFIRM_SECONDS or posted != entry["change"]:
+            return "That confirmation is no longer valid; nothing changed. Try again."
+        return self._apply(entry["change"])
+
+    def cancel(self, form: dict, sess: str) -> str:
+        entry = self.confirms.get(hashlib.sha256(str(form.get("token", "")).encode()).hexdigest())
+        if entry is not None and hmac.compare_digest(entry["sess"], sess):
+            self.confirms.pop(hashlib.sha256(str(form["token"]).encode()).hexdigest(), None)
+        return "Cancelled; nothing changed."
+
+    def set_phone(self, form: dict, sess: str) -> str:
+        if self.settings != "edit":
+            return READ_ONLY
+        if not approvals.relay_set_up():
+            return NO_RELAY
+        state = form.get("state")
+        if state not in ("on", "off"):
+            raise ValueError("state")
+        old = "on" if approvals.phone_on(self.db_path) else "off"
+        approvals.set_value(self.db_path, "phone_approvals", state, self.client)
+        self._log("phone_approvals", old, state)
+        return f"Phone approval links are {state}."
+
+    def set_popup(self, form: dict, sess: str) -> str:
+        if self.settings != "edit":
+            return READ_ONLY
+        name, op = " ".join(str(form.get("name", "")).split())[:80], form.get("op")
+        if op not in ("add", "remove") or not name:
+            return "Give the app's name as it connects (its MCP client name)."
+        before = approvals.popup_clients(self.db_path)
+        approvals.change_popup_clients(self.db_path, name, op == "add", self.client)
+        self._log("popup_clients", ", ".join(sorted(before)),
+                  f"{'added' if op == 'add' else 'removed'} {name.lower()}")
+        if op == "add" and any(m in name.lower() for m in approvals.CONNECTOR_MARKS):
+            return (f"Added {name.lower()}, but claude.ai and Anthropic apps never get a popup, "
+                    "whatever the list says.")
+        return f"{'Added' if op == 'add' else 'Removed'} {name.lower()}."
+
+    def set_self_update(self, form: dict, sess: str) -> str:
+        if self.settings != "edit":
+            return READ_ONLY
+        state = form.get("state")
+        if state not in ("on", "off"):
+            raise ValueError("state")
+        old = "allowed" if updates.self_update_allowed() else "by hand"
+        updates.set_self_update(state == "on")
+        new = "allowed" if updates.self_update_allowed() else "by hand"
+        self._log("config:self_update", old, new)
+        return ("`flowstate update` may update this computer again." if new == "allowed" else
+                "This computer is now updated by hand: `flowstate update` refuses to run.")
+
+    def set_update_check(self, form: dict, sess: str) -> str:
+        if self.settings != "edit":
+            return READ_ONLY
+        state = form.get("state")
+        if state not in ("on", "off"):
+            raise ValueError("state")
+        old = "on" if updates.is_on() else "off"
+        updates.set_on(state == "on")
+        self._log("config:update_check", old, state)
+        note = (" (FLOWSTATE_UPDATE_CHECK in the environment still keeps it off)"
+                if state == "on" and not updates.is_on() else "")
+        return f"The daily update check is {state}{note}."
 
     def undo(self, form: dict) -> str:
         """Undo from "Who did what": the same code as history(action="undo")."""
@@ -198,7 +427,8 @@ class Page:
     def _head(self, flash: str, view: str, csrf: str = "") -> list:
         style = (f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
                  f"<link rel='stylesheet' href='{_e(self.stylesheet)}'>" if self.stylesheet
-                 else f"<style>{_CSS}</style>")
+                 else f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                      f"<style>{_CSS}</style>")
         out = [f"<!doctype html><html><head><meta charset='utf-8'><title>FlowState review</title>"
                f"{style}</head><body><h1>FlowState review</h1>"
                + (f"<form method='post' action='{_e(self.sign_out)}'><input type='hidden' "
@@ -342,7 +572,12 @@ class Page:
                 if it.get("reject_reason"):
                     out.append(f"<p class='meta'>Reason: {_e(it['reject_reason'])}</p>")
             out.append("</div>")
-        # review mode
+        if self.settings != "off":
+            out.append(self.render_settings(hidden, opts))
+            out.append(self._recent_activity())
+            out.append("</body></html>")
+            return "".join(out)
+        # review mode (the tunnel page: these two blocks only, no Settings section)
         m = review_mode.get(self.db_path, None)
         kinds = "".join(f'<label><input type="checkbox" name="kind_{k}"{" checked" if k in m["kinds"] else ""}> {k}</label> '
                         for k in review_mode.KINDS)
@@ -356,12 +591,266 @@ class Page:
             out.append(f"""<tr><td>{_e(a['app'])}{' <b>(paused)</b>' if a['paused'] else ''}</td><td>{_e(a['last_seen'] or '-')}</td>
 <td>{a['calls']}</td><td>{a['writes'] or 0}</td><td><form method="post" action="{self.base}/app">{hidden}<input type="hidden" name="app" value="{_e(a['app'])}">
 <input type="hidden" name="paused" value="{'0' if a['paused'] else '1'}"><button>{'Resume' if a['paused'] else 'Pause writes'}</button></form></td></tr>""")
-        out.append("</table><h2>Recent activity</h2><table><tr><th>When (UTC)</th><th>App</th><th>Tool</th><th>Project</th><th>Result</th></tr>")
+        out.append("</table>")
+        out.append(self._recent_activity())
+        out.append("</body></html>")
+        return "".join(out)
+
+    def _recent_activity(self) -> str:
+        out = ["<h2>Recent activity</h2><table><tr><th>When (UTC)</th><th>App</th><th>Tool</th><th>Project</th><th>Result</th></tr>"]
         for r in activity.recent(self.db_path, None, 30):
             out.append(f"<tr><td>{_e(r['at'])}</td><td>{_e(r['app'])}</td><td>{_e(r['tool'])}{('/' + _e(r['action'])) if r['action'] else ''}</td>"
                        f"<td>{_e(r['project'] or '')}</td><td>{'ok' if r['ok'] else 'error ' + _e(r['error'])}</td></tr>")
-        out.append("</table></body></html>")
+        out.append("</table>")
         return "".join(out)
+
+    # ------------------------------------------------------------ settings html
+    def _row(self, name: str, what: str, now: str, control: str = "", note: str = "",
+             unused: bool = False) -> str:
+        return (f"<div class='set{' unused' if unused else ''}'><h4>{_e(name)}</h4>"
+                f"<p class='what'>{what}</p><p class='now'>Now: {now}</p>{control}"
+                + (f"<p class='note'>{note}</p>" if note else "") + "</div>")
+
+    def _buttons(self, action: str, hidden: str, choices, extra: str = "",
+                 disabled: bool = False) -> str:
+        """A form with one button per (value, label, primary) choice, posting name=state."""
+        if self.settings != "edit":
+            return ""
+        dis = " disabled" if disabled else ""
+        btns = "".join(f"<button name='state' value='{v}'{' class=go' if go else ''}{dis}>{_e(t)}</button> "
+                       for v, t, go in choices)
+        return f"<form method='post' action='{action}'>{hidden}{extra}{btns}</form>"
+
+    def _scope_label(self, scope: str, names: dict) -> str:
+        def proj(pid: str) -> str:
+            return names.get(int(pid), f"project {pid}") if pid.isdigit() else pid
+        if scope == "install":
+            return "Review mode, whole install"
+        if scope.startswith("project:"):
+            return f"Review mode, {proj(scope[8:])}"
+        if scope == "approvals":
+            return "Approvals, whole install"
+        if scope.startswith("approvals:project:"):
+            return f"Approvals, {proj(scope[18:])}"
+        if scope == approvals.RELAY_CHAT_KEY:
+            return "Chat approvals through the relay"
+        if scope.startswith("app:"):
+            return f"Pause {scope[4:]}"
+        return {"phone_approvals": "Phone approval links", "popup_clients": "Popup apps",
+                "config:self_update": "Updates by flowstate update",
+                "config:update_check": "Daily update check"}.get(scope, scope)
+
+    def recent_changes(self, limit: int = 8) -> list:
+        conn = self._conn()
+        try:
+            if not review_mode.available(conn):
+                return []
+            return [dict(r) for r in conn.execute(
+                "SELECT * FROM review_mode_log ORDER BY id DESC LIMIT ?", (limit,))]
+        finally:
+            conn.close()
+
+    def render_settings(self, hidden: str, opts: str) -> str:
+        """The Settings section: every user setting in plain words, its value and its control.
+        Never a token, key or passphrase."""
+        db, edit = self.db_path, self.settings == "edit"
+        projects = self.projects()
+        names = {p["id"]: p["name"] for p in projects}
+        popts = opts.replace(" selected", "")
+        relay = approvals.relay_set_up()
+        out = ["<section class='settings'><h2>Settings</h2>"]
+        if edit:
+            out.append("<p class='note'>Only you change these, here or in your terminal. No AI "
+                       "app can read or change them through FlowState.</p>")
+        else:
+            out.append("<p class='note'>Review mode and app pauses can be changed here. The other "
+                       "settings are shown read-only: open <code>flowstate review-page</code> in "
+                       "your terminal to change these (this page opened from a link, which "
+                       "anything on this computer could open too).</p>")
+        # -- review
+        out.append("<h3 class='group'>Review</h3>")
+        m = review_mode.get(db, None)
+        own = [(p, review_mode.get(db, p["id"])) for p in projects]
+        own = [(p, x) for p, x in own if x.get("source") == "project"]
+        per = "".join(f"<li>{_e(p['name'])}: <b>{_e(x['mode'])}</b>, {_e(review_mode.describe(x))}</li>"
+                      for p, x in own)
+        kinds = "".join(f'<label><input type="checkbox" name="kind_{k}"{" checked" if k in m["kinds"] else ""}> {k}</label> '
+                        for k in review_mode.KINDS)
+        form = f"""<form method="post" action="{self.base}/mode">{hidden}<div class="row"><select name="mode">{''.join(f'<option{" selected" if x == m["mode"] else ""}>{x}</option>' for x in review_mode.MODES)}</select>
+<select name="project_id"><option value="">Whole install</option>{popts}</select></div>
+<p>For "types": {kinds}</p><label><input type="checkbox" name="clear"> Remove this project's own setting</label><br><button class="go">Set review mode</button></form>"""
+        out.append(self._row(
+            "Review mode", "Which new records wait in the review queue for your OK before they "
+            "are saved: off, auto_only (only auto-captured summaries and suggestions), types "
+            "(also the kinds you tick) or everything.",
+            f"<b>{_e(m['mode'])}</b> for the whole install, {_e(review_mode.describe(m))}."
+            + (f"<ul>{per}</ul>" if per else " No project has its own setting."), form))
+        apps = activity.apps(db)
+        rows = "".join(
+            f"""<tr><td>{_e(a['app'])}{' <b>(paused)</b>' if a['paused'] else ''}</td><td>{_e(a['last_seen'] or '-')}</td>
+<td>{a['calls']}</td><td>{a['writes'] or 0}</td><td><form method="post" action="{self.base}/app">{hidden}<input type="hidden" name="app" value="{_e(a['app'])}">
+<input type="hidden" name="paused" value="{'0' if a['paused'] else '1'}"><button>{'Resume' if a['paused'] else 'Pause writes'}</button></form></td></tr>"""
+            for a in apps)
+        paused = [a["app"] for a in apps if a["paused"]]
+        out.append(self._row(
+            "App pauses", "A paused app can still read, but FlowState refuses its writes until you "
+            "resume it.", (f"paused: <b>{_e(', '.join(paused))}</b>." if paused else
+                           "<b>no app paused</b>."),
+            ("<table><tr><th>App</th><th>Last seen</th><th>Calls</th><th>Writes</th><th></th></tr>"
+             f"{rows}</table>") if apps else "<p class='note'>No app has connected yet.</p>"))
+        # -- approvals
+        out.append("<h3 class='group'>Approvals</h3>")
+        on = approvals.is_on(db)
+        per = "".join(f"<li>{_e(p['name'])}: <b>{'on' if approvals.is_on(db, p['id']) else 'off'}</b></li>"
+                      for p in projects if self._own_approvals(p["id"]) is not None)
+        scope = (f"<select name='scope'><option value=''>Whole install</option>{popts}</select>"
+                 if edit else "")
+        out.append(self._row(
+            "Approvals for deletes and turning review off",
+            "When on, an AI's delete requests and turning review off wait for your own click or key "
+            "(a popup, your phone, this page or your terminal). When off, deletes go through at "
+            "once, after a safety copy, and can be undone.",
+            f"<b>{'on' if on else 'off'}</b> for the whole install."
+            + (f"<ul>{per}</ul>" if per else " No project has its own setting."),
+            self._buttons(f"{self.base}/settings/approvals", hidden,
+                          (("on", "Turn on", True), ("off", "Turn off", False),
+                           ("clear", "Remove the project's own setting", False)), scope),
+            "Turning them off asks you to confirm on a second page, like "
+            "<code>flowstate approvals off</code> asks for your <code>y</code>."))
+        popup = sorted(approvals.popup_clients(db))
+        items = "".join(
+            f"<li>{_e(n)}" + (f"<form method='post' action='{self.base}/settings/popup'>{hidden}"
+                              f"<input type='hidden' name='op' value='remove'><input type='hidden' "
+                              f"name='name' value='{_e(n)}'><button>Remove</button></form>"
+                              if edit else "") + "</li>" for n in popup)
+        add = (f"<form method='post' action='{self.base}/settings/popup'>{hidden}"
+               "<input type='hidden' name='op' value='add'><div class='row'>"
+               "<input type='text' name='name' maxlength='80' placeholder=\"the app's MCP client name\" "
+               "autocomplete='off'><button class='go'>Add</button></div></form>") if edit else ""
+        out.append(self._row(
+            "Apps that may show an approval popup",
+            "These apps get a popup (a form in the app) asking you to approve a delete while "
+            "approvals are on. Others get your phone link or the terminal command.",
+            f"<ul>{items}</ul>" if popup else "<b>no apps</b>.", add,
+            "claude.ai, Claude Desktop and other Anthropic apps never get a popup, whatever this "
+            "list says (they don't show one)."))
+        no_relay = "" if relay else "Only used with the FlowState relay (not set up here)."
+        out.append(self._row(
+            "Phone approval links",
+            "With the relay, the answer to an AI's delete request carries a flowstatemcp.com link "
+            "you open on your phone to approve it.",
+            f"<b>{'on' if approvals.phone_on(db) else 'off'}</b>.",
+            self._buttons(f"{self.base}/settings/phone", hidden,
+                          (("on", "Turn on", True), ("off", "Turn off", False)), disabled=not relay),
+            no_relay, unused=not relay))
+        chat = approvals.relay_chat_on(db)
+        out.append(self._row(
+            "Chat approvals through the relay",
+            "When on, an AI connected through the relay may approve or reject review items in the "
+            "chat when you ask it to. When off, you decide them on your phone or on this computer. "
+            "Items only you decide stay yours either way.",
+            f"<b>{'on' if chat else 'off'}</b>.",
+            self._buttons(f"{self.base}/settings/relay-chat", hidden,
+                          (("on", "Turn on", False), ("off", "Turn off", True)), disabled=not relay),
+            no_relay or "Turning it on asks you to confirm on a second page, like "
+            "<code>flowstate relay chat-approvals on</code> asks for your <code>y</code>.",
+            unused=not relay))
+        # -- updates
+        out.append("<h3 class='group'>Updates</h3>")
+        allowed = updates.self_update_allowed()
+        from .selfupdate import FOLDER, OPT_OUT_FILE
+        file_note = (f"A {OPT_OUT_FILE} file in the FlowState folder also keeps this folder "
+                     "updated by hand." if (FOLDER / OPT_OUT_FILE).exists() else "")
+        out.append(self._row(
+            "Updates by flowstate update",
+            "Whether <code>flowstate update</code> may update FlowState on this computer when you "
+            "ask for it. \"By hand\" means it refuses, and you update with git yourself.",
+            f"<b>{'allowed' if allowed else 'by hand'}</b>.",
+            self._buttons(f"{self.base}/settings/self-update", hidden,
+                          (("on", "Allow", True), ("off", "This computer is updated by hand", False))),
+            file_note))
+        env_off = (os.environ.get("FLOWSTATE_UPDATE_CHECK") or "").strip().lower() in ("0", "false", "off", "no")
+        out.append(self._row(
+            "Daily update check",
+            "Once a day FlowState asks GitHub whether a newer release exists, and tells you in the "
+            "brief. It sends nothing about you or your projects.",
+            f"<b>{'on' if updates.is_on() else 'off'}</b>.",
+            self._buttons(f"{self.base}/settings/update-check", hidden,
+                          (("on", "Turn on", True), ("off", "Turn off", False))),
+            "FLOWSTATE_UPDATE_CHECK=0 in the environment keeps it off whatever you choose here."
+            if env_off else ""))
+        # -- read-only
+        out.append("<h3 class='group'>Set in the app's config</h3><p class='note'>These come from "
+                   "the environment of the app that starts FlowState (its MCP config). Shown as "
+                   "this FlowState process sees them; change them in the app's config.</p>")
+        out.append("<table><tr><th>Setting</th><th>What it does</th><th>Now</th></tr>")
+        for name, what, default in ENV_SETTINGS:
+            v = identity.clean(os.environ.get(name))
+            out.append(f"<tr><td><code>{name}</code></td><td>{_e(what)}</td><td>"
+                       + (f"<b>{_e(v)}</b>" if v else f"not set ({_e(default)})") + "</td></tr>")
+        out.append("</table><h3 class='group'>Set in your terminal</h3><ul>")
+        out.extend(f"<li>{_e(n)}: <code>{_e(c)}</code></li>" for n, c in TERMINAL_SETTINGS)
+        out.append("</ul>")
+        # -- recent changes
+        out.append("<h3 class='group'>Recent changes</h3>")
+        log = self.recent_changes()
+        if not log:
+            out.append("<p class='note'>No setting has been changed yet.</p>")
+        else:
+            out.append("<table><tr><th>When (UTC)</th><th>Setting</th><th>From</th><th>To</th>"
+                       "<th>How</th><th>Machine</th></tr>")
+            for r in log:
+                out.append(f"<tr><td>{_e(r['changed_at'])}</td><td>{_e(self._scope_label(r['scope'], names))}</td>"
+                           f"<td>{_e(r['old_mode'] or 'default')}</td><td>{_e(r['new_mode'] or 'default')}</td>"
+                           f"<td>{_e(r['client'] or '-')}</td><td>{_e(r.get('machine') or '-')}</td></tr>")
+            out.append("</table>")
+        out.append("</section>")
+        return "".join(out)
+
+    def _own_approvals(self, pid: int) -> Optional[str]:
+        conn = self._conn()
+        try:
+            if not approvals.available(conn):
+                return None
+            return approvals._get(conn, f"approvals:project:{int(pid)}")
+        finally:
+            conn.close()
+
+    def render_confirm(self, csrf: str, token: str, change: tuple) -> str:
+        what, scope, state = change
+        if what == "relay_chat":
+            title = "Turn on chat approvals through the relay?"
+            text = ("This lets an AI connected through the FlowState relay approve or reject review "
+                    "items in the chat when you ask it to. Deletes, turning review off while "
+                    "approvals are on, and \"did you say this?\" checks stay yours alone. Only do "
+                    "this if you trust every AI app you connect through the relay to pass on only "
+                    "what you really said.")
+        else:
+            where = "the whole install" if not scope else self._name(int(scope))
+            title = (f"Turn approvals off for {where}?" if state == "off" else
+                     f"Remove {where}'s own approvals setting?")
+            text = (("This project then follows the whole install's setting. " if state == "clear"
+                     else "") +
+                    "With approvals off, an AI's delete requests go through at once (after a "
+                    "safety copy, and they can be undone), and an AI can turn review off when it "
+                    "quotes you. Only do this if you are at this computer yourself and no AI app "
+                    "asked you to.")
+        f = (f"<input type='hidden' name='csrf' value='{_e(csrf)}'>"
+             f"<input type='hidden' name='token' value='{_e(token)}'>")
+        mins = CONFIRM_SECONDS // 60
+        return (f"<!doctype html><html><head><meta charset='utf-8'><title>FlowState: confirm</title>"
+                f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                f"<style>{_CSS}</style></head><body class='confirm'><h1>FlowState review</h1>"
+                f"<h2>{_e(title)}</h2><div class='set'><p>{_e(text)}</p>"
+                f"<p class='note'>This confirmation works once, from this browser, within {mins} "
+                f"minutes.</p>"
+                f"<form method='post' action='{self.base}/settings/confirm'>{f}"
+                f"<input type='hidden' name='setting' value='{_e(what)}'>"
+                f"<input type='hidden' name='scope' value='{_e(scope)}'>"
+                f"<input type='hidden' name='state' value='{_e(state)}'>"
+                f"<button class='go'>Yes, {_e(title[0].lower() + title[1:-1])}</button></form>"
+                f"<form method='post' action='{self.base}/settings/cancel'>{f}"
+                f"<button>No, keep it as it is</button></form></div></body></html>")
 
 
 def create_app(page: Page):
@@ -434,7 +923,7 @@ def create_app(page: Page):
             return deny(403, "Open the page with the link from `flowstate review-page`.")
         return page_html(request, sess)
 
-    def action(fn, back: str = ""):
+    def action(fn, back: str = "", with_session: bool = False):
         async def handler(request):
             if not host_ok(request):
                 return deny(403, "This page only answers on 127.0.0.1.")
@@ -451,9 +940,11 @@ def create_app(page: Page):
             if not hmac.compare_digest(form.get("csrf", ""), page.sessions[sess]):
                 return deny(403, "Form expired; reload the page.")
             try:
-                msg = fn(form)
-            except (ValueError, KeyError, sqlite3.Error) as e:
+                msg = fn(form, sess) if with_session else fn(form)
+            except (ValueError, KeyError, sqlite3.Error, approvals.ApprovalError, OSError) as e:
                 msg = f"Could not do that: {type(e).__name__}"
+            if isinstance(msg, _Html):   # the settings confirm step: a page of its own
+                return HTMLResponse(msg, headers=headers)
             return RedirectResponse("/?" + urlencode({**({"view": back} if back else {}),
                                                        "flash": msg[:300]}),
                                     status_code=303, headers=headers)
@@ -467,6 +958,14 @@ def create_app(page: Page):
         Route("/mode", action(page.set_mode), methods=["POST"]),
         Route("/app", action(page.set_app), methods=["POST"]),
         Route("/undo", action(page.undo, back="who"), methods=["POST"]),
+        # Settings (render_settings): change only with a launch-key session ("edit"); the
+        # open-link page answers READ_ONLY; the tunnel page has none of these routes
+        *[Route(f"/settings/{name}", action(fn, with_session=True), methods=["POST"])
+          for name, fn in (("approvals", page.set_approvals), ("relay-chat", page.set_relay_chat),
+                           ("phone", page.set_phone), ("popup", page.set_popup),
+                           ("self-update", page.set_self_update),
+                           ("update-check", page.set_update_check),
+                           ("confirm", page.confirm), ("cancel", page.cancel))],
     ])
 
 
@@ -492,7 +991,7 @@ def serve(db_path: Path, port: int = DEFAULT_PORT, open_browser: bool = True,
             webbrowser.open(f"http://{HOST}:{port}/")
         return
     port = sock.getsockname()[1]
-    page = Page(db_path, port)
+    page = Page(db_path, port, settings="edit")
     app = create_app(page)
     url = page.launch_url()
     print(f"FlowState review page on http://{HOST}:{port}/ (this computer only). Ctrl+C stops it.",

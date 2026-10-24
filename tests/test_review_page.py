@@ -134,3 +134,13 @@ def test_review_page_command_reuses_the_page_already_open_for_this_database(back
         ran[0][0].close()
     finally:
         busy.close()
+
+
+def test_settings_section_on_the_command_page_only(page):
+    """(task 39) The page `flowstate review-page` opens has the Settings section with its
+    forms; tests/test_settings_page.py covers it in full."""
+    p, c, _db = page
+    _csrf, html = _login(p, c)
+    assert p.settings == "edit" and "<h2>Settings</h2>" in html
+    assert "/settings/approvals" in html and "/settings/popup" in html
+    assert "width=device-width" in html          # readable on a phone

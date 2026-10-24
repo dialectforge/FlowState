@@ -110,7 +110,7 @@ def _start(db_fn) -> int:
     from .review_page import Page, create_app
     sock = _bind(_wanted_port() or 0)
     port = sock.getsockname()[1]
-    page = Page(db_fn, port, open_link=True)
+    page = Page(db_fn, port, open_link=True, settings="read")   # no launch key: settings read-only
     # log_config=None: uvicorn must not touch logging; stdout is the stdio transport's channel
     server = uvicorn.Server(uvicorn.Config(create_app(page), log_config=None, log_level="warning",
                                            access_log=False, lifespan="off"))
