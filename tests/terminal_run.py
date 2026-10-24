@@ -91,3 +91,47 @@ def _windows(cmd, answers, env, cwd, timeout):
         shown = screen_path.read_text(encoding="utf-8") if screen_path.exists() else ""
         printed = out_path.read_bytes().decode("utf-8", errors="replace")
     return code, shown + ("\n" if shown and printed else "") + printed
+
+
+def start_in_terminal(cmd, wait_for: bytes, *, env=None, cwd=None, timeout=60):
+    """POSIX only: start a long-running command in a pseudo-terminal of its own and read what it
+    shows until `wait_for` appears. Returns (pid, what it showed so far); stop it with
+    stop_in_terminal(pid). (task 39: `flowstate review-page --print-url` writes its one-time
+    link to the terminal only.)"""
+    import pty
+    import select
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        pid, master = pty.fork()
+    if pid == 0:
+        if cwd:
+            os.chdir(cwd)
+        os.execve(cmd[0], list(cmd), env if env is not None else dict(os.environ))
+    seen, deadline = b"", time.monotonic() + timeout
+    while time.monotonic() < deadline and wait_for not in seen:
+        if select.select([master], [], [], 0.2)[0]:
+            try:
+                data = os.read(master, 4096)
+            except OSError:
+                break
+            if not data:
+                break
+            seen += data
+    _OPEN[pid] = master
+    return pid, seen.decode(errors="replace")
+
+
+_OPEN: dict = {}
+
+
+def stop_in_terminal(pid) -> None:
+    import signal
+    try:
+        os.kill(pid, signal.SIGTERM)          # our own child only
+        os.waitpid(pid, 0)
+    except (OSError, ChildProcessError):
+        pass
+    master = _OPEN.pop(pid, None)
+    if master is not None:
+        os.close(master)

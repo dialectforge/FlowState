@@ -42,7 +42,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # tests/: fsa_test_keys
 from fsclient import (PY, REPO, HttpClient, StdioClient, ToolError, guard_log, real_dirs,  # noqa: E402
                       sandbox_env, wait_port)
-from terminal_run import run_in_terminal, run_no_terminal  # noqa: E402
+from terminal_run import run_in_terminal, run_no_terminal, start_in_terminal, stop_in_terminal  # noqa: E402
 
 P = "Lakeside Bakery"
 SHARED = "Bakery Shared Auth"
@@ -101,7 +101,8 @@ class Report:
         13: "Approvals on: popup, phone link, terminal",
         14: "Only the user turns a guess into user_stated",
         15: "What's waiting, without a terminal: chat walk, local link, phone list",
-        16: "Own tunnel: the owner review page behind the passphrase"}
+        16: "Own tunnel: the owner review page behind the passphrase",
+        17: "Settings on the local review page"}
 
     def __init__(self):
         self.checks = {n: [] for n in self.TITLES}
@@ -2371,6 +2372,110 @@ def report(W, started, test_changed, live_changed):
     return "\n".join(lines)
 
 
+def s17_settings_page(W):
+    """The Settings section: read-only on the page an AI's link opens; changed on the page
+    `flowstate review-page --print-url` opens (its one-time link read from its own terminal),
+    with the confirm page for turning approvals off; every change logged as review-page."""
+    import httpx
+    print("\n== S17 settings on the review page", flush=True)
+    cursor, cc1 = W.agents["cursor"], W.agents["cc1"]
+    Q = "Pottery Studio e2e-17"
+    cursor.call("manage_projects", action="create", name=Q, description="S17: settings page")
+    cursor.call("log_work", project=Q, kind="decision", summary="Glaze on Tuesdays", suggested=True)
+    b = brief_text(cc1.call("start_here", project=Q))
+    m = re.search(r"(http://127\.0\.0\.1:\d+/)", b)
+    link = m.group(1) if m else "http://127.0.0.1:1/"
+    before = W.count("review_mode_log")
+    settings = W.q("SELECT key, value FROM approval_settings ORDER BY key")
+    with httpx.Client(timeout=20) as hc:
+        r = hc.get(link)
+        csrf = re.search(r'name="csrf" value="([^"]+)"', r.text)
+        sec = r.text.split("<h2>Settings</h2>", 1)[-1]
+        R.check(17, "the link page shows the settings read-only (open `flowstate review-page` to change these)",
+                r.status_code == 200 and "<h2>Settings</h2>" in r.text and "flowstate review-page</code>" in sec
+                and "/settings/approvals" not in sec, r.status_code)
+        ro = hc.post(link + "settings/approvals", data={"csrf": csrf.group(1) if csrf else "", "scope": "",
+                                                        "state": "on"},
+                     headers={"Origin": link.rstrip("/")}, follow_redirects=False)
+        R.check(17, "a settings post on the link page changes nothing",
+                ro.status_code == 303 and "nothing+changed" in ro.headers.get("location", "")
+                and W.q("SELECT key, value FROM approval_settings ORDER BY key") == settings
+                and W.count("review_mode_log") == before, ro.headers.get("location"))
+    if os.name == "nt":
+        R.word("S17: the launch-key part runs on POSIX only (it reads the link from a pseudo-terminal).")
+        return
+    with socket.socket() as sk:
+        sk.bind(("127.0.0.1", 0))
+        port = sk.getsockname()[1]
+    pid, shown = start_in_terminal([PY, "-m", "flowstate", "review-page", "--no-browser", "--print-url",
+                                    "--port", str(port)], b"One-time link:", env=W.env, cwd=str(REPO),
+                                   timeout=40)
+    try:
+        lm = re.search(r"One-time link: (http://127\.0\.0\.1:\d+/\?key=[A-Za-z0-9_-]+)", shown)
+        R.check(17, "`flowstate review-page --print-url` shows its one-time link on its own terminal", lm,
+                "(link not shown)")
+        if not lm:
+            return
+        base = f"http://127.0.0.1:{port}"
+        wait_port("127.0.0.1", port, 20)
+        hdr = {"Origin": base}
+        with httpx.Client(timeout=20, follow_redirects=False) as hc:
+            r = hc.get(lm.group(1))
+            page = hc.get(base + "/")
+            cs = re.search(r'name="csrf" value="([^"]+)"', page.text)
+            csrf = cs.group(1) if cs else ""
+            R.check(17, "the key opens the page with a Settings section that can change things; relay rows greyed out",
+                    r.status_code == 303 and "/settings/approvals" in page.text
+                    and "Only used with the FlowState relay (not set up here)." in page.text, r.status_code)
+
+            def post(path, **data):
+                return hc.post(base + path, data={"csrf": csrf, **data}, headers=hdr)
+            post("/settings/popup", op="add", name="e2e-editor")
+            on = post("/settings/approvals", scope="", state="on")
+            R.check(17, "approvals on and a popup app added from the page (no confirm needed)",
+                    on.status_code == 303
+                    and W.count("approval_settings", "key = 'approvals' AND value = 'on'") == 1
+                    and W.count("approval_settings", "key = 'popup_clients_add' AND value LIKE '%e2e-editor%'") == 1,
+                    on.headers.get("location"))
+            ask = post("/settings/approvals", scope="", state="off")
+            tok = re.search(r"name='token' value='([^']+)'", ask.text)
+            R.check(17, "turning approvals off shows the confirm page first; nothing changed yet",
+                    ask.status_code == 200 and tok and "Only do this if" in ask.text
+                    and W.count("approval_settings", "key = 'approvals' AND value = 'on'") == 1, ask.status_code)
+            form = {"token": tok.group(1) if tok else "", "setting": "approvals", "scope": "", "state": "off"}
+            wrong = post("/settings/confirm", **{**form, "setting": "relay_chat", "state": "on"})
+            R.check(17, "a confirm token used for another change changes nothing (and is used up)",
+                    "no+longer+valid" in wrong.headers.get("location", "")
+                    and W.count("approval_settings", "key = 'approvals' AND value = 'on'") == 1)
+            ask = post("/settings/approvals", scope="", state="off")
+            tok = re.search(r"name='token' value='([^']+)'", ask.text)
+            form["token"] = tok.group(1) if tok else ""
+            ok = post("/settings/confirm", **form)
+            replay = post("/settings/confirm", **form)
+            R.check(17, "Yes on the confirm page turns them off; the same token again is refused",
+                    "now+off" in ok.headers.get("location", "")
+                    and "no+longer+valid" in replay.headers.get("location", "")
+                    and W.count("approval_settings", "key = 'approvals' AND value = 'off'") == 1,
+                    (ok.headers.get("location"), replay.headers.get("location")))
+            ign = post("/settings/relay-chat", state="on")
+            R.check(17, "without the relay, a relay setting post is ignored",
+                    "not+set+up+here" in ign.headers.get("location", "")
+                    and W.count("approval_settings", "key = 'relay_chat_approvals'") == 0)
+        rows = W.q("SELECT scope, client, caller, app, machine, identity_source FROM review_mode_log "
+                   "WHERE id > (SELECT COALESCE(MAX(id), 0) - 3 FROM review_mode_log) ORDER BY id")
+        R.check(17, "each change is logged as review-page with the identity fields",
+                len(rows) == 3 and all(x["client"] == "review-page" and x["caller"] == "review-page"
+                                       and x["app"] == "review-page" and x["machine"]
+                                       and x["identity_source"] == "self_reported" for x in rows)
+                and [x["scope"] for x in rows] == ["popup_clients", "approvals", "approvals"], rows)
+        tools = cursor.call("manage_review", action="set_mode", project=Q, mode="auto_only",
+                            scope="approvals", user_request="the user said turn approvals on")
+        R.check(17, "an MCP tool can't touch the approvals setting",
+                W.count("approval_settings", "key = 'approvals' AND value = 'off'") == 1, short(tools, 160))
+    finally:
+        stop_in_terminal(pid)
+
+
 def rmtree(root: Path) -> None:
     """Delete the sandbox. git's object files are read-only, which Windows won't delete as is."""
     def again(fn, path, _exc):
@@ -2401,7 +2506,7 @@ def main():
         for step in (s1_fresh, s2_day, s3_conflicts, s4_review, s5_receipts, s6_windows, s7_undo,
                      s8_backups, s9_ledger, lambda w: s10_upgrade(w, args.skip_upgrade), s11_edges,
                      s13_approvals, s14_user_stated, s15_without_terminal, s15_review_card,
-                     s16_tunnel_page,
+                     s16_tunnel_page, s17_settings_page,
                      deferred_window,
                      s12_descriptions):
             try:
