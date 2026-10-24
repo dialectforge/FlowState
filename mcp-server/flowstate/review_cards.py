@@ -29,7 +29,7 @@ import json
 from pathlib import Path
 from typing import Callable, Optional
 
-from . import approvals, review
+from . import approvals, identity, review
 from .conflict_cards import _connect, _pretty, client_has_ui
 
 SHOW_MAX = 5
@@ -61,9 +61,8 @@ def _cut(text, n: int) -> str:
 
 
 def _who(it: dict) -> str:
-    app = it.get("app")
-    if app:
-        return str(app)
+    if it.get("app"):
+        return identity.shown_row(it)
     src = str(it.get("source") or "")
     if src.startswith("import:"):
         return "an import from " + (src.split(":", 1)[1] or "a file")

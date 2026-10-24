@@ -276,7 +276,8 @@ def cmd_remote(a) -> int:
         return 0
     if a.action == "add-client":
         if not a.name:
-            say("Give the app a name: flowstate remote add-client --name \"Cursor laptop\"")
+            say("Give the app a name: flowstate remote add-client --name \"my-laptop-app\" "
+                "(one token per app)")
             return 1
         scopes = [RA.SCOPE_READ] if a.read_only else list(RA.SCOPES)
         cid, token = store.add_token_client(a.name, scopes, a.days)
@@ -293,6 +294,7 @@ def cmd_remote(a) -> int:
             say(f"App '{a.name}' added as {cid} ({' '.join(scopes)}).")
             say("Its token is shown ONCE below. Paste it into the app as the header "
                 "'Authorization: Bearer <token>'. Don't save it in a synced or git folder.")
+            say("Use it in this one app only; make another token for each other app.")
             say(token)
         return 0
     if a.action == "clients":

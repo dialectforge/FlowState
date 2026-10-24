@@ -110,10 +110,12 @@ def list_items(db_path: Path, project_id: Optional[int] = None, status: str = "p
             where.append("r.id > ?")
             params.append(int(after))
         limit = max(1, min(int(limit or 20), 100))
+        who = ", ".join(f"r.{c}" if identity.has_column(conn, "review_items", c) else f"NULL AS {c}"
+                        for c in ("app", "machine", "identity_source"))
         rows = conn.execute(
             f"""SELECT r.id, r.project_id, p.name AS project, r.kind, r.status, r.summary,
                        r.details, r.source, r.session_id, r.created_at, r.decided_at,
-                       r.reject_reason, r.result_table, r.result_id, r.payload
+                       r.reject_reason, r.result_table, r.result_id, r.payload, {who}
                 FROM review_items r JOIN projects p ON p.id = r.project_id
                 WHERE {' AND '.join(where)} ORDER BY r.id LIMIT ?""",
             (*params, limit + 1)).fetchall()
@@ -140,8 +142,8 @@ def _norm(text: str) -> str:
 
 def _own(item: Optional[dict], ident) -> bool:
     """Did this caller's app (on the same machine, when recorded) queue the item? Through the
-    relay the app name is the app's own say-so, so the same sign-in (machine "relay (signed in
-    as ...)") counts as the same caller whatever name it sends now."""
+    relay or the own tunnel the app name is the app's own say-so, so the same sign-in (machine
+    "relay / tunnel (signed in as ...)") counts as the same caller whatever name it sends now."""
     if item and ident is not None and getattr(ident, "credential", None) and \
             item.get("machine") and item["machine"] == ident.machine:
         return True

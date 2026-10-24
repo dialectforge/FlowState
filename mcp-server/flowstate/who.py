@@ -279,6 +279,10 @@ def recent(db_path: Path, app: Optional[str] = None, model: Optional[str] = None
                         "model": r["model"], "machine": r["machine"],
                         "identity_source": r["identity_source"],
                         "identity": identity.label(r["identity_source"]),
+                        # the relay / own-tunnel sign-in the app came in on (its name is the
+                        # app's own claim there)
+                        **({"via": v} if (v := identity.via(r["machine"], r["identity_source"]))
+                           else {}),
                         "session": _session_of(conn, r, rtype, has),
                         "project_id": r["project_id"], "project": r["project"],
                         "record_type": rtype, "record_id": r["record_id"],

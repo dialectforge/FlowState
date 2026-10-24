@@ -566,7 +566,8 @@ def _form(it: dict, i: int, n: int) -> tuple[str, dict]:
     from .popup import NOTE_FIELD
     details = " ".join(str(it.get("details") or "").split())
     details = details if len(details) <= 600 else details[:597] + "..."
-    who = it.get("app") or it.get("source") or "an app"
+    from .identity import shown_row
+    who = shown_row(it, fallback=it.get("source") or "an app")
     from .review import DONT_KEEP, KEEP, KEEP_HOW, KEEP_QUESTION, strip_tag
     keep = it["kind"] == "session_summary"   # Keep / Don't keep: what approve / reject do
     if keep:   # what the session saved, so the box isn't a blind Keep / Don't keep

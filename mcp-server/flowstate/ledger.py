@@ -177,7 +177,10 @@ def since_line(db_path: Path, project: dict, ident, session_id: Optional[int],
                       else ("finished_at >= ?", last["at"]))
         marks = ", ".join("?" * len(skip_keys))
         rows = conn.execute(
-            f"""SELECT app, session_id, records FROM run_writes WHERE project_id = ?
+            f"""SELECT app, machine, session_id, records,
+                (SELECT s.identity_source FROM session_runs s
+                 WHERE s.session_id = run_writes.session_id LIMIT 1) AS identity_source
+                FROM run_writes WHERE project_id = ?
                 AND status = 'saved' AND {after} AND id <= ?
                 AND (session_id IS NULL OR session_id != ?)
                 {f"AND (conn_key IS NULL OR conn_key NOT IN ({marks}))" if skip_keys else ""}
@@ -189,8 +192,8 @@ def since_line(db_path: Path, project: dict, ident, session_id: Optional[int],
         return None
     apps: list = []
     for r in rows:
-        who = r["app"] or "an app"
-        who = f"another {who} session" if who == ident.app else who
+        who = identity.shown_row(r, fallback="an app")
+        who = f"another {who} session" if r["app"] and r["app"] == ident.app else who
         if who not in apps:
             apps.append(who)
     when = _when(last["at"], now)

@@ -114,11 +114,25 @@ def apps(db_path: Path) -> list[dict]:
                                        "writes": 0, "errors": 0})
             rows[r["app"]]["paused"] = bool(r["paused"])
             rows[r["app"]]["paused_changed_at"] = r["changed_at"]
+        if identity.has_column(conn, "activity_log", "identity_source"):
+            for r in conn.execute("SELECT DISTINCT app, machine, identity_source FROM activity_log "
+                                  "WHERE identity_source IN ('oauth_client', 'remote_token')"):
+                signed = identity.via(r["machine"], r["identity_source"])
+                if signed and r["app"] in rows and signed not in rows[r["app"]].setdefault("via", []):
+                    rows[r["app"]]["via"].append(signed)
         for v in rows.values():
             v.setdefault("paused", False)
+            v["via"] = sorted(v.get("via", []))
         return sorted(rows.values(), key=lambda v: v["last_seen"] or "", reverse=True)
     finally:
         conn.close()
+
+
+def app_label(a: dict) -> str:
+    """An apps() row for people: 'Grok Bot (via Cursor)' when it came in on relay / own-tunnel
+    sign-ins of another name (pausing either name stops it), else the name."""
+    others = [v for v in a.get("via") or [] if v.casefold() != (a["app"] or "").casefold()]
+    return f"{a['app']} (via {', '.join(others)})" if others else a["app"]
 
 
 def recent(db_path: Path, app: Optional[str] = None, limit: int = 50) -> list[dict]:
@@ -126,8 +140,10 @@ def recent(db_path: Path, app: Optional[str] = None, limit: int = 50) -> list[di
     try:
         if not available(conn):
             return []
-        sql = """SELECT a.at, a.app, a.tool, a.action, a.project_id, p.name project, a.write, a.ok,
-                        a.error FROM activity_log a LEFT JOIN projects p ON p.id = a.project_id"""
+        who = ", ".join(f"a.{c}" if identity.has_column(conn, "activity_log", c) else f"NULL AS {c}"
+                        for c in ("machine", "identity_source"))
+        sql = f"""SELECT a.at, a.app, a.tool, a.action, a.project_id, p.name project, a.write, a.ok,
+                         a.error, {who} FROM activity_log a LEFT JOIN projects p ON p.id = a.project_id"""
         params: list = []
         if app:
             sql += " WHERE a.app = ?"

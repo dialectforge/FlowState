@@ -664,7 +664,7 @@ def _recent(conn, project_id: Optional[int], days: int, limit: int) -> list:
         old = json.loads(r["old_row"] or "{}")
         title = next((old[k] for k in _TITLE_KEYS if old.get(k)), "")
         rtype = r["tool"].split("/", 1)[1]
-        app = r["app"] if "app" in r.keys() and r["app"] else r["client"]
+        app = identity.shown_row(r, fallback=r["client"] or "an app")
         out.append((rtype, r["record_id"], _one_line(title, 40), app, r["created_at"][5:10],
                     old.get("name") if rtype == "project" else None))
     return out

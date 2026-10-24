@@ -194,7 +194,8 @@ def view(db_path, item_id: int) -> dict:
         conn.close()
     project = row[0] if row else f"project #{item['project_id']}"
     p = json.loads(item.get("payload") or "{}")
-    app = item.get("app") or item.get("source") or "An app"
+    from .identity import shown_row
+    app = shown_row(item, fallback=item.get("source") or "An app")
     ask = approvals.describe(item, project, db_path)
     card = None
     summary = review.strip_tag(item.get("summary") or "")
@@ -224,7 +225,7 @@ def view(db_path, item_id: int) -> dict:
     out = {"id": item["id"], "project": project, "kind": item["kind"], "question": question,
            "summary": summary, "details": details,
            "yes": review.KEEP if keep else "Approve", "no": review.DONT_KEEP if keep else "Reject",
-           "queued_by": app + (f" on {item['machine']}" if item.get("machine") else ""),
+           "queued_by": shown_row(item, on_machine=True, fallback=item.get("source") or "An app"),
            "queued_at": item.get("created_at") or "",
            "needs_name": item["kind"] == "delete" and p.get("record_type") == "project"}
     if card:

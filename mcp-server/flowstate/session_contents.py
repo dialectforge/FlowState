@@ -209,8 +209,12 @@ def entry(conn, rtype: str, rid: int, verb: str) -> dict:
 def contents(conn, item: dict) -> dict:
     """What a session_summary review item is about: the session (app, times in UTC) and its
     records. `source` says where the ids came from: stored | ledger | none."""
-    out = {"project": item.get("project") or "", "app": item.get("app") or item.get("source") or "",
+    from .identity import shown_row
+    out = {"project": item.get("project") or "",
+           "app": shown_row(item, fallback=item.get("source") or "") if item.get("app")
+           else item.get("source") or "",
            "machine": item.get("machine") or "", "session_id": item.get("session_id"),
+           "identity_source": item.get("identity_source") or "",
            "started_utc": "", "ended_utc": "", "entries": [], "total": 0, "source": "none"}
     if not out["project"]:
         r = _one(conn, "SELECT name FROM projects WHERE id = ?", item.get("project_id"))
@@ -305,7 +309,10 @@ def when_line(c: Optional[dict], local=None) -> str:
     if b and b[:10] == a[:10]:
         b = b[11:]
     span = a + (f" to {b}" if b else "") + (" (this computer's local time)" if local else " UTC")
-    who = c["app"] + (f" on {c['machine']}" if c.get("machine") else "")
+    from .identity import via
+    # "Grok Bot (via Cursor)" already names the sign-in; its machine column says it again
+    signed = via(c.get("machine"), c.get("identity_source"))
+    who = c["app"] + (f" on {c['machine']}" if c.get("machine") and not signed else "")
     return f"Session {span}" + (f", by {who}" if who else "") + f", in {c['project']}."
 
 

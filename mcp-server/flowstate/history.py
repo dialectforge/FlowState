@@ -388,11 +388,11 @@ def _changed_by(conn, g) -> str:
            ORDER BY id DESC LIMIT 1""", (g["table_name"], g["record_id"], g["id"])).fetchone()
     if later is None:
         return "changed outside FlowState since"
-    who = (later["app"] if "app" in later.keys() else None) or later["client"] or "another app"
+    who = identity.shown_row(later, fallback=later["client"] or "another app")
     return f"changed again since by {who} (undo that first)"
 
 
-def _creation_check(conn, g, caller_app: str, group_keys: set) -> Optional[tuple[str, str]]:
+def _creation_check(conn, g, caller: identity.Identity, group_keys: set) -> Optional[tuple[str, str]]:
     """(error code, reason) if removing this created row isn't allowed, else None."""
     from . import deletes
     tool = g["tool"] or ""
@@ -401,8 +401,11 @@ def _creation_check(conn, g, caller_app: str, group_keys: set) -> Optional[tuple
         return ("user_approved", f"{rtype} #{g['record_id']} was approved by the user in the "
                                  f"review queue; to remove it, manage_memory(action=\"delete\") "
                                  f"asks them.")
-    made_by = (g["app"] if "app" in g.keys() else None) or g["client"] or "another app"
-    if made_by != caller_app:
+    keys = g.keys()
+    col = (lambda k: g[k] if k in keys else None)
+    made_app = col("app") or g["client"]
+    made_by = identity.shown_row(g, fallback=g["client"] or "another app")
+    if not identity.same_caller(made_app, col("machine"), col("identity_source"), caller):
         return ("not_your_record", f"{rtype} #{g['record_id']} was created by {made_by}; only "
                                    f"that app can take it back with undo. To remove it, "
                                    f"manage_memory(action=\"delete\") asks the user.")
@@ -463,7 +466,7 @@ def undo(db_path: Path, project_id: int, record_type: str, record_id: int,
             expected = json.loads(g["new_row"]) if g["new_row"] else None
             if current != expected:
                 skipped[g["id"]] = ("changed_since", _changed_by(conn, g))
-        caller = identity.stamp(client).get("app") or client
+        caller = identity.current() or identity.local(client)
         keys = {(g["table_name"], g["record_id"]) for g in group}
         for g in group:   # removing a created record: only if nothing else needs it
             if g["id"] in skipped or g["old_row"] is not None or g["new_row"] is None \

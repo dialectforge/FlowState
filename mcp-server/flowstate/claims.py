@@ -74,9 +74,9 @@ def me(client: Optional[str] = None) -> dict:
 
 
 def holder_name(row) -> str:
-    """'cursor on mac-mini' (the app, and the machine when known)."""
-    app = row["app"] or "another agent"
-    return f"{app} on {row['machine']}" if row["machine"] else app
+    """'cursor on mac-mini' (the app, and the machine when known); 'Grok Bot (via Cursor)'
+    for an app that came in on a relay / own-tunnel sign-in (identity.shown)."""
+    return identity.shown_row(row, on_machine=True, fallback="another agent")
 
 
 def relative(expires_at: str, now: Optional[datetime] = None) -> str:

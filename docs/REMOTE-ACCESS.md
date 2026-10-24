@@ -70,20 +70,29 @@ claude.ai or ChatGPT work through Cloudflare Access Managed OAuth; whether the p
    passphrase → Approve". Only you know the passphrase. 5 wrong tries within 15 minutes lock
    approvals for up to 15 minutes.
 4. **Per-app tokens** for apps that take a fixed header (Cursor, the xAI API, Claude Code):
-   `flowstate remote add-client --name "Cursor" [--read-only] [--days N]`.
+   `flowstate remote add-client --name "my-laptop-app" [--read-only] [--days N]`.
+   **Use one token per app** and name it after where it's used. A token pasted into several
+   apps can't tell them apart: FlowState records the name each app sends and shows the token's
+   name next to it ("Grok Bot (via my-laptop-app)"), but pausing or revoking the token stops
+   all of them.
 5. **Every app can be cut off on its own:** `flowstate remote clients` lists them with
-   "last used"; `flowstate remote revoke --client <id>` stops it at once.
+   "last used"; `flowstate remote revoke --client <id>` stops it at once. To rename a token
+   or replace one that several apps share, find it in `flowstate remote clients`, give each
+   app its own (`remote add-client --name "<new name>"`), then revoke the old one.
 
    **LAN keys vs remote tokens.** `flowstate keys add --name "<app>" [--read-only]` makes a
    per-app key for the **local/LAN** listener only (prefix `fs_lk_`); it is refused on the
    public URL, just like the LAN token. `flowstate remote add-client` makes a per-app
    **remote** token (prefix `fs_ct_`) for the public listener (it also works on the LAN
-   listener, as before). Both record the app's name from the key or token, not from what the
-   app says; for remote apps the machine recorded is the client's name. Through the relay one
-   sign-in is often shared by several cloud apps (or named after another app), so there the
-   app recorded is the name the connecting app sends ("Relay (unknown app)" if it sends none)
-   and the machine is "relay (signed in as <the token's or OAuth app's name>)"; pausing either
-   name stops its writes. Changes made with the
+   listener, as before). On the LAN listener both record the app's name from the key or token,
+   not from what the app says (the machine recorded is the client's name). On your own tunnel
+   and through the relay one sign-in is often shared by several apps (or named after another
+   app), so there the app recorded is the name the connecting app sends ("Tunnel (unknown
+   app)" / "Relay (unknown app)" if it sends none) and the machine is "tunnel (signed in as
+   <the token's or OAuth app's name>)" / "relay (signed in as ...)". Pages, cards and the
+   brief show both names when they differ, e.g. "Grok Bot (via my-laptop-app)"; pausing either
+   name stops its writes, and a different name on the same sign-in still counts as the same
+   app (it can't decide its own review items or take back another app's records). Changes made with the
    shared LAN token are marked "shared token (legacy)". Every change keeps the app, the model
    (only when the app supplies it, for example with an `X-FlowState-Model` header) and how the
    app was identified; see "Who did what" on the review page.
@@ -162,7 +171,8 @@ Below, `<venv python> -m flowstate ...` can also be written `flowstate ...` with
      `https://flowstate.example.com/mcp` → Connect → FlowState page → approve.
    - ChatGPT: Settings → Connectors (developer mode) → add `https://flowstate.example.com/mcp`,
      OAuth → approve.
-   - Cursor: `<venv python> -m flowstate remote add-client --name "Cursor"`; put the token in
+   - Cursor: `<venv python> -m flowstate remote add-client --name "my-laptop-app"` (a token
+     for this one app; make another for each other app); put the token in
      an environment variable and use
      `"headers": {"Authorization": "Bearer ${env:FLOWSTATE_CURSOR_TOKEN}"}`.
    - Grok app: try a custom connector with the URL. If it asks for OAuth and fails, look in the

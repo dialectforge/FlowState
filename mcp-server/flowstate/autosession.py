@@ -325,11 +325,19 @@ class AutoSessions:
         if cur.rowcount and outcomes["needs_review"]:
             from .review import add_item
             from .identity import on_behalf_of
+            run = conn.execute(
+                "SELECT app, model, machine, identity_source FROM session_runs "
+                "WHERE session_id = ? ORDER BY rowid LIMIT 1",
+                (row["session_id"],)).fetchone() if _has_runs(conn) else None
+            # the app its session recorded (with the sign-in it came in on), else the client
+            who = (on_behalf_of(run["app"] or row["client"], run["machine"],
+                                run["identity_source"], run["model"]) if run is not None
+                   else on_behalf_of(row["client"]))
             item = add_item(self.db_path, row["project_id"], "session_summary", summary,
                             payload={"close_reason": reason, "calls": row["call_count"],
                                      **({"records": recs} if recs else {})},
                             source=row["client"], session_id=row["session_id"], conn=conn,
-                            ident=on_behalf_of(row["client"]))
+                            ident=who)
             if item is not None:
                 outcomes["review_item_id"] = item
                 conn.execute("UPDATE sessions SET outcomes = ? WHERE id = ?",

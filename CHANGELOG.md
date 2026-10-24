@@ -80,6 +80,31 @@
   name still stops it, and an app can't decide its own review item by sending a different
   name (the same sign-in counts as the same app). Rows already saved are not changed. Local,
   LAN and own-tunnel callers are recorded as before.
+- **Both names, where the app name is only the app's claim.** Wherever FlowState shows who wrote
+  something (the local and tunnel review pages, Who did what, Recent activity and the app list
+  in Settings, the phone list and approve page, the in-chat cards, the chat walk's boxes, a
+  session summary's "by ..." line, the brief's handoff and "Since your last visit" lines, undo
+  and claim messages), an app that came in through the relay or your own tunnel now shows with
+  the sign-in it used when the two differ: "Grok Bot (via Cursor)", or "Relay (unknown app, via
+  Cursor)". Same name, local (stdio) apps, per-app keys and the LAN token show one name as
+  before. `manage_history(action="who")` rows carry a `via` field for these. Nothing new is
+  stored: the sign-in is already in the machine column ("relay / tunnel (signed in as ...)"),
+  and only rows from a remote token or OAuth sign-in are read that way, so a LAN app can't fake
+  one with its workspace header. Older rows show as they are.
+- Session summaries FlowState writes for an app now carry the app, model, machine and identity
+  its session recorded (they had only the client name), so a relay session's summary says
+  "by Grok Bot (via Cursor)" and the local page can say "by claude-code on <this computer>".
+- **Own tunnel (`--public-url`) callers are recorded like relay callers.** With a remote token or
+  OAuth sign-in on the public listener the app recorded is the name the app sends, else
+  "Tunnel (unknown app)", and the machine is "tunnel (signed in as <sign-in name>)". Pausing the
+  sign-in's name stops it, it can't decide its own review items by sending another name, and
+  undo only lets it take back records made through the same sign-in (a remote app calling
+  itself "claude-code" can no longer take back your local claude-code's records; this check now
+  also applies through the relay). Remote tokens on the LAN listener are recorded as before.
+- Docs: one token per app is recommended wherever remote tokens are documented (REMOTE-ACCESS,
+  AGENTS.md, README), with how to replace a shared token (`flowstate remote clients`, a new
+  token per app, then revoke the old one). The docs' example token is now "my-laptop-app"
+  instead of "Cursor", and `flowstate remote add-client` says to use each token in one app.
 - `flowstate update self-update on|off`: whether `flowstate update` may update this computer,
   from the terminal (`config.json` `"self_update"`, the same setting as on the review page's
   Settings). With no word it shows the value and where it comes from: `config.json`, the

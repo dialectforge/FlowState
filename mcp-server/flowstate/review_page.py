@@ -498,7 +498,7 @@ class Page:
                         f'<input type="hidden" name="record_id" value="{_e(u["record_id"])}">'
                         f'<input type="hidden" name="project_id" value="{_e(u["project_id"])}">'
                         f'<button>Undo</button></form>')
-            out.append(f"<tr><td>{_e(r['at'])}</td><td>{_e(r['app'] or '-')}</td>"
+            out.append(f"<tr><td>{_e(r['at'])}</td><td>{_e(identity.shown_row(r, fallback='-'))}</td>"
                        f"<td>{_e(r['model'] or '-')}</td><td>{_e(r['machine'] or '-')}</td>"
                        f"<td>{_e(r['identity'])}</td><td>{_e(r['project'] or '')}</td>"
                        f"<td>{_e(r['record_type'])} #{_e(r['record_id'])}</td>"
@@ -534,7 +534,7 @@ class Page:
         if not items:
             out.append("<p>Nothing here.</p>")
         for it in items:
-            out.append(f"""<div class="item"><div class="meta">#{it['id']} · {_e(it['kind'])} · {_e(it['project'])} · from {_e(it['source'])} · {_e(self._when(it['created_at']))} · {_e(it['status'])}</div>""")
+            out.append(f"""<div class="item"><div class="meta">#{it['id']} · {_e(it['kind'])} · {_e(it['project'])} · from {_e(identity.shown_row(it, fallback=it['source'] or 'an app') if it.get('app') else it['source'])} · {_e(self._when(it['created_at']))} · {_e(it['status'])}</div>""")
             if it["status"] == "pending":
                 move = ""
                 if it["kind"] == "cleanup" and '"misfiled"' in (it.get("payload") or ""):
@@ -615,7 +615,7 @@ class Page:
         # apps
         out.append("<h2>Apps</h2><table><tr><th>App</th><th>Last seen</th><th>Calls</th><th>Writes</th><th></th></tr>")
         for a in activity.apps(self.db_path):
-            out.append(f"""<tr><td>{_e(a['app'])}{' <b>(paused)</b>' if a['paused'] else ''}</td><td>{_e(a['last_seen'] or '-')}</td>
+            out.append(f"""<tr><td>{_e(activity.app_label(a))}{' <b>(paused)</b>' if a['paused'] else ''}</td><td>{_e(a['last_seen'] or '-')}</td>
 <td>{a['calls']}</td><td>{a['writes'] or 0}</td><td><form method="post" action="{self.base}/app">{hidden}<input type="hidden" name="app" value="{_e(a['app'])}">
 <input type="hidden" name="paused" value="{'0' if a['paused'] else '1'}"><button>{'Resume' if a['paused'] else 'Pause writes'}</button></form></td></tr>""")
         out.append("</table>")
@@ -638,7 +638,7 @@ class Page:
     def _recent_activity(self) -> str:
         out = ["<h2>Recent activity</h2><table><tr><th>When (UTC)</th><th>App</th><th>Tool</th><th>Project</th><th>Result</th></tr>"]
         for r in activity.recent(self.db_path, None, 30):
-            out.append(f"<tr><td>{_e(r['at'])}</td><td>{_e(r['app'])}</td><td>{_e(r['tool'])}{('/' + _e(r['action'])) if r['action'] else ''}</td>"
+            out.append(f"<tr><td>{_e(r['at'])}</td><td>{_e(identity.shown_row(r))}</td><td>{_e(r['tool'])}{('/' + _e(r['action'])) if r['action'] else ''}</td>"
                        f"<td>{_e(r['project'] or '')}</td><td>{'ok' if r['ok'] else 'error ' + _e(r['error'])}</td></tr>")
         out.append("</table>")
         return "".join(out)
@@ -747,7 +747,7 @@ class Page:
             + (f"<ul>{per}</ul>" if per else " No project has its own setting."), form))
         apps = activity.apps(db)
         rows = "".join(
-            f"""<tr><td>{_e(a['app'])}{' <b>(paused)</b>' if a['paused'] else ''}</td><td>{_e(a['last_seen'] or '-')}</td>
+            f"""<tr><td>{_e(activity.app_label(a))}{' <b>(paused)</b>' if a['paused'] else ''}</td><td>{_e(a['last_seen'] or '-')}</td>
 <td>{a['calls']}</td><td>{a['writes'] or 0}</td><td><form method="post" action="{self.base}/app">{hidden}<input type="hidden" name="app" value="{_e(a['app'])}">
 <input type="hidden" name="paused" value="{'0' if a['paused'] else '1'}"><button>{'Resume' if a['paused'] else 'Pause writes'}</button></form></td></tr>"""
             for a in apps)

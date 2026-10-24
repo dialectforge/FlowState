@@ -328,7 +328,11 @@ Client snippets for HTTP (replace `<url>`; keep the token out of shared files):
 
 Per-app tokens (each revocable on its own, optionally read-only):
 `<venv python> -m flowstate remote add-client --name "<app>" [--read-only]`, then
-`remote clients` / `remote revoke --client <id>`. For cloud AIs over HTTPS (claude.ai,
+`remote clients` / `remote revoke --client <id>`. Recommend one token per app to the user:
+on the tunnel and the relay FlowState records the name the app sends and shows the token's
+name next to it when they differ ("Grok Bot (via my-laptop-app)"), so a token shared by
+several apps can't tell them apart. To rename or replace a shared token: find it in
+`flowstate remote clients`, make one per app with `remote add-client`, then revoke the old one. For cloud AIs over HTTPS (claude.ai,
 ChatGPT, Grok) see `docs/REMOTE-ACCESS.md`: a `--public-url` listener on 127.0.0.1 behind a
 Cloudflare Tunnel, with OAuth 2.1 sign-in approved by the owner passphrase. Don't set up a
 tunnel or anything at Cloudflare without the user's explicit go-ahead.

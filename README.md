@@ -305,7 +305,8 @@ prompt `flowstate-start`.
   (`flowstate keys add`).
 - **Optional remote access**: for cloud AIs (claude.ai, ChatGPT and others), a public listener
   behind your own Cloudflare Tunnel with OAuth 2.1 sign-in that you approve with an owner
-  passphrase, plus revocable per-app tokens (optionally read-only). See
+  passphrase, plus revocable per-app tokens (optionally read-only; use one token per app,
+  `flowstate remote clients` lists them). See
   [docs/REMOTE-ACCESS.md](docs/REMOTE-ACCESS.md).
 - **Fewer or more tools**: 12 tools are listed by default. `--tools core` (or
   `FLOWSTATE_TOOLS=core`) lists only the 6 everyday ones to save context; `--tools full` adds the
@@ -594,7 +595,9 @@ protocol is in [docs/relay-protocol.md](docs/relay-protocol.md).
   sends. "Who did what" says so in its identity column ("self-reported", "shared token (legacy)").
 - **Only per-app keys, per-app remote tokens and approved OAuth apps give an identity an app
   can't pick for itself.** Even then the model, and for a key without a workspace the machine,
-  are the app's own say-so. Changes recorded before this was added show "not recorded".
+  are the app's own say-so. On your own tunnel and through the relay the app name is the one
+  the app sends (a token there is often shared); the token's or OAuth app's name is recorded
+  with it and shown next to it when they differ, e.g. "Grok Bot (via my-laptop-app)". Changes recorded before this was added show "not recorded".
 - **"Only when the user asks" is enforced by wording**, not cryptography: approving review items,
   changing the review mode and removing rules require the AI to quote your words, but a
   misbehaving AI could make them up. With approvals off (the default) that includes deletes:

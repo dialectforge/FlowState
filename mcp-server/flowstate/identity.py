@@ -6,20 +6,25 @@ here so nothing records identity in two different ways:
 
   app              the app's name. From the per-app key / remote token / OAuth client when
                    there is one (the app can't pick it), else the MCP client name it sends.
-                   Through the relay the sign-in is often shared or reused by several cloud
+                   Through the relay, and with a remote token / OAuth sign-in on the owner's
+                   own tunnel (--public-url), the sign-in is often shared or reused by several
                    apps, so there it is the MCP client name the app sends, else "Relay
-                   (unknown app)"; the sign-in's name goes into `machine` and `credential`.
+                   (unknown app)" / "Tunnel (unknown app)"; the sign-in's name goes into
+                   `machine` and `credential`.
   model            the AI model name, ONLY when the caller supplies it: the `model` argument,
                    else the X-FlowState-Model header (HTTP), else FLOWSTATE_MODEL (stdio).
                    Never guessed; NULL otherwise.
   machine          stdio: FLOWSTATE_WORKSPACE, else this computer's host name. LAN/local
                    HTTP: the key's workspace, else the X-FlowState-Workspace header. Remote
-                   (OAuth / remote tokens): the client's name. Relay: "relay (signed in as
-                   <client's name>)".
+                   (OAuth / remote tokens on the LAN listener): the client's name. Relay:
+                   "relay (signed in as <client's name>)"; own tunnel: "tunnel (signed in as
+                   <client's name>)". shown() reads the sign-in back from there, so pages
+                   say "Grok Bot (via Cursor)" when the two names differ.
   identity_source  app_key | oauth_client | remote_token | shared_token | self_reported
 
 Plus `credential` (not stored): the per-app key's / token's / OAuth client's own name, when
-the app name came from somewhere else (the relay); a paused app name stops it too.
+the app name came from somewhere else (relay, own tunnel); a paused app name stops it too,
+and same_caller() treats the same sign-in as the same caller whatever name it sends.
 
 Plus `session` (not a stored column of the logs above; todo claims use it to tell two
 sessions of one app apart): stdio = this server process, HTTP = the MCP session id.
@@ -31,6 +36,7 @@ self-reported caller.
 
 import contextvars
 import os
+import re
 import socket
 import uuid
 from contextlib import contextmanager
@@ -39,6 +45,12 @@ from typing import Optional
 
 SOURCES = ("app_key", "oauth_client", "remote_token", "shared_token", "self_reported")
 RELAY_UNKNOWN = "Relay (unknown app)"
+TUNNEL_UNKNOWN = "Tunnel (unknown app)"
+# listener -> (word in the machine column, fallback app name) where the app name is the app's
+# own say-so and the sign-in it used goes into machine (see resolve)
+SIGNED_IN = {"relay": ("relay", RELAY_UNKNOWN), "public": ("tunnel", TUNNEL_UNKNOWN)}
+SIGN_IN_SOURCES = ("oauth_client", "remote_token")
+_VIA = re.compile(r"^(?:relay|tunnel) \(signed in as (.+?)\)?$")
 LABELS = {"app_key": "per-app key", "oauth_client": "OAuth app", "remote_token": "remote token",
           "shared_token": "shared token (legacy)", "self_reported": "self-reported"}
 FIELDS = ("app", "model", "machine", "identity_source")
@@ -101,12 +113,13 @@ def resolve(client: str, http: bool = False, token=None, headers: Optional[dict]
     session = clean(headers.get("mcp-session-id"))
     source = getattr(token, "identity_source", "") if token is not None else ""
     name = clean(getattr(token, "client_name", "")) or "unknown"
-    if listener == "relay":
-        # one OAuth sign-in or remote token can sit behind several cloud apps (or be named
-        # after another app), so its name would credit the wrong app: the app's own name
-        # instead, or an honest "unknown", and the sign-in in the machine column
-        signed_in = f"relay (signed in as {name})" if token is not None else "relay"
-        return Identity(_sent_name(client) or RELAY_UNKNOWN, model, clean(signed_in),
+    if listener == "relay" or (listener == "public" and source in SIGN_IN_SOURCES):
+        # one OAuth sign-in or remote token can sit behind several apps (or be named after
+        # another app), so its name would credit the wrong app: the app's own name instead,
+        # or an honest "unknown", and the sign-in in the machine column
+        word, unknown = SIGNED_IN[listener]
+        signed_in = f"{word} (signed in as {name})" if token is not None else word
+        return Identity(_sent_name(client) or unknown, model, clean(signed_in),
                         source or "self_reported", session,
                         name if token is not None else None)
     if source == "app_key":
@@ -219,10 +232,59 @@ def set_sql(conn, table: str, client: Optional[str] = None, prefix: str = "",
     return "".join(f", {k} = ?" for k in who), list(who.values())
 
 
-def on_behalf_of(app: str) -> Identity:
+def on_behalf_of(app: str, machine: Optional[str] = None, source: Optional[str] = None,
+                model: Optional[str] = None) -> Identity:
     """FlowState itself recording something for an app that isn't the caller right now (an
-    automatically closed session's summary): the app's name only, nothing more is known."""
-    return Identity(clean(app) or "unknown", None, None, "self_reported")
+    automatically closed session's summary): the app's name, plus what its session recorded
+    about it (session_runs) when known."""
+    return Identity(clean(app) or "unknown", clean(model), clean(machine),
+                    source if source in SOURCES else "self_reported")
+
+
+def via(machine: Optional[str], source: Optional[str]) -> Optional[str]:
+    """The sign-in (remote token / OAuth client) name a relay or own-tunnel call came in on,
+    read back from the machine column resolve() wrote; None for every other caller (only
+    those two sources, so a LAN app can't fake one with its workspace header)."""
+    if source not in SIGN_IN_SOURCES or not isinstance(machine, str):
+        return None
+    m = _VIA.match(machine)
+    return m.group(1) if m else None
+
+
+def shown(app: Optional[str], machine: Optional[str] = None, source: Optional[str] = None,
+          on_machine: bool = False, fallback: str = "unknown") -> str:
+    """Who did it, for people: the app's name, plus the sign-in it came in on when that
+    differs ("Grok Bot (via Cursor)"), since the app name there is only its own claim.
+    on_machine=True adds " on <machine>" for other callers. Old rows show as they are."""
+    name = app or fallback
+    signed = via(machine, source)
+    if signed:
+        if name in (RELAY_UNKNOWN, TUNNEL_UNKNOWN):
+            return f"{name[:-1]}, via {signed})"
+        return name if signed.casefold() == name.casefold() else f"{name} (via {signed})"
+    return f"{name} on {machine}" if on_machine and machine else name
+
+
+def shown_row(row, prefix: str = "", **kw) -> str:
+    """shown() for a dict / sqlite3.Row with app / machine / identity_source columns."""
+    keys = row.keys() if hasattr(row, "keys") else ()
+    get = (lambda k: row[k] if k in keys else None)
+    return shown(get(prefix + "app"), get(prefix + "machine"), get(prefix + "identity_source"),
+                 **kw)
+
+
+def same_caller(app: Optional[str], machine: Optional[str], source: Optional[str],
+                ident: Optional[Identity]) -> bool:
+    """Did this caller's app write a row (its recorded app, machine, identity source)? For
+    permissions only the writer has (undo taking back a created record). A caller that came
+    in on a sign-in (relay, own tunnel) is matched by that sign-in, never by the name it sends
+    (it can send any name); a row written through a sign-in matches only that sign-in; other
+    rows by app name, as before."""
+    if ident is None:
+        return False
+    if ident.credential or via(machine, source):
+        return bool(ident.credential) and bool(machine) and machine == ident.machine
+    return bool(app) and app == ident.app
 
 
 def label(source: Optional[str]) -> str:

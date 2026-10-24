@@ -137,12 +137,13 @@ def test_public_listener_refuses_lan_keys_and_keeps_oauth_and_tokens(public, see
                                                   "summary": "remote"})],
                  headers={"X-FlowState-Model": "remote-model"})
     assert not out[0][0], out
-    assert _last_activity(seeded_db, "log_work")[:4] == ("Grok", "remote-model", "Grok",
-                                                          "remote_token")
+    # own tunnel (2.4.4, task 44): the app's own name, the sign-in in the machine column
+    assert _last_activity(seeded_db, "log_work")[:4] == (
+        "Self Named App", "remote-model", "tunnel (signed in as Grok)", "remote_token")
     oauth, cid, *_ = _oauth(public.base, access="write")
     out = _calls(public.base, oauth["access_token"],
                  [("handoff", {"action": "leave", "project": "Alpha", "where_i_was": "w",
                                "next_step": "n"})])
     assert not out[0][0], out
     assert _q(seeded_db, "SELECT app, machine, identity_source FROM handoff_notes") == \
-        [("Test app", "Test app", "oauth_client")]
+        [("Self Named App", "tunnel (signed in as Test app)", "oauth_client")]

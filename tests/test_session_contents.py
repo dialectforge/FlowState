@@ -158,7 +158,8 @@ def test_local_page_shows_contents_in_local_time(backend):
     assert f"change #{cid} &quot;{CHANGE}&quot; (Auth)" in html
     assert f"problem #{pid} &quot;{PROBLEM}&quot;" in html and f"Solution: {SOLUTION}" in html
     assert "<details><summary>3 more</summary>" in html          # expandable past ten
-    assert "by claude-code, in Alpha." in html and "this computer&#x27;s local time" in html
+    # the session's machine (session_runs) now comes with its summary
+    assert re.search(r"by claude-code( on [^,<]+)?, in Alpha\.", html) and "this computer&#x27;s local time" in html
     old = _old_item(db)
     html = c.get("/").text
     assert html.count("only the counts above are known") == 1 and f"#{old}" in html

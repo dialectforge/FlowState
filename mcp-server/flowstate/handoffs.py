@@ -79,8 +79,10 @@ def pickup(db_path: Path, pid: int, note_id, client: str) -> dict:
 def open_notes(conn, pid: int) -> list[dict]:
     if not available(conn):
         return []
+    who = ", ".join(c if identity.has_column(conn, "handoff_notes", c) else f"NULL AS {c}"
+                    for c in ("app", "machine", "identity_source"))
     return [dict(r) for r in conn.execute(
-        "SELECT id, where_i_was, next_step, created_at, created_by FROM handoff_notes "
+        f"SELECT id, where_i_was, next_step, created_at, created_by, {who} FROM handoff_notes "
         "WHERE project_id = ? AND picked_up_at IS NULL ORDER BY created_at DESC, id DESC", (pid,))]
 
 
@@ -105,7 +107,8 @@ def brief_lines(conn, pid: int) -> list[str]:
     out = [f"HANDOFF from the last AI ({len(notes)} open; read first, then "
            f"manage_handoffs(action=\"pickup\", handoff_id=...)):"]
     for n in notes[:BRIEF_FULL]:
-        who = f", {n['created_by']}" if n.get("created_by") else ""
+        by = identity.shown_row(n, fallback="") if n.get("app") else n.get("created_by")
+        who = f", {by}" if by else ""
         out.append(f"- H{n['id']} ({(n['created_at'] or '')[:16]}{who}) Where I was: "
                    + " ".join(n["where_i_was"].split()))
         if n.get("next_step"):

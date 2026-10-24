@@ -158,13 +158,14 @@ def _created(conn, typ: str, rid: int) -> str:
 
 def _writer(conn, typ: str, rid: int, fresh: bool, client: str) -> tuple[str, str]:
     if not fresh and identity.has_column(conn, "activity_log", "record_type"):
-        row = conn.execute("""SELECT app, at FROM activity_log WHERE record_type = ? AND record_id = ?
+        row = conn.execute("""SELECT app, machine, identity_source, at FROM activity_log
+                              WHERE record_type = ? AND record_id = ?
                               AND ok = 1 AND app IS NOT NULL ORDER BY id ASC LIMIT 1""",
                            (typ, rid)).fetchone()
         if row and row["app"]:
-            return row["app"], row["at"] or ""
+            return identity.shown_row(row), row["at"] or ""
     if fresh:
-        return identity.stamp(client).get("app") or client or "an app", _now()
+        return identity.shown_row(identity.stamp(client), fallback=client or "an app"), _now()
     return "an earlier entry", ""
 
 

@@ -98,7 +98,9 @@ def test_stdio_and_lan_resolve_rules_are_unchanged():
     assert identity.resolve("Claude Desktop").app == "Claude Desktop"
     assert identity.resolve("Grok", True, Tok(), {}).as_dict() == \
         {"app": "Phone", "model": None, "machine": "Phone", "identity_source": "remote_token"}
-    assert identity.resolve("Grok", True, Tok(), {}, listener="public").app == "Phone"
+    tunneled = identity.resolve("Grok", True, Tok(), {}, listener="public")   # task 44
+    assert (tunneled.app, tunneled.machine, tunneled.credential) == \
+        ("Grok", "tunnel (signed in as Phone)", "Phone")
     assert identity.resolve("Grok", True, Tok(), {}).credential is None
     relayed = identity.resolve("Grok", True, Tok(), {}, listener="relay")
     assert (relayed.app, relayed.machine, relayed.credential) == \
