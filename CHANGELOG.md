@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased
+
+(Part of 2.4.4, which is not tagged yet: fold these into the 2.4.4 section at release prep.)
+
+- No new dependencies and no database migration.
+- A **Settings** section on the review page that `flowstate review-page` opens (this computer
+  only). It lists every user setting in plain words with its current value, and lets you change
+  it there: review mode (whole install and per project; the existing form, moved in), app
+  pauses, approvals on / off (whole install and per project), the apps that may show an
+  approval popup (claude.ai and Anthropic apps still never get one), phone approval links, chat
+  approvals through the relay, whether `flowstate update` may update this computer
+  (`config.json` `"self_update"`) and the daily update check. Settings that only come from the
+  app's environment (`FLOWSTATE_REVIEW_PORT`, `FLOWSTATE_IDLE_MINUTES`, ...) are shown
+  read-only, and settings with their own terminal commands (backups, keys, remote access) are
+  listed with the command. No token, key or passphrase is ever shown.
+- Turning approvals **off**, or chat approvals through the relay **on**, asks on a second page
+  first, the page's stand-in for the terminal's `y`: its button carries a single-use token tied
+  to your browser session and to that exact change, valid for 5 minutes. The other directions
+  need no confirm, like the commands. The commands themselves are unchanged.
+- Every change made there is logged in `review_mode_log` as `review-page` (with the app,
+  machine and identity fields), including app pauses, popup-list and phone-link changes and the
+  `config.json` settings. The section ends with the last few setting changes.
+- Without the relay on this computer, the relay rows (phone links, chat approvals) are greyed
+  out with "Only used with the FlowState relay (not set up here)", and the page ignores a
+  change sent to them anyway.
+- Where it isn't: the page FlowState opens from a link in the brief or the walk (no one-time
+  key) shows the new settings read-only, with "open `flowstate review-page` to change these"
+  (review mode and app pauses work there as before). The tunnel page, the phone pages and the
+  relay have no Settings section and no settings routes. No MCP tool reads or writes any of
+  these settings (tests check every tool, and that only the terminal commands and the local
+  page call the writers).
+- The local review page is now readable in a phone-sized window (viewport, 44 px buttons,
+  tables scroll inside themselves).
+
 ## 2.4.4 - 2026-10-24
 
 - No new dependencies and no database migration. `flowstate update` from 2.4.0 to 2.4.3

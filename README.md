@@ -448,6 +448,19 @@ Honest limits:
 - If your computer is off or the relay agent isn't running, the phone link can't open the
   list.
 
+## Where to change settings
+
+Run `flowstate review-page`: its **Settings** section (this computer only) lists every setting
+in plain words with its value, and changes it there. Review mode, app pauses, approvals on / off
+(whole install or per project), the popup apps, phone links, chat approvals through the relay,
+whether `flowstate update` may update this computer, and the daily update check. Turning
+approvals off or relay chat approvals on asks you to confirm on a second page. Settings that
+come from the app's config (environment variables) are shown read-only; keys, tokens and
+passphrases are never shown and keep their own commands. The page an AI's link opens shows the
+settings read-only (anything on this computer can open that link); the tunnel page and the
+phone pages have no settings at all, and no AI tool can read or change them. The terminal
+commands below still work exactly as before.
+
 ## Commands for you (not the AI)
 
 Run with the venv Python: `<venv python> -m flowstate <command>` (or `flowstate <command>` with
@@ -459,7 +472,7 @@ the venv active). Add `-h` to any command for its options.
 | `approve ID [ID ...]` / `reject ID [--reason TEXT]` | Decide review items; asks you to type `y` in this terminal (piped input doesn't count) |
 | `approvals [on\|off] [--project P]` | Opt-in approvals (off by default). `on`: an AI's deletes and turning review off wait for you. Turning them `off` asks for `y` in this terminal. Also `approvals phone on\|off` and `approvals popup add\|remove NAME` |
 | `relay chat-approvals [on\|off]` | May AIs connected through the relay approve and reject review items in the chat? Off by default (phone only). Turning it `on` asks for `y` in this terminal; with no argument it shows the setting |
-| `review-page` | Review page in your browser (127.0.0.1 only): approve / edit / reject, review mode, pause apps, "Who did what" (with undo). You can also just click the link in your AI's answer (see "Where to see what's waiting for you") |
+| `review-page` | Review page in your browser (127.0.0.1 only): approve / edit / reject, "Who did what" (with undo), and a Settings section for every setting (see "Where to change settings"). You can also just click the link in your AI's answer (see "Where to see what's waiting for you") |
 | `keys add --name N [--read-only] [--workspace W]` / `keys list` / `keys revoke --id ID` (or `--name N`) | Per-app keys for the local/LAN HTTP server; the key is shown once, only a hash is kept; a revoked key stops at once |
 | `apps list` / `apps activity` / `apps pause --app NAME` / `apps resume --app NAME` | Which app did what; stop one app from writing |
 | `backup [--offsite]` / `restore <file> [--to <new file>]` | Back up now / restore into a new, verified file |

@@ -2,10 +2,21 @@
 
     flowstate review-page [--db FILE] [--port 8770] [--no-browser] [--print-url]
 
-Lists the review queue with Approve / Edit / Reject, sets the review mode, pauses or
-resumes apps, and shows "Who did what" (app, model, machine and identity source of every
-recorded change, with Undo where the edit history allows it). Everything done here counts as the user acting (it is logged as
-"review-page").
+Lists the review queue with Approve / Edit / Reject, shows "Who did what" (app, model, machine
+and identity source of every recorded change, with Undo where the edit history allows it), and
+a Settings section (render_settings): review mode, app pauses, approvals on/off (install and
+per project), popup apps, phone links, chat approvals through the relay, config.json
+"self_update" and the update check, environment-only settings read-only, and the recent
+setting changes. Everything done here counts as the user acting (it is logged as
+"review-page"; setting changes in review_mode_log).
+
+Settings (Page.settings): "edit" only on the page `flowstate review-page` opens (a launch-key
+session); "read" on the open-link page below (review mode and app pauses still work there,
+the rest is shown read-only and its POSTs change nothing); "off" on the tunnel page, which
+renders only its old Review mode and Apps blocks and has no /settings/... routes. Turning
+approvals off or relay chat approvals on answers with a confirm page whose form carries a
+single-use token bound to the session and the exact change, valid CONFIRM_SECONDS; it stands
+in for the terminal's `y`. Without the relay here, the relay rows are disabled and ignored.
 
 Two ways to run it:
   * `flowstate review-page`: its own process; opening it needs a one-time key (in the URL

@@ -6,6 +6,40 @@ off wait for the user's own click or key: popup, phone, or terminal (see `approv
 This page is the phone part, which needs the site: the approve link for one item (sections
 1-4) and the review list of everything waiting (section 5).
 
+## Changing the settings: terminal or the local review page
+
+Every approvals setting has two ways to change it, both on the computer where FlowState runs.
+No MCP tool reads or writes any of them (tests check the tool list and that only the files
+named here call the writers).
+
+| Setting | Terminal | Review page (`flowstate review-page`, Settings) |
+|---|---|---|
+| Approvals on / off, install or `--project` | `flowstate approvals on\|off [--project P] [--clear]` (off asks for `y`) | Approvals row: Turn on / Turn off / Remove the project's own setting; off (or removing a project's own setting while it is on) asks on a confirm page |
+| Phone approval links | `flowstate approvals phone on\|off` | Phone approval links row (relay only) |
+| Popup apps | `flowstate approvals popup add\|remove NAME` | Popup row: Add / Remove; claude.ai and Anthropic names never get a popup whatever the list says |
+| Chat approvals through the relay | `flowstate relay chat-approvals on\|off` (on asks for `y`) | Chat approvals row (relay only); on asks on a confirm page |
+
+- **The confirm page** replaces the terminal's `y`. The first POST answers with a plain-words
+  page ("Only do this if ..."); its Yes form carries a fresh token (kept only as a hash) that is
+  used up on the first try, belongs to that browser session, names that exact change (setting,
+  scope and state, compared with what is posted) and expires after 5 minutes
+  (`review_page.CONFIRM_SECONDS`). A replayed, expired, other-session or other-change token, or
+  No, changes nothing. Approvals on and relay chat approvals off need no confirm, as in the
+  terminal.
+- **Only the launch-key page changes them.** The page FlowState starts for the link in the
+  brief and the walk (`waiting.py`, no one-time key: anything on this computer can open it)
+  shows them read-only with "open `flowstate review-page` to change these" and answers any
+  settings POST with "nothing changed". The tunnel page (`review_tunnel.py`), the phone pages
+  (`review_phone.py`, `approve_page.py`) and the relay have no Settings section and no
+  `/settings/...` routes.
+- **Without the relay** (`approvals.relay_set_up()` false: not enrolled on this computer) the
+  two relay rows are greyed out with their controls disabled, and a POST to them is ignored.
+- **Logged**: every page change goes into `review_mode_log` with client and caller
+  `review-page`, `user_request` "set on the FlowState review page" and the identity fields
+  (`identity.insert`); terminal changes keep "set in the user's terminal".
+- Same honest limit as the terminal's `y`: a program that drives the user's own logged-in
+  browser on this computer could click through the confirm page.
+
 ## Where the user sees what's waiting (no terminal needed)
 
 Whatever the approvals setting, the user can see and decide the whole review queue three ways
@@ -96,9 +130,10 @@ chat by default. What the code enforces (`waiting.phone_only`, called first in
   walk's wording) and `dont_approve`. Nothing is changed or logged as a decision. A missing or
   already decided item gets the usual answer.
 - The setting: `approval_settings` key `relay_chat_approvals` (`approvals.relay_chat_on`),
-  `on` or absent / `off` (the default). Only `flowstate relay chat-approvals on|off` changes it
-  (`approvals.set_relay_chat`, logged in `review_mode_log` with scope `relay_chat_approvals`);
-  turning it on asks for `y` on the user's own terminal (`cli_review.open_terminal`; piped input
+  `on` or absent / `off` (the default). Only `flowstate relay chat-approvals on|off` and the
+  local review page's Settings change it (`approvals.set_relay_chat`, logged in
+  `review_mode_log` with scope `relay_chat_approvals`); turning it on asks for `y` on the
+  user's own terminal (or on the page's confirm page, above) (`cli_review.open_terminal`; piped input
   doesn't count), off needs nothing. No MCP tool reads or writes the key (a test checks).
 - On: relay requests are checked exactly as before (quote the user in `user_request`; the
   queuing app needs the user's own words). User-only items stay locked either way: deletes
