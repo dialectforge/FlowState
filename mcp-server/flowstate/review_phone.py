@@ -47,7 +47,7 @@ import threading
 import time
 
 from . import approvals, install_name
-from .approve_page import CSS, HEADERS, _same_origin
+from .approve_page import CSS, HEADERS, SAVED_JS, _same_origin
 
 COOKIE = "fs_review_phone"
 SESSION_SECONDS = 15 * 60
@@ -82,9 +82,7 @@ EXTRA_CSS = """.card{border-top:1px solid var(--line);padding:18px 0 6px}
 .claim{margin:6px 0;overflow-wrap:anywhere}
 .actions.stack{flex-direction:column}
 .actions.stack .btn{min-height:44px;width:100%}
-.ainote{color:var(--muted)}
-.saved{margin:8px 0 0;padding-left:18px}.saved li{margin:8px 0;overflow-wrap:anywhere}
-.saved .ex{color:var(--muted);font-size:14px;margin:2px 0 0}"""
+.ainote{color:var(--muted)}"""
 
 JS = r"""(function () {
   "use strict";
@@ -112,43 +110,7 @@ JS = r"""(function () {
       return r.json().then(function (j) { return {ok: r.ok, j: j}; });
     });
   }
-  function localTime(utc) {          // the reader's own time; UTC, labelled, if it can't
-    var d = utc ? new Date(String(utc).replace(" ", "T") + "Z") : null;
-    if (!d || isNaN(d.getTime())) { return utc ? utc + " UTC" : ""; }
-    return d.toLocaleString([], {dateStyle: "medium", timeStyle: "short"});
-  }
-  function endTime(a, b) {          // the end alone when the session ends the day it began
-    var x = new Date(String(a).replace(" ", "T") + "Z"), y = new Date(String(b).replace(" ", "T") + "Z");
-    if (isNaN(x.getTime()) || isNaN(y.getTime()) || x.toDateString() !== y.toDateString()) {
-      return localTime(b);
-    }
-    return y.toLocaleTimeString([], {timeStyle: "short"});
-  }
-  function saved(c) {                // what a session saved: each record, written as text
-    var box = el("div", "");
-    if (c.started_utc) {
-      box.appendChild(el("p", "faint", "Session " + localTime(c.started_utc) +
-        (c.ended_utc ? " to " + endTime(c.started_utc, c.ended_utc) : "") + (c.app ? ", by " + c.app : "")));
-    }
-    if (!c.entries || !c.entries.length) {
-      box.appendChild(el("p", "muted", c.note || ""));
-      return box;
-    }
-    box.appendChild(el("p", "muted", "What this session saved (" + c.total + "):"));
-    var ul = el("ul", "saved");
-    c.entries.forEach(function (e) {
-      var li = el("li", "");
-      li.appendChild(el("strong", "", e.head || ""));
-      if (e.excerpt) { li.appendChild(el("p", "ex", e.excerpt)); }
-      if (e.solution) { li.appendChild(el("p", "ex", "Solution: " + e.solution)); }
-      ul.appendChild(li);
-    });
-    box.appendChild(ul);
-    if (c.more) {
-      box.appendChild(el("p", "faint", c.more + " more: the review page on your computer lists all."));
-    }
-    return box;
-  }
+/*SAVED_JS*/
   function show(items, total) {
     var list = $("list");
     while (list.firstChild) { list.removeChild(list.firstChild); }
@@ -241,7 +203,7 @@ JS = r"""(function () {
     show(r.j.items, r.j.total);
   }, function () { say("Can't show your list", "Your FlowState didn't answer.", true); });
 })();
-"""
+""".replace("/*SAVED_JS*/\n", SAVED_JS)
 
 
 def _sha(s: str) -> str:

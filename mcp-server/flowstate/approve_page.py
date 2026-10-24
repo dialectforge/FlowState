@@ -51,6 +51,7 @@ SHELL = """<!doctype html>
   <p class="eyebrow" id="project"></p>
   <p id="summary"></p>
   <p id="details" class="muted"></p>
+  <div id="saved"></div>
   <p id="who" class="faint"></p>
   <label id="name-row" hidden>Type the project's exact name to delete it
     <input id="confirm-name" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
@@ -85,7 +86,83 @@ input{display:block;width:100%;margin-top:6px;font:inherit;padding:12px 14px;bor
 .btn.ghost{background:none;color:var(--ink);border:1px solid var(--line)}
 .btn.ghost:hover{border-color:var(--ink);background:none}
 .err{color:var(--danger)}
+.saved{margin:8px 0 0;padding-left:18px}.saved li{margin:8px 0;overflow-wrap:anywhere}
+.saved .ex{color:var(--muted);font-size:14px;margin:2px 0 0}
+.btn.more{flex:none;font-size:15px;padding:10px 18px;margin:4px 0 8px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+"""
+
+# What a session saved, drawn on the phone pages (this one and review_phone.py): the first
+# `shown` records, then a "Show N more" button that opens the rest in place. Every record sent
+# is already in the page's data (session_contents.public, send=PHONE_MAX), so opening them asks
+# nothing of the server. Text only (textContent), never markup. Spliced into each page's own
+# function at /*SAVED_JS*/ (defines mk, localTime, endTime, savedItem and saved there).
+SAVED_JS = r"""  function mk(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) { e.className = cls; }
+    if (text) { e.textContent = text; }
+    return e;
+  }
+  function localTime(utc) {          // the reader's own time; UTC, labelled, if it can't
+    var d = utc ? new Date(String(utc).replace(" ", "T") + "Z") : null;
+    if (!d || isNaN(d.getTime())) { return utc ? utc + " UTC" : ""; }
+    return d.toLocaleString([], {dateStyle: "medium", timeStyle: "short"});
+  }
+  function endTime(a, b) {          // the end alone when the session ends the day it began
+    var x = new Date(String(a).replace(" ", "T") + "Z"), y = new Date(String(b).replace(" ", "T") + "Z");
+    if (isNaN(x.getTime()) || isNaN(y.getTime()) || x.toDateString() !== y.toDateString()) {
+      return localTime(b);
+    }
+    return y.toLocaleTimeString([], {timeStyle: "short"});
+  }
+  function savedItem(e) {
+    var li = mk("li", "");
+    li.appendChild(mk("strong", "", e.head || ""));
+    if (e.excerpt) { li.appendChild(mk("p", "ex", e.excerpt)); }
+    if (e.solution) { li.appendChild(mk("p", "ex", "Solution: " + e.solution)); }
+    return li;
+  }
+  function saved(c) {                // what a session saved: each record, written as text
+    var box = mk("div", "");
+    if (c.started_utc) {
+      box.appendChild(mk("p", "faint", "Session " + localTime(c.started_utc) +
+        (c.ended_utc ? " to " + endTime(c.started_utc, c.ended_utc) : "") + (c.app ? ", by " + c.app : "")));
+    }
+    var entries = c.entries || [];
+    if (!entries.length) {
+      box.appendChild(mk("p", "muted", c.note || ""));
+      return box;
+    }
+    var shown = c.shown || entries.length;
+    box.appendChild(mk("p", "muted", "What this session saved (" + c.total + "):"));
+    var ul = mk("ul", "saved");
+    entries.slice(0, shown).forEach(function (e) { ul.appendChild(savedItem(e)); });
+    box.appendChild(ul);
+    var rest = entries.slice(shown);
+    if (rest.length) {               // the rest is already here: open it in place
+      var hid = mk("ul", "saved");
+      hid.hidden = true;
+      rest.forEach(function (e) { hid.appendChild(savedItem(e)); });
+      var more = "Show " + rest.length + " more", less = "Show fewer";
+      var btn = mk("button", "btn ghost more", more);
+      btn.type = "button";
+      btn.setAttribute("aria-expanded", "false");
+      btn.addEventListener("click", function () {
+        hid.hidden = !hid.hidden;
+        btn.textContent = hid.hidden ? more : less;
+        btn.setAttribute("aria-expanded", hid.hidden ? "false" : "true");
+      });
+      box.appendChild(hid);
+      box.appendChild(btn);
+    }
+    if (c.more) {
+      box.appendChild(mk("p", "faint", c.more + " more not sent to this page: " +
+        "the review page on your computer lists all."));
+    } else if (rest.length) {
+      box.appendChild(mk("p", "faint", "The review page on your computer lists them too."));
+    }
+    return box;
+  }
 """
 
 JS = r"""(function () {
@@ -119,11 +196,7 @@ JS = r"""(function () {
       else { say("Not done", r.j.message || "Something went wrong.", true); }
     }, function () { say("Not done", "Your FlowState didn't answer.", true); });
   }
-  function localTime(utc) {          // the reader's own time; UTC, labelled, if it can't
-    var d = utc ? new Date(String(utc).replace(" ", "T") + "Z") : null;
-    if (!d || isNaN(d.getTime())) { return utc ? utc + " UTC" : ""; }
-    return d.toLocaleString([], {dateStyle: "medium", timeStyle: "short"});
-  }
+/*SAVED_JS*/
   if (!grant) { say("This link is incomplete", "Open it again from the chat.", true); return; }
   post("/open", {grant: grant}).then(function (r) {
     if (!r.ok) { say("Can't show this request", r.j.message || "", true); return; }
@@ -137,7 +210,8 @@ JS = r"""(function () {
     say(it.question, "");
     $("project").textContent = it.project + (r.j.name ? " · " + r.j.name : "");
     $("summary").textContent = it.summary;
-    $("details").textContent = [it.details, it.contents_text].filter(Boolean).join("\n\n");
+    $("details").textContent = it.details || "";
+    if (it.contents) { $("saved").appendChild(saved(it.contents)); }
     $("who").textContent = "Asked by " + it.queued_by + ", " + localTime(it.queued_at);
     $("name-row").hidden = !needsName;
     $("item").hidden = false;
@@ -172,7 +246,7 @@ JS = r"""(function () {
     $("reject").addEventListener("click", function () { decide("reject"); });
   }, function () { say("Can't show this request", "Your FlowState didn't answer.", true); });
 })();
-"""
+""".replace("/*SAVED_JS*/\n", SAVED_JS)
 
 
 def _sha(s: str) -> str:
@@ -221,7 +295,7 @@ def view(db_path, item_id: int) -> dict:
     if keep:   # what the session saved: titles and excerpts, not just counts
         from . import session_contents
         c = session_contents.for_item(db_path, {**item, "project": project})
-        contents = session_contents.public(c)
+        contents = session_contents.public(c, send=session_contents.PHONE_MAX)
     out = {"id": item["id"], "project": project, "kind": item["kind"], "question": question,
            "summary": summary, "details": details,
            "yes": review.KEEP if keep else "Approve", "no": review.DONT_KEEP if keep else "Reject",

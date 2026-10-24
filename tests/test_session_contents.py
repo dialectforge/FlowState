@@ -1,7 +1,9 @@
 """Task 42: a session summary shows what the session really saved, on every page that shows
 it: each record's kind, id, title and an excerpt, the solved problem with its solution, the
 component, the app and the session's times. New summaries store the record ids; older ones
-fall back to the run ledger, else say that only the counts are known. Temp DBs only."""
+fall back to the run ledger, else say that only the counts are known. Task 45: the summary line
+itself is short again (what Keep saves; editable first), with the record list shown beside it,
+and the phone pages open records past ten in place. Temp DBs only."""
 
 import asyncio
 import json
@@ -71,7 +73,7 @@ def _old_item(db, sid=None):
 
 
 # ---------------------------------------------------------------- the writer
-def test_new_summary_stores_ids_and_names_the_records(backend):
+def test_new_summary_stores_ids_and_keeps_the_line_short(backend):
     S, db = backend, backend.backend.db_path
     item, pid, cid = _work(S, db)
     it = review.get_item(db, item)
@@ -79,9 +81,10 @@ def test_new_summary_stores_ids_and_names_the_records(backend):
     assert ["change", cid, "saved"] in recs and ["problem", pid, "saved, solved"] in recs
     assert not any(r[0] in ("solution", "link", "component") for r in recs)   # ids only, no noise
     assert CHANGE_BODY[:40] not in it["payload"]                                  # never the text
-    # the summary line (what every list and notification shows) names them
-    assert "saved 1 change and 1 problem; also problem solved." in it["summary"]
-    assert f'Records: change #{cid} "{CHANGE}"; problem #{pid} "{PROBLEM}" (saved, solved).' in it["summary"]
+    # the summary line (what Keep saves as the session's record) stays short: the counts only
+    assert it["summary"] == (f"{AUTO_TAG} claude-code session in Alpha: saved 1 change and 1 "
+                             "problem; also problem solved.")
+    assert "Records:" not in it["summary"] and CHANGE not in it["summary"]
 
 
 def test_contents_change_and_solved_problem(backend):
@@ -125,7 +128,9 @@ def test_deleted_record_and_more_than_ten(backend):
     assert page.count("<li>") == 13 and "<details><summary>3 more</summary>" in page
     pub = session_contents.public(c)
     assert len(pub["entries"]) == 10 and pub["more"] == 3 and pub["total"] == 13
-    assert "; and 8 more." in review.get_item(db, item)["summary"]     # 5 named, 8 more
+    assert "Records:" not in review.get_item(db, item)["summary"]      # the list is beside it
+    phone = session_contents.public(c, send=session_contents.PHONE_MAX)  # all in the data
+    assert len(phone["entries"]) == 13 and phone["shown"] == 10 and phone["more"] == 0
     conn = sqlite3.connect(db)
     conn.execute("PRAGMA foreign_keys = OFF")
     conn.execute("DELETE FROM changes WHERE id = ?", (cid,))
@@ -184,10 +189,12 @@ def test_phone_list_and_approve_page_carry_contents(backend):
     item, pid, cid = _work(S, db, changes=12)
     [v] = [x for x in review_phone.items(db) if x["id"] == item]
     con = v["contents"]
-    assert con["total"] == 13 and con["more"] == 3 and len(con["entries"]) == 10
+    # (task 45) all 13 are in the page's data; the first 10 show, "Show 3 more" opens the rest
+    assert con["total"] == 13 and con["shown"] == 10 and len(con["entries"]) == 13
+    assert con["more"] == 0
     assert con["entries"][0]["head"] == f'change #{cid} "{CHANGE}" (Auth)'
-    prob = [e for e in con["entries"] if e["kind"] == "problem"]
-    assert not prob   # the problem is the 13th: past the first ten
+    [prob] = [e for e in con["entries"][10:] if e["kind"] == "problem"]   # the 13th
+    assert prob["solution"] == SOLUTION
     assert v["queued_at_utc"] and "contents" in review_phone.JS and "localTime" in review_phone.JS
     # the JS writes it all with textContent, never innerHTML
     assert "innerHTML" not in review_phone.JS
@@ -238,3 +245,88 @@ def test_walk_box_lists_the_records(backend):
     item, pid, cid = _work(S, db)
     msg, _schema = waiting._form({**review.get_item(db, item), "project": "Alpha"}, 1, 1)
     assert f'change #{cid} "{CHANGE}" (Auth)' in msg and f"Solution: {SOLUTION}" in msg
+
+
+# ---------------------------------------------------------------- task 45
+def _fake(n):
+    """contents() of a session with n records, without saving n records."""
+    e = {"kind": "todo", "kind_label": "todo", "verb": "saved", "title": "t", "excerpt": "x",
+         "component": "", "solution": "", "gone": False}
+    return {"entries": [dict(e, id=i + 1) for i in range(n)], "total": n, "source": "stored",
+            "started_utc": "", "ended_utc": "", "app": "a", "machine": "", "project": "Alpha"}
+
+
+def test_phone_data_is_capped(backend):
+    """The phone pages get at most PHONE_MAX records; past that `more` points to the computer."""
+    n = session_contents.PHONE_MAX + 7
+    pub = session_contents.public(_fake(n), send=session_contents.PHONE_MAX)
+    assert len(pub["entries"]) == session_contents.PHONE_MAX and pub["more"] == 7
+    assert pub["shown"] == session_contents.MAX_SHOWN
+    card = session_contents.public(_fake(n))            # the chat card: ten, as before
+    assert len(card["entries"]) == 10 and card["more"] == n - 10
+
+
+def test_phone_pages_open_the_rest_in_place():
+    """One shared block draws the list on the phone list and the approve page: the first
+    `shown`, then a "Show N more" button that unhides the rest (no request, text only), and
+    the pointer to the computer's page."""
+    from flowstate import approve_page
+    for js in (review_phone.JS, approve_page.JS):
+        assert "/*SAVED_JS*/" not in js and js.count("function saved(") == 1
+        assert '"Show " + rest.length + " more"' in js and "aria-expanded" in js
+        assert "hid.hidden = !hid.hidden" in js
+        assert "the review page on your computer lists" in js
+        assert "innerHTML" not in js
+    block = approve_page.SAVED_JS
+    assert "fetch(" not in block and "post(" not in block            # no network to expand
+    assert ".saved{" in approve_page.CSS and ".btn.more{" in approve_page.CSS
+    assert 'id="saved"' in approve_page.SHELL
+    assert '$("saved").appendChild(saved(it.contents))' in approve_page.JS
+
+
+def test_approve_page_sends_all_records(backend):
+    S, db = backend, backend.backend.db_path
+    item, pid, _cid = _work(S, db, changes=12)
+    a = approve_view(db, item)
+    assert len(a["contents"]["entries"]) == 13 and a["contents"]["shown"] == 10
+    assert a["details"] == "" or "What this session saved" not in a["details"]
+
+
+def test_edit_before_keep_saves_the_short_line_or_the_edit(backend):
+    """The review page's edit box holds the short line; the list is shown beside it. Keep
+    saves what is in the box: as is, or edited."""
+    from flowstate.review_page import Page, create_app
+    from test_settings_page import CSRF
+    S, db = backend, backend.backend.db_path
+    item, pid, cid = _work(S, db)
+    p = Page(db, 8770)
+    c = TestClient(create_app(p), base_url="http://127.0.0.1:8770", follow_redirects=False)
+    assert c.get("/?key=" + p.launch_key).status_code == 303
+    html = c.get("/").text
+    short = "claude-code session in Alpha: saved 1 change and 1 problem; also problem solved."
+    box = re.search(r'<textarea name="summary" rows="2">([^<]*)</textarea>', html).group(1)
+    assert box == short
+    assert html.index("What this session saved (2):") < html.index('<textarea name="summary"')
+    sid = review.get_item(db, item)["session_id"]
+    edited = "Fixed the sign-in loop (return path kept)."
+    r = c.post("/approve", data={"csrf": CSRF.search(html).group(1), "item_id": str(item),
+                                 "summary": edited, "details": ""},
+               headers={"origin": "http://127.0.0.1:8770"})
+    assert r.status_code == 303
+    assert review.get_item(db, item)["status"] == "approved"
+    assert _q(db, "SELECT summary FROM sessions WHERE id = ?", sid)[0][0] == edited
+
+
+def test_item_view_and_terminal_show_the_records(backend):
+    """manage_review(list, item_id=) and `flowstate approve`'s confirmation show the list
+    beside the short line too."""
+    from flowstate import cli_review
+    S, db = backend, backend.backend.db_path
+    item, pid, cid = _work(S, db)
+    one = call(S, "manage_review", {"action": "list", "item_id": item})["item"]
+    assert "Records:" not in one["summary"]
+    text = "\n".join(one["saved_records"])
+    assert f'change #{cid} "{CHANGE}" (Auth)' in text and f"Solution: {SOLUTION}" in text
+    lines = cli_review._describe(review.get_item(db, item), "Alpha", db)
+    assert any(f'problem #{pid} "{PROBLEM}"' in x for x in lines)
+    assert any(x.strip().startswith("What this session saved (2)") for x in lines)

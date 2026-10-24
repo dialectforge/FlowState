@@ -153,9 +153,13 @@ class _ServerTLS:
         return b"".join(parts)
 
 
-def _display_name() -> str:
-    from ..install_name import get
-    return get()
+def _display_name() -> Optional[str]:
+    """The name the user set for this FlowState, or None (never the default "Main FlowState")."""
+    from ..install_name import shared
+    return shared()
+
+
+_NAME_UNREADABLE = object()   # config.json couldn't be read: leave the relay's copy alone
 
 
 class TunnelAgent:
@@ -168,10 +172,11 @@ class TunnelAgent:
                  backoff: Optional[Backoff] = None, stable_after: float = 30.0,
                  display_name: Optional[Callable[[], Optional[str]]] = None):
         self.host, self.port, self.sni = host, port, sni
-        # this FlowState's display name (install_name.py), sent in the hello and again in a
-        # "name" message when it changes; a relay that doesn't know "name" ignores both
+        # this FlowState's display name (install_name.py), only once the user set one: sent in
+        # the hello and again in a "name" message when it changes; null when there is none (so
+        # a reset clears the relay's copy). A relay that doesn't know "name" ignores both.
         self.display_name = display_name or _display_name
-        self._sent_name: Optional[str] = None
+        self._sent_name = _NAME_UNREADABLE
         self.token, self.handle = token, handle
         self.client_ctx, self.server_ctx, self.local_port = client_ctx, server_ctx, local_port
         self.peer_map, self.on_state = peer_map, on_state
@@ -247,8 +252,8 @@ class TunnelAgent:
             hello = {"type": "hello", "v": 1, "role": "control", "proto": PROTOCOL,
                      "handle": self.handle, "token": self.token, "agent": AGENT}
             name = self._name()
-            if name:
-                hello["name"] = name
+            if name is not _NAME_UNREADABLE:
+                hello["name"] = name   # None (JSON null): no name set, the relay clears its copy
             self._sent_name = name
             writer.write(encode(hello))
             await writer.drain()
@@ -300,17 +305,19 @@ class TunnelAgent:
                 await asyncio.sleep(hb)
                 seq += 1
                 name = self._name()
-                if name and name != self._sent_name:   # renamed while connected
+                if name is not _NAME_UNREADABLE and name != self._sent_name:   # renamed or reset
                     writer.write(encode({"type": "name", "name": name}))
                     self._sent_name = name
                 writer.write(encode({"type": "ping", "seq": seq}))
                 await writer.drain()
 
-    def _name(self) -> Optional[str]:
+    def _name(self):
+        """The set name, None (none set), or _NAME_UNREADABLE."""
         try:
-            return self.display_name()
+            name = self.display_name()
         except Exception:  # noqa: BLE001 - a name problem must not kill the tunnel
-            return None
+            return _NAME_UNREADABLE
+        return name if name is None or isinstance(name, str) else _NAME_UNREADABLE
 
     # ------------------------------------------------------------ data connections
     def _on_open(self, msg: dict, ctrl: asyncio.StreamWriter) -> None:

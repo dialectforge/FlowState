@@ -1,8 +1,8 @@
 """(task 43) This FlowState's display name (install_name.py): "Main FlowState" until the user
 changes it with `flowstate name` or on the local review page's Settings. Kept in config.json,
 logged in review_mode_log, shown escaped on FlowState's own pages, sent to the relay in the
-agent's hello (and a "name" message when it changes), never in a URL and never through an MCP
-tool. Temp DBs and sandboxed folders only."""
+agent's hello (and a "name" message when it changes) only once the user set one (null otherwise,
+so a reset clears it there; task 45), never in a URL and never through an MCP tool. Temp DBs and sandboxed folders only."""
 
 import json
 import re
@@ -208,11 +208,121 @@ def test_hello_carries_the_name_and_a_rename_is_sent(tmp_path, cfg):
         relay.stop()
 
 
-def test_hello_uses_the_config_name_by_default(cfg):
+def _run_agent(tmp_path, source, steps):
+    """Run a TunnelAgent against the fake relay with display_name=source; `steps(relay)` is an
+    async function run once the hello arrived. Returns the relay (hellos, names)."""
+    pytest.importorskip("cryptography")
+    import asyncio
+    import time
+    from flowstate.relay.tunnel import Backoff, TunnelAgent
+    from relay_fakes import FakeTunnelRelay, TestCA, TUNNEL_HOST
+    ca = TestCA(tmp_path / "ca")
+    relay = FakeTunnelRelay(ca, {"tok-" + "a" * 40: "ab12cd"}, heartbeat=0.1).start()
+    try:
+        agent = TunnelAgent(host="127.0.0.1", port=relay.tunnel_port, sni=TUNNEL_HOST,
+                            token="tok-" + "a" * 40, handle="ab12cd",
+                            client_ctx=ssl.create_default_context(cafile=str(ca.cert_file)),
+                            server_ctx=lambda: None, local_port=lambda: None, peer_map={},
+                            min_heartbeat=0.1, backoff=Backoff(base=0.05, cap=0.2, rand=lambda: 1.0),
+                            display_name=source)
+
+        async def main():
+            stop = asyncio.Event()
+            task = asyncio.create_task(agent.run(stop))
+            t0 = time.monotonic()
+            while not relay.hellos and time.monotonic() - t0 < 10:
+                await asyncio.sleep(0.02)
+            await steps(relay)
+            stop.set()
+            await asyncio.wait_for(task, 5)
+        asyncio.run(main())
+    finally:
+        relay.stop()
+    return relay
+
+
+async def _until(cond, secs=10):
+    import asyncio
+    import time
+    t0 = time.monotonic()
+    while not cond() and time.monotonic() - t0 < secs:
+        await asyncio.sleep(0.02)
+
+
+def test_no_name_set_sends_null_never_the_default(tmp_path, cfg):
+    """(task 45) The default "Main FlowState" is never sent: the hello says null, so the relay
+    keeps no name and the site says "your FlowState"; pings without a change send nothing."""
     from flowstate.relay import tunnel
-    assert tunnel._display_name() == "Main FlowState"
-    install_name.set_name("Office laptop")
+    assert install_name.get() == "Main FlowState" and tunnel._display_name() is None
+
+    async def steps(relay):
+        import asyncio
+        await asyncio.sleep(0.4)               # several pings
+    relay = _run_agent(tmp_path, tunnel._display_name, steps)
+    assert "name" in relay.hellos[0] and relay.hellos[0]["name"] is None
+    assert relay.names == []
+    assert "Main FlowState" not in json.dumps(relay.hellos)
+
+
+def test_a_set_name_is_sent_and_reset_clears_it(tmp_path, cfg, seeded_db):
+    """(task 45) Set: sent (hello, then a rename); `flowstate name --reset`: a null "name"
+    message, which tells the relay to clear it; setting the default name is a reset too."""
+    from flowstate.relay import tunnel
+    install_name.set_name("Office laptop", seeded_db)
     assert tunnel._display_name() == "Office laptop"
+
+    async def steps(relay):
+        install_name.set_name("Home desk", seeded_db)
+        await _until(lambda: relay.names == ["Home desk"])
+        assert install_name.cli(None, True, seeded_db, say=lambda *_: None) == 0   # --reset
+        await _until(lambda: len(relay.names) == 2)
+        install_name.set_name("Desk", seeded_db)
+        await _until(lambda: len(relay.names) == 3)
+        install_name.set_name("Main FlowState", seeded_db)
+        await _until(lambda: len(relay.names) == 4)
+    relay = _run_agent(tmp_path, tunnel._display_name, steps)
+    assert relay.hellos[0]["name"] == "Office laptop"
+    assert relay.names == ["Home desk", None, "Desk", None]
+    assert "Main FlowState" not in json.dumps(relay.hellos + relay.names)
+
+
+def test_reset_while_down_clears_on_the_next_hello(tmp_path, cfg, seeded_db):
+    from flowstate.relay import tunnel
+    install_name.set_name("Office laptop", seeded_db)
+    install_name.set_name(None, seeded_db)
+
+    async def steps(relay):
+        pass
+    relay = _run_agent(tmp_path, tunnel._display_name, steps)
+    assert relay.hellos[0]["name"] is None
+
+
+def test_unreadable_config_leaves_the_relay_copy(tmp_path):
+    """A name source that fails sends no "name" key at all (the relay keeps what it has)."""
+    def broken():
+        raise OSError("config unreadable")
+
+    async def steps(relay):
+        import asyncio
+        await asyncio.sleep(0.3)
+    relay = _run_agent(tmp_path, broken, steps)
+    assert "name" not in relay.hellos[0] and relay.names == []
+
+
+def test_name_cli_says_what_the_relay_shows(cfg, seeded_db):
+    out = []
+    install_name.cli("Office laptop", False, seeded_db, say=out.append)
+    assert any("shows the new name" in x for x in out)
+    out.clear()
+    install_name.cli(None, True, seeded_db, say=out.append)
+    assert any("forgets the name" in x and "your FlowState" in x for x in out)
+
+
+def test_settings_row_says_shared_only_once_set(page):
+    p, c, db = page
+    sec = login(p, c)[1].split("<h2>Settings</h2>", 1)[1]
+    assert "shared with flowstatemcp.com only once you set one" in sec
+    assert "the default is never sent" in sec and "clears it there too" in sec
 
 
 # ---------------------------------------------------------------- never through a tool

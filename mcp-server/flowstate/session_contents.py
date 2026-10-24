@@ -25,10 +25,10 @@ import sqlite3
 from typing import Optional
 
 MAX_SHOWN = 10        # entries shown before "N more"
+PHONE_MAX = 100       # entries the phone pages get in their data (the rest: the computer's page)
 EXCERPT = 200         # characters of a record's text
 TITLE = 120
 MAX_REFS = 200        # stored per summary (ids only)
-NAMED = 5             # records named in the summary line itself
 
 # Writes that save no new work (autosession.HOUSEKEEPING, by tool / tool+action).
 _SKIP_TOOLS = {"history", "review_approve", "review_reject", "resolve_review_card",
@@ -270,19 +270,6 @@ def head(e: dict) -> str:
     return words
 
 
-def short_names(entries: list) -> str:
-    """For the summary line: 'change #12 "Fix login redirect"; problem #3 "Login loop" (solved)'."""
-    bits = []
-    for e in entries:
-        if e["gone"]:
-            continue
-        b = f'{e["kind_label"]} #{e["id"]} "{_cut(e["title"], 50)}"'
-        if e["verb"] not in ("saved", "queued"):
-            b += f" ({e['verb']})"
-        bits.append(b)
-    return "; ".join(bits)
-
-
 def lines(c: Optional[dict], limit: int = MAX_SHOWN) -> list:
     """Plain text, one or two lines per record, at most `limit` records, then "N more"."""
     if not c:
@@ -316,13 +303,17 @@ def when_line(c: Optional[dict], local=None) -> str:
     return f"Session {span}" + (f", by {who}" if who else "") + f", in {c['project']}."
 
 
-def public(c: Optional[dict], limit: int = MAX_SHOWN) -> Optional[dict]:
-    """The JSON form for the phone, approve page and chat card: the first `limit` entries."""
+def public(c: Optional[dict], limit: int = MAX_SHOWN, send: Optional[int] = None) -> Optional[dict]:
+    """The JSON form for the phone, approve page and chat card: `shown` (the first `limit`)
+    entries show at once; `send` (default `limit`) of them are in the data, so a page can open
+    the rest in place (the phone pages: PHONE_MAX); `more` counts those not sent at all."""
     if not c:
         return None
+    send = max(limit, send or limit)
     keys = ("kind", "kind_label", "id", "verb", "title", "excerpt", "component", "solution", "gone")
-    return {"entries": [{k: e[k] for k in keys} | {"head": head(e)} for e in c["entries"][:limit]],
-            "total": c["total"], "more": max(0, c["total"] - limit), "source": c["source"],
+    return {"entries": [{k: e[k] for k in keys} | {"head": head(e)} for e in c["entries"][:send]],
+            "shown": limit, "total": c["total"], "more": max(0, c["total"] - send),
+            "source": c["source"],
             "started_utc": c["started_utc"], "ended_utc": c["ended_utc"], "app": c["app"],
             "machine": c["machine"], "project": c["project"],
             "note": "" if c["entries"] else NONE_NOTE}

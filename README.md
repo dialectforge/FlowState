@@ -482,7 +482,7 @@ the venv active). Add `-h` to any command for its options.
 | `migrate [--dry-run]` | Apply new database migrations (backup first) |
 | `update --dry-run` / `update` / `update --rollback` | Update to the newest signed release (dry run first; asks for `y`; rolls back on any failure). See "Upgrading" |
 | `update check` / `update check on\|off\|now` | The daily update check: show the last result, turn it on or off, or check now |
-| `name` / `name "New name"` / `name --reset` | This FlowState's display name ("Main FlowState" until you change it): shown on its review pages and, with the relay, on flowstatemcp.com ("Open what's waiting for you on Main FlowState?"). Only a label; the relay address stays the same |
+| `name` / `name "New name"` / `name --reset` | This FlowState's display name ("Main FlowState" until you change it): shown on its review pages and, once you set one, with the relay on flowstatemcp.com ("Open what's waiting for you on Office laptop?"; the default is never sent, and `--reset` clears it there). Only a label; the relay address stays the same |
 | `update self-update` / `update self-update on\|off` | May `flowstate update` update this computer? Show the value and where it comes from (`config.json`, the `.flowstate-no-self-update` file, or the default), or change it (`off`: you update by hand) |
 | `cleanup --project NAME [--queue]` | Clean-up suggestions (printed; `--queue` sends them to the review queue) |
 | `export-md --project NAME --out FILE` / `import-md --project NAME FILE` | Readable markdown copy; edits come back through the review queue |

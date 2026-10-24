@@ -17,10 +17,14 @@
   has checked out, the phone list ("Waiting for you on Office laptop (3)") and the phone approve
   page. Never in a URL: every link still uses the handle. No MCP tool reads or writes it, and
   the brief doesn't carry it.
-- With the relay, the agent sends the name to the relay in its signed-in hello (and again when
-  you rename it while `flowstate relay run` is running, within a heartbeat), so flowstatemcp.com
-  can say "Open what's waiting for you on Office laptop?" instead of the handle. A relay or site
-  that doesn't know the name ignores it and nothing else changes (docs/relay-protocol.md 3.1).
+- With the relay, the name is shared only once you set one. The agent then sends it in its
+  signed-in hello (and again when you rename it while `flowstate relay run` is running, within a
+  heartbeat), so flowstatemcp.com can say "Open what's waiting for you on Office laptop?"
+  instead of the handle. The default "Main FlowState" is never sent: without a name of your own
+  the agent sends an empty (null) name and the site says "your FlowState". `flowstate name
+  --reset` (or the page's "Back to" button) clears it on the relay too, also if the agent was
+  stopped at the time (its next hello clears it). A relay or site that doesn't know the name
+  ignores it and nothing else changes (docs/relay-protocol.md 3.1). The Settings row says so.
 - **Session summaries show what the session saved.** A summary waiting for review used to say
   only "saved 1 change; also problem solved", so Keep / Don't keep was a blind choice. Now every
   place that shows one (the local review page, the tunnel review page, the phone list, the
@@ -29,10 +33,15 @@
   the component, and for a solved problem the solution. It also shows the app and the session's
   start and end time: in the reader's own time on the phone and the card, in this computer's
   local time on the local page, and in UTC, labelled, on the tunnel page. Past 10 records the
-  rest are counted ("3 more"); the local and tunnel pages open them in place.
-- The summary line itself (what lists and the review queue show) now names up to five records,
-  e.g. `Records: change #12 "Sign-in keeps the page you were on"; problem #3 "Users loop back to
-  the sign-in page" (saved, solved).`
+  local and tunnel pages open the rest in place; the phone list and the phone approve page have
+  a "Show N more" button that opens them in place too (they are already in the page, so no
+  request is made; up to 100 records, past that the page points to the review page on your
+  computer, which it also mentions). The in-chat card counts the rest ("3 more").
+- The summary line itself stays the short one ("claude-code session in Alpha: saved 1 change
+  and 1 problem; also problem solved."): it is what Keep saves as the session's record, and the
+  review page's edit box still lets you change it first. The record list is a separate section
+  shown beside it everywhere, also in `manage_review(action="list", item_id=...)`
+  (`saved_records`) and in the confirmation `flowstate approve <id>` prints.
 - New summaries store the ids of what was saved (from the run ledger, ids only, never the text)
   with their review item; the text is read from the records when shown, so an edited record
   shows as it is now and a deleted one says "no longer in FlowState". Summaries queued before

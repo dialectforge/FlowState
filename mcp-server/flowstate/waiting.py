@@ -387,6 +387,12 @@ def _one_item(db_path: Path, item_id, pid: Optional[int], named) -> dict:
         it["details"] = got["details"]
         if got.get("ai_note"):
             it["ai_note"] = got["ai_note"]
+    elif it.get("kind") == "session_summary":   # the short line, and beside it what it saved
+        from . import session_contents
+        c = session_contents.for_item(db_path, it)
+        saved = [x for x in [session_contents.when_line(c)] if x] + session_contents.lines(c)
+        if saved:
+            it["saved_records"] = saved
     elif it.get("kind") == "disagreement":
         packed = _safe_card(db_path, it)
         if packed:

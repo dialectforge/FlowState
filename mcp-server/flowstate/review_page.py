@@ -720,13 +720,16 @@ class Page:
                   + "</div></form>") if edit else ""
         out.append(self._row(
             "Name of this FlowState",
-            "The name you see for this FlowState on its pages and, with the relay, on "
-            "flowstatemcp.com (\"Open what's waiting for you on ...\"). Only a label: your relay "
-            "address stays the same. 1 to 40 characters, plain text.",
+            "The name you see for this FlowState on its pages. With the relay, it is shared with "
+            "flowstatemcp.com only once you set one (\"Open what's waiting for you on ...\"); "
+            "until then, and after going back to the default, the site just says \"your "
+            "FlowState\". Only a label: your relay address stays the same. 1 to 40 characters, "
+            "plain text.",
             f"<b>{_e(name)}</b>" + (" (the default)." if install_name.is_default() else "."), rename,
             "In a terminal: <code>flowstate name \"New name\"</code>, or <code>flowstate name "
-            "--reset</code>. With the relay, the name is sent to it (on its signed-in connection) "
-            "so the site can show it to you."))
+            "--reset</code>. With the relay, a name you set is sent to it (on its signed-in "
+            "connection) so the site can show it to you; the default is never sent, and "
+            "<code>--reset</code> clears it there too."))
         # -- review
         out.append("<h3 class='group'>Review</h3>")
         m = review_mode.get(db, None)

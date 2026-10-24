@@ -6,9 +6,10 @@
 
 Kept in config.json as "display_name" (absent = the default). It is only a label: the relay
 handle stays the address, the routing and the sign-in. Shown on FlowState's own pages (the
-local and tunnel review pages, the phone list and approve pages) and sent to the relay in the
-agent's authenticated hello, so flowstatemcp.com can say "Open what's waiting for you on
-<name>?" instead of the handle. Never in a URL.
+local and tunnel review pages, the phone list and approve pages). Sent to the relay (in the
+agent's authenticated hello) only once the user has set one (shared()), so flowstatemcp.com can
+say "Open what's waiting for you on <name>?" instead of the handle; without one, or after
+`--reset`, the agent sends null and the site clears it and says "your FlowState". Never in a URL.
 
 A valid name: trimmed (inner runs of spaces become one), 1-40 characters, plain text with no
 control or format characters (no newlines, tabs, zero-width or direction marks). Every page
@@ -70,6 +71,13 @@ def is_default() -> bool:
         return True
 
 
+def shared() -> Optional[str]:
+    """The name to send to the relay: the one the user set, else None (the default
+    "Main FlowState" is never sent). Raises if config.json can't be read (the caller then
+    leaves the relay's copy as it is)."""
+    return valid(paths.load_config().get(KEY))
+
+
 def set_name(raw: Optional[str], db_path: Optional[Path] = None, who: str = "command-line",
              how: Optional[str] = None) -> dict:
     """Set the name (`raw` None: back to the default, the key removed) and log one
@@ -117,8 +125,12 @@ def cli(value: Optional[str], reset: bool, db_path: Optional[Path], say=print) -
         else:
             say(f"This FlowState is now called \"{res['now']}\" (was \"{res['old']}\"; saved in "
                 f"{res['path']}).")
-            say("With the relay, flowstatemcp.com shows the new name once `flowstate relay run` "
-                "has sent it (within a minute while it runs).")
+            if reset or res["now"] == DEFAULT:
+                say("With the relay, flowstatemcp.com forgets the name once `flowstate relay run` "
+                    "has told it (within a minute while it runs) and says \"your FlowState\".")
+            else:
+                say("With the relay, flowstatemcp.com shows the new name once `flowstate relay "
+                    "run` has sent it (within a minute while it runs).")
         return 0
     name = get()
     say(f"This FlowState is called \"{name}\"" + (" (the default)." if is_default() else "."))

@@ -90,7 +90,7 @@ def _one_line(text, n: int = 100) -> str:
     return t if len(t) <= n else t[: n - 3] + "..."
 
 
-def _describe(item: dict, project: str) -> list:
+def _describe(item: dict, project: str, db: Path = None) -> list:
     lines = [f"Review item #{item['id']} ({item['kind']}) in {project}, queued by "
              f"{item.get('app') or item.get('source') or 'unknown'}"
              + (f" on {item['machine']}" if item.get("machine") else "") + ":",
@@ -100,6 +100,10 @@ def _describe(item: dict, project: str) -> list:
     if item["kind"] == "delete":
         p = json.loads(item.get("payload") or "{}")
         lines.append(f"  deletes: {p.get('record_type')} {p.get('project_name') or ''}".rstrip())
+    if item["kind"] == "session_summary" and db is not None:   # what Keep would keep
+        from . import session_contents
+        c = session_contents.for_item(db, {**item, "project": project})
+        lines.extend("  " + x for x in [session_contents.when_line(c)] + session_contents.lines(c) if x)
     return lines
 
 
@@ -160,7 +164,7 @@ def _decide(a, approve: bool) -> int:
         if not items:
             return 1
         for item in items:
-            for line in _describe(item, _project_name(db, item["project_id"])):
+            for line in _describe(item, _project_name(db, item["project_id"]), db):
                 tty.tell(line)
         which = f"#{items[0]['id']}" if len(items) == 1 else f"these {len(items)} items"
         if tty.ask(f"{verb.capitalize()} {which}? Type y to confirm: ").lower() not in ("y", "yes"):

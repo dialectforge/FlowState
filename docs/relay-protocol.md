@@ -199,10 +199,14 @@ The relay MUST check that `token` is valid and belongs to `handle`. One control 
 handle: when a new one is welcomed, the relay SHOULD send `{"type": "goaway"}` on the old one
 and close it.
 
-From FlowState 2.4.4 the hello also carries `"name": "<display name>"`: the name the user gave
-this FlowState (`flowstate name`, "Main FlowState" by default; 1-40 characters of plain text, no
-control or format characters). When the user renames it while the agent is connected, the agent
-sends `{"type": "name", "name": "<new name>"}` on the control connection before its next `ping`.
+From FlowState 2.4.4 the hello also carries `"name"`: the name the user gave this FlowState
+(`flowstate name`; 1-40 characters of plain text, no control or format characters), or `null`
+when the user has not set one or went back to the default with `flowstate name --reset` (the
+local default, "Main FlowState", is never sent). When the user renames or resets it while the
+agent is connected, the agent sends `{"type": "name", "name": "<new name>"}` (or `"name": null`)
+on the control connection before its next `ping`. `null` means "no name": the relay clears the
+one it kept and the site shows its own wording. A hello without the key (older agents) leaves
+the kept name as it is.
 It is only a label for the owner's own pages on flowstatemcp.com; the handle stays the address,
 the routing and the sign-in. A relay that keeps it MUST take it only from a control connection
 whose token checked out, MUST apply the same checks (ignoring anything else), and SHOULD NOT
