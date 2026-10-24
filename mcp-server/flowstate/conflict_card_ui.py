@@ -5,6 +5,9 @@ show_conflict_card is called (that tool's definition names it), runs the ui/init
 handshake, and passes the result's structuredContent ({cards: [...]}) in
 ui/notifications/tool-result. Buttons call resolve_conflict_card with tools/call through the
 host. Nothing is loaded from the network, and memory text is written with textContent.
+
+The page frame (styles, the host handshake, size and theme reports) is shared with the
+review card (review_card_ui.py) through document(): each card adds only its own drawing.
 """
 
 UI_URI = "ui://flowstate/conflict-card.html"
@@ -12,17 +15,8 @@ MIME = "text/html;profile=mcp-app"
 UI_META = {"ui": {"csp": {"connectDomains": [], "resourceDomains": [], "frameDomains": []},
                   "prefersBorder": True}}
 
-# No external URL, no ui/message (that would send chat text to the model), no
-# window.openai. The host's default CSP is already default-src 'none'; the meta
-# above names no extra domains.
-CARD_HTML = r"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Disagreement</title>
-<style>
-:root{--bg:#fbfaf7;--card:#fff;--ink:#1c1d1f;--muted:#62656b;--line:#e7e4dd;--accent:#1f5f5b;
+# Shared by both cards: colours (light and dark), fonts, buttons, notes.
+BASE_CSS = r""":root{--bg:#fbfaf7;--card:#fff;--ink:#1c1d1f;--muted:#62656b;--line:#e7e4dd;--accent:#1f5f5b;
 --err:#8a2d22;--sans:ui-sans-serif,-apple-system,"Segoe UI",Inter,Roboto,Arial,sans-serif;
 --serif:ui-serif,Georgia,"Times New Roman",serif;color-scheme:light}
 :root[data-theme="dark"]{--bg:#1f1f1e;--card:#2a2a28;--ink:#ecebe7;--muted:#a8a7a1;--line:#3a3a37;
@@ -32,13 +26,6 @@ html,body{margin:0;background:var(--bg);color:var(--ink)}
 body{font:16px/1.5 var(--sans);padding:14px 14px 16px}
 .card+.card{margin-top:22px;padding-top:18px;border-top:1px solid var(--line)}
 h1{font-family:var(--serif);font-weight:500;font-size:21px;line-height:1.25;margin:0 0 12px}
-.sides{display:flex;flex-direction:column;gap:10px}
-.side{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--card)}
-.mark{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin:0 0 4px}
-.who{color:var(--muted);font-size:14px;margin:0 0 8px}
-.claim{margin:0 0 8px;overflow-wrap:anywhere}
-.ev{margin:0;color:var(--muted);font-size:14px;overflow-wrap:anywhere}
-.ev b{font-weight:600;color:var(--ink)}
 .actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}
 button{min-height:44px;font:inherit;font-weight:500;padding:10px 18px;
 border-radius:999px;border:0;cursor:pointer;background:var(--ink);color:var(--bg)}
@@ -46,15 +33,21 @@ button.ghost{background:var(--card);color:var(--ink);border:1px solid var(--line
 button:disabled{opacity:.5;cursor:default}
 .done{color:var(--accent);margin:12px 0 0}
 .err{color:var(--err);margin:12px 0 0}
-.quiet{color:var(--muted);margin:0}
-@media (min-width:640px){.sides{flex-direction:row;align-items:stretch}.side{flex:1}}
-</style>
-</head>
-<body>
-<div id="cards"><p class="quiet">Loading the disagreement…</p></div>
-<p id="more" class="quiet" hidden></p>
-<script>
-(function () {
+.quiet{color:var(--muted);margin:0}"""
+
+CONFLICT_CSS = r""".sides{display:flex;flex-direction:column;gap:10px}
+.side{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--card)}
+.mark{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin:0 0 4px}
+.who{color:var(--muted);font-size:14px;margin:0 0 8px}
+.claim{margin:0 0 8px;overflow-wrap:anywhere}
+.ev{margin:0;color:var(--muted);font-size:14px;overflow-wrap:anywhere}
+.ev b{font-weight:600;color:var(--ink)}
+@media (min-width:640px){.sides{flex-direction:row;align-items:stretch}.side{flex:1}}"""
+
+# The host bridge: JSON-RPC over postMessage to the host only, ui/initialize (id 1), size and
+# theme. Each card's script defines render(data), called with the tool result's
+# structuredContent, and uses request("tools/call", ...) for its buttons.
+BRIDGE_TOP = r"""(function () {
   "use strict";
   var INIT_ID = 1;
   var seq = INIT_ID;   // later requests use 2, 3, ...: id 1 is ui/initialize's answer
@@ -104,8 +97,59 @@ button:disabled{opacity:.5;cursor:default}
       document.documentElement.style.overflowY = "auto";
     }
   }
+"""
 
-  // ---- drawing
+BRIDGE_BOTTOM = r"""
+  // ---- messages from the host
+  window.addEventListener("message", function (ev) {
+    if (ev.source !== window.parent) { return; }   // only the host talks to the card
+    var msg = ev.data;
+    if (!msg || msg.jsonrpc !== "2.0") { return; }
+    if (msg.method && msg.id != null) {            // a request from the host
+      if (msg.method === "ping" || msg.method === "ui/resource-teardown") { reply(msg.id, {}); }
+      else { post({jsonrpc: "2.0", id: msg.id, error: {code: -32601, message: "Method not found"}}); }
+      return;
+    }
+    if (msg.method) {                              // a notification
+      var p = msg.params || {};
+      if (msg.method === "ui/notifications/tool-result") {
+        if (p.isError) {
+          render({note: (p.content && p.content[0] && p.content[0].text) || "FlowState could not load the card."});
+        } else {
+          render(p.structuredContent);
+        }
+      } else if (msg.method === "ui/notifications/tool-cancelled") {
+        render({note: "Cancelled. Nothing was decided."});
+      } else if (msg.method === "ui/notifications/host-context-changed") {
+        applyContext(p);
+        reportSize();
+      }
+      return;
+    }
+    if (msg.id === INIT_ID) {                       // answer to ui/initialize
+      if (msg.result) { applyContext(msg.result.hostContext); }
+      ready = true;
+      notify("ui/notifications/initialized");
+      reportSize();
+      return;
+    }
+    var done = waiting[msg.id];
+    if (done) {
+      delete waiting[msg.id];
+      done(msg.error || null, msg.result);
+    }
+  });
+  if (window.ResizeObserver) {
+    new ResizeObserver(reportSize).observe(document.documentElement);
+  }
+  post({jsonrpc: "2.0", id: INIT_ID, method: "ui/initialize", params: {
+    protocolVersion: "2026-01-26",
+    appInfo: {name: "__APP__", version: "1.1.0"},
+    appCapabilities: {availableDisplayModes: ["inline"]}
+  }});
+})();"""
+
+CONFLICT_JS = r"""  // ---- drawing
   function evidenceLine(ev) {
     var line = el("p", "ev");
     line.appendChild(el("b", "", "Evidence: "));
@@ -192,57 +236,21 @@ button:disabled{opacity:.5;cursor:default}
       }
       reportSize();
     });
-  }
+  }"""
 
-  // ---- messages from the host
-  window.addEventListener("message", function (ev) {
-    if (ev.source !== window.parent) { return; }   // only the host talks to the card
-    var msg = ev.data;
-    if (!msg || msg.jsonrpc !== "2.0") { return; }
-    if (msg.method && msg.id != null) {            // a request from the host
-      if (msg.method === "ping" || msg.method === "ui/resource-teardown") { reply(msg.id, {}); }
-      else { post({jsonrpc: "2.0", id: msg.id, error: {code: -32601, message: "Method not found"}}); }
-      return;
-    }
-    if (msg.method) {                              // a notification
-      var p = msg.params || {};
-      if (msg.method === "ui/notifications/tool-result") {
-        if (p.isError) {
-          render({note: (p.content && p.content[0] && p.content[0].text) || "FlowState could not load the card."});
-        } else {
-          render(p.structuredContent);
-        }
-      } else if (msg.method === "ui/notifications/tool-cancelled") {
-        render({note: "Cancelled. Nothing was decided."});
-      } else if (msg.method === "ui/notifications/host-context-changed") {
-        applyContext(p);
-        reportSize();
-      }
-      return;
-    }
-    if (msg.id === INIT_ID) {                       // answer to ui/initialize
-      if (msg.result) { applyContext(msg.result.hostContext); }
-      ready = true;
-      notify("ui/notifications/initialized");
-      reportSize();
-      return;
-    }
-    var done = waiting[msg.id];
-    if (done) {
-      delete waiting[msg.id];
-      done(msg.error || null, msg.result);
-    }
-  });
-  if (window.ResizeObserver) {
-    new ResizeObserver(reportSize).observe(document.documentElement);
-  }
-  post({jsonrpc: "2.0", id: INIT_ID, method: "ui/initialize", params: {
-    protocolVersion: "2026-01-26",
-    appInfo: {name: "flowstate-conflict-card", version: "1.1.0"},
-    appCapabilities: {availableDisplayModes: ["inline"]}
-  }});
-})();
-</script>
-</body>
-</html>
-"""
+
+def document(title: str, loading: str, css: str, js: str, app_name: str) -> str:
+    """One card's whole HTML page. No external URL, no ui/message (that would send chat text
+    to the model), no window.openai. The host's default CSP is already default-src 'none';
+    UI_META names no extra domains."""
+    return ("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n"
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+            f"<title>{title}</title>\n<style>\n{BASE_CSS}\n{css}\n</style>\n</head>\n<body>\n"
+            f"<div id=\"cards\"><p class=\"quiet\">{loading}</p></div>\n"
+            "<p id=\"more\" class=\"quiet\" hidden></p>\n<script>\n"
+            + BRIDGE_TOP + "\n" + js + "\n" + BRIDGE_BOTTOM.replace("__APP__", app_name)
+            + "\n</script>\n</body>\n</html>\n")
+
+
+CARD_HTML = document("Disagreement", "Loading the disagreement…", CONFLICT_CSS, CONFLICT_JS,
+                     "flowstate-conflict-card")
