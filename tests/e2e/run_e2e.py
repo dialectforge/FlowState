@@ -56,6 +56,7 @@ READ_ACTIONS = {
     "start_here": None, "search": None,
     "manage_todos": {"list", "next"}, "manage_problems": {"list", "tree"},
     "manage_review": {"list", "get_mode", "walk"},   # walk: decisions are the user's, in boxes
+    "show_review_card": None,                        # MCP Apps hosts only (s15_review_card)
     "manage_handoffs": {"list"},
     "manage_rules": {"list"}, "manage_links": {"list"}, "manage_history": {"list", "who"},
     "manage_projects": {"list", "list_components"}, "manage_memory": {"stale"},
@@ -2174,6 +2175,57 @@ def s15_without_terminal(W):
                                     "AND decided_by != 'review-page'") == 0)
 
 
+def s15_review_card(W):
+    """An app that advertises MCP Apps (a real initialize, not a stub) gets the review card's
+    tools; a tap is saved through the same approve / reject and logged with path card."""
+    print("\n== S15 review cards (MCP Apps)", flush=True)
+    from fsclient import StdioClient
+    ui = {"extensions": {"io.modelcontextprotocol/ui": {"mimeTypes": ["text/html;profile=mcp-app"]}}}
+    c = StdioClient(W.env, "claude-ai", capabilities=ui, log_path=W.logs / "cards.log")
+    W.started.append(c.proc)
+    host, plain = Agent("cards", c), W.agents["cursor"]
+    try:
+        Q = "Corner Cafe e2e-15"
+        names = {t["name"] for t in c.tools()}
+        R.check(15, "an MCP Apps host lists show_review_card and resolve_review_card; others don't",
+                {"show_review_card", "resolve_review_card"} <= names
+                and not {"show_review_card", "resolve_review_card"} & {t["name"] for t in plain.c.tools()},
+                sorted(names))
+        a = plain.call("log_work", project=Q, kind="todo", summary="Clean the espresso machine", suggested=True)
+        b = plain.call("log_work", project=Q, kind="learning", summary="Oat milk sells out by noon",
+                       suggested=True)
+        ia, ib = a.get("queued_for_review"), b.get("queued_for_review")
+        walk = host.call("manage_review", action="walk", project=Q)
+        sc = walk.get("show_card") if isinstance(walk, dict) else None
+        R.check(15, "the walk on an MCP Apps host points at show_review_card",
+                isinstance(sc, str) and sc.startswith(f'show_review_card(project="{Q}"'), short(walk))
+        shown = host.call("show_review_card", project=Q)
+        ids = [x.get("review_item_id") for x in (shown.get("review_cards") or [])]
+        R.check(15, "show_review_card shows the waiting items oldest first and decides nothing",
+                ia in ids and ib in ids and ids.index(ia) < ids.index(ib)
+                and W.count("review_items", f"id IN ({ia}, {ib}) AND status = 'pending'") == 2, short(shown))
+        refused = host.call("resolve_review_card", item_id=ia, decision="approve", project=Q,
+                            user_request="the user said approve")
+        R.check(15, "a tap with chat text is refused", refused.get("error") == "not_a_card_tap", short(refused))
+        no_ui = plain.call("resolve_review_card", item_id=ia, decision="approve", project=Q)
+        R.check(15, "a tap from an app without MCP Apps is refused", no_ui.get("error") == "not_a_card_tap",
+                short(no_ui))
+        ok_a = host.call("resolve_review_card", item_id=ia, decision="approve", project=Q)
+        ok_b = host.call("resolve_review_card", item_id=ib, decision="reject", project=Q,
+                         reject_reason="We know that already")
+        rows = W.q("SELECT item_id, path, decision FROM approval_log WHERE item_id IN (?, ?) ORDER BY id",
+                   (ia, ib))
+        R.check(15, "Approve saves the todo, Reject keeps the reason, both logged with path card",
+                not err(ok_a) and not err(ok_b)
+                and W.count("todos", "title = 'Clean the espresso machine'") == 1
+                and W.count("review_items", f"id = {ib} AND status = 'rejected' "
+                                            "AND reject_reason = 'We know that already'") == 1
+                and [(r["path"], r["decision"]) for r in rows] == [("card", "approved"), ("card", "rejected")],
+                (short(ok_a), short(ok_b), rows))
+    finally:
+        c.close()
+
+
 def s16_tunnel_page(W):
     """A user with their own tunnel and no relay: FlowState's public listener (as run behind
     cloudflared, here on loopback with a made-up public URL) serves /review/tunnel. Only the
@@ -2348,7 +2400,8 @@ def main():
     try:
         for step in (s1_fresh, s2_day, s3_conflicts, s4_review, s5_receipts, s6_windows, s7_undo,
                      s8_backups, s9_ledger, lambda w: s10_upgrade(w, args.skip_upgrade), s11_edges,
-                     s13_approvals, s14_user_stated, s15_without_terminal, s16_tunnel_page,
+                     s13_approvals, s14_user_stated, s15_without_terminal, s15_review_card,
+                     s16_tunnel_page,
                      deferred_window,
                      s12_descriptions):
             try:
