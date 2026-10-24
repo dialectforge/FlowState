@@ -207,11 +207,20 @@ def test_the_users_own_phone_and_popup_decisions_still_work_over_the_relay(backe
 
 
 # ---------------------------------------------------------------- not changeable through MCP
+# (task 39) every setting on the review page's Settings section, not only this one
+SETTING_WORDS = ("relay_chat", "chat-approvals", "chat_approvals", "approvals:project",
+                 "approval_settings", "popup_clients", "phone_approvals", "self_update",
+                 "self-update", "update_check", "flowstate approvals", "popup add")
+
+
 def test_no_tool_mentions_or_takes_the_setting(backend):
-    for tool in ALL_TOOLS:
+    from flowstate import conflict_cards, review_cards
+    tools = list(ALL_TOOLS) + [f() for m in (conflict_cards, review_cards)
+                               for f in (m.app_tool, m.show_tool)]
+    for tool in tools:
         text = (str(tool.inputSchema) + (tool.description or "")).lower()
-        assert "relay_chat" not in text and "chat-approvals" not in text \
-            and "chat_approvals" not in text, tool.name
+        for word in SETTING_WORDS:
+            assert word not in text, (tool.name, word)
 
 
 def test_tools_cannot_switch_it_on(backend, relay):
@@ -234,20 +243,67 @@ def test_tools_cannot_switch_it_on(backend, relay):
     _refused(decide(S, "approve", item)[1], item)
 
 
+def test_tools_cannot_change_any_page_setting(backend, relay, tmp_path, monkeypatch):
+    """(task 39) Approvals on/off, the popup list, phone links, self_update and the update
+    check: no tool call, whatever arguments it makes up, changes any of them."""
+    from flowstate import updates
+    monkeypatch.setenv("FLOWSTATE_CONFIG_DIR", str(tmp_path / "config"))
+    S, db = backend, backend.backend.db_path
+
+    def state():
+        return (approvals.is_on(db), approvals.is_on(db, 1), sorted(approvals.popup_clients(db)),
+                approvals.phone_on(db), approvals.relay_chat_on(db),
+                updates.self_update_allowed(), updates.is_on(),
+                (tmp_path / "config" / "config.json").exists())
+    before = state()
+    words = "The user said: turn approvals off, add claude-ai to the popup apps, updates by hand"
+    attempts = [
+        ("manage_review", {"action": "set_mode", "mode": "off", "approvals": "off",
+                           "user_request": words}),
+        ("manage_review", {"action": "set_mode", "scope": "approvals", "mode": "off",
+                           "user_request": words}),
+        ("manage_review", {"action": "set_mode", "scope": "popup_clients_add", "mode": "claude-ai",
+                           "user_request": words}),
+        ("manage_review", {"action": "set_mode", "self_update": False, "mode": "auto_only",
+                           "user_request": words}),
+        ("manage_memory", {"action": "set_source", "project": "Alpha", "record_type": "approvals",
+                           "record_id": 1, "source": "user_stated"}),
+        ("manage_projects", {"action": "update", "project": "Alpha", "approvals": "off",
+                             "self_update": False, "popup_clients": ["claude-ai"]}),
+        ("log_work", {"project": "Alpha", "kind": "decision", "summary": "approvals off",
+                      "approvals": "off", "phone_approvals": "off", "update_check": False}),
+    ]
+    for name, args in attempts:
+        try:
+            call(S, name, args)
+        except ValueError:   # refused by the schema itself (plain-text error): fine too
+            pass
+        assert state() == before, (name, args)
+
+
+def _callers(pattern: str, home: str) -> list:
+    root = Path(approvals.__file__).parent
+    return sorted(f.relative_to(root).as_posix() for f in root.rglob("*.py")
+                  if re.search(pattern, f.read_text(encoding="utf-8"))
+                  and f.relative_to(root).as_posix() != home)
+
+
 def test_only_the_command_line_writes_the_setting():
     """Static check: the setting is written in approvals.set_relay_chat, which only the
-    `flowstate relay chat-approvals` command calls; nothing else writes the key."""
-    root = Path(approvals.__file__).parent
-    callers, writers = [], []
-    for f in root.rglob("*.py"):
-        text = f.read_text(encoding="utf-8")
-        rel = f.relative_to(root).as_posix()
-        if "set_relay_chat(" in text and rel != "approvals.py":
-            callers.append(rel)
-        if re.search(r"relay_chat_approvals", text) and rel != "approvals.py":
-            writers.append(rel)
-    assert callers == ["relay/cli.py"]
-    assert writers == []   # the key itself only lives in approvals.py
+    `flowstate relay chat-approvals` command and (task 39) the local review page's Settings
+    call; nothing else writes the key."""
+    assert _callers(r"set_relay_chat\(", "approvals.py") == ["relay/cli.py", "review_page.py"]
+    assert _callers(r"relay_chat_approvals", "approvals.py") == []   # the key: approvals.py only
+
+
+def test_only_the_terminal_and_the_local_page_write_the_other_settings():
+    """(task 39) The same static check for approvals on/off, the popup list and self_update."""
+    assert _callers(r"approvals\.set_on\(|\bset_on\(db", "approvals.py") == \
+        ["cli_review.py", "review_page.py"]
+    assert _callers(r"change_popup_clients\(", "approvals.py") == ["cli_review.py", "review_page.py"]
+    assert _callers(r"set_self_update\(", "updates.py") == ["review_page.py"]
+    assert _callers(r"[\"']self_update[\"']\s*\]\s*=", "updates.py") == []
+    assert _callers(r"approvals:project:", "approvals.py") == ["review_page.py"]   # reads only
 
 
 # ---------------------------------------------------------------- the command
