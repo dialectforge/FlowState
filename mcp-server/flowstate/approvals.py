@@ -120,6 +120,9 @@ def available(conn) -> bool:
 
 
 # ---------------------------------------------------------------- settings
+TERMINAL_WORDS = "set in the user's terminal"
+
+
 def _get(conn, key: str) -> Optional[str]:
     row = conn.execute("SELECT value FROM approval_settings WHERE key = ?", (key,)).fetchone()
     return row[0] if row else None
@@ -155,8 +158,10 @@ def on_with(conn, project_id: Optional[int] = None) -> bool:
 
 
 def set_on(db_path: Path, on: Optional[bool], project_id: Optional[int] = None,
-           who: str = "command-line") -> dict:
-    """on True/False, or None to drop a project's own setting. Logged with review-mode changes."""
+           who: str = "command-line", how: str = TERMINAL_WORDS) -> dict:
+    """on True/False, or None to drop a project's own setting. Logged with review-mode changes.
+    Only the user's terminal (cli_review.py) and the local review page (review_page.py) call
+    this; `who` / `how` say which."""
     key = "approvals" if project_id is None else f"approvals:project:{int(project_id)}"
     conn = _conn(db_path)
     try:
@@ -170,7 +175,7 @@ def set_on(db_path: Path, on: Optional[bool], project_id: Optional[int] = None,
         from . import identity
         identity.insert(conn, "review_mode_log", {
             "scope": key, "old_mode": old, "new_mode": new, "client": who[:80],
-            "caller": "command-line", "user_request": "set in the user's terminal",
+            "caller": who[:80], "user_request": how,
             "changed_at": _ts()}, who)
         conn.commit()
     finally:
@@ -210,8 +215,10 @@ def relay_chat_on(db_path: Optional[Path]) -> bool:
         conn.close()
 
 
-def set_relay_chat(db_path: Path, on: bool, who: str = "command-line") -> dict:
-    """The user's terminal only (relay/cli.py). Logged with the review-mode changes."""
+def set_relay_chat(db_path: Path, on: bool, who: str = "command-line",
+                   how: str = TERMINAL_WORDS) -> dict:
+    """The user's terminal (relay/cli.py) or the local review page (review_page.py) only.
+    Logged with the review-mode changes."""
     conn = _conn(db_path)
     try:
         if not available(conn):
@@ -224,7 +231,7 @@ def set_relay_chat(db_path: Path, on: bool, who: str = "command-line") -> dict:
         from . import identity
         identity.insert(conn, "review_mode_log", {
             "scope": RELAY_CHAT_KEY, "old_mode": old, "new_mode": new, "client": who[:80],
-            "caller": "command-line", "user_request": "set in the user's terminal",
+            "caller": who[:80], "user_request": how,
             "changed_at": _ts()}, who)
         conn.commit()
     finally:
@@ -258,7 +265,7 @@ def popup_clients(db_path: Optional[Path]) -> set:
     return (names | {str(n).lower() for n in add}) - {str(n).lower() for n in drop}
 
 
-def change_popup_clients(db_path: Path, name: str, add: bool) -> set:
+def change_popup_clients(db_path: Path, name: str, add: bool, who: str = "command-line") -> set:
     name = (name or "").strip().lower()
     if not name:
         raise ApprovalError("name_required", "Give the app's name as it connects (clientInfo name).")
@@ -269,7 +276,7 @@ def change_popup_clients(db_path: Path, name: str, add: bool) -> set:
         (lists["popup_clients_add"] if add else lists["popup_clients_remove"]).add(name)
         (lists["popup_clients_remove"] if add else lists["popup_clients_add"]).discard(name)
         for k, v in lists.items():
-            _put(conn, k, json.dumps(sorted(v)) if v else None, "command-line")
+            _put(conn, k, json.dumps(sorted(v)) if v else None, who)
         conn.commit()
     finally:
         conn.close()
@@ -344,6 +351,22 @@ def relay_handle() -> Optional[str]:
         return cfg.get("handle") if cfg.get("enabled") and store.enrolled() else None
     except Exception:  # noqa: BLE001 - no relay means no phone link, nothing more
         return None
+
+
+def relay_set_up() -> bool:
+    """Is the relay agent enrolled on this computer (switched on or not)? Without relay state
+    on disk this is one file check. The review page's relay settings are greyed out if not."""
+    try:
+        import os
+        from . import paths
+        env = os.environ.get("FLOWSTATE_RELAY_DIR")
+        root = Path(env).expanduser() if env else paths.data_root() / "relay"
+        if not (root / "relay.json").exists():
+            return False
+        from .relay.store import RelayStore
+        return bool(RelayStore().enrolled())
+    except Exception:  # noqa: BLE001 - unreadable relay state: treated as not set up
+        return False
 
 
 def phone_link(db_path: Path, item_id: int) -> Optional[str]:

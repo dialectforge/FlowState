@@ -75,6 +75,17 @@ def self_update_allowed() -> bool:
         return True
 
 
+def set_self_update(allowed: bool) -> Path:
+    """config.json "self_update": allowed -> the key is removed (the default), else false. Only
+    the local review page (review_page.py) calls this; no MCP tool reads or writes it."""
+    cfg = paths.load_config()
+    if allowed:
+        cfg.pop("self_update", None)
+    else:
+        cfg["self_update"] = False
+    return paths.save_config(cfg)
+
+
 def has_update_command() -> bool:
     """Does the code running now have `flowstate update` (the self-updater module)?"""
     try:
