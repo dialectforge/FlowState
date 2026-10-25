@@ -22,7 +22,6 @@ from typing import Optional
 from . import dbconn
 from . import history, links, priority, review, secrets_scan
 
-_TAG_START = re.compile(r"<(?=[A-Za-z/!?])")
 MARK = re.compile(r"\s*<!--\s*fs:([a-z]+):(\d+)\s*-->\s*$")
 SECTIONS = {"todos": "todo", "problems": "problem", "decisions": "decision",
             "changes": "change", "learnings": "learning"}
@@ -44,10 +43,18 @@ def _flat(s: Optional[str]) -> str:
 
 def _out(s: Optional[str]) -> str:
     """Record text as it goes into an export: one line, with live-image / HTML / script forms
-    broken (stored.defuse), so opening the file in a markdown viewer loads nothing from an
-    address a record names (audit D20). Import treats the defused text as unchanged."""
+    broken (stored.defuse, strict: any tag or comment, ours included), so opening the file in a
+    markdown viewer loads nothing from an address a record names (audit D20, N-F11). Import
+    treats the defused text as unchanged, and undoes the defusing in an edited line (N-F29)."""
     from .stored import defuse
-    return _TAG_START.sub("‹", defuse(_flat(s)))   # any tag or comment, ours included
+    return defuse(_flat(s), strict=True)
+
+
+def _restore(original: Optional[str], edited: str) -> str:
+    """An edited export line as the person meant it: the defusing undone where they left the
+    text as it was (stored.restore)."""
+    from .stored import restore
+    return restore(_flat(original), edited)
 
 
 def export(db_path: Path, project_id: int) -> str:
@@ -57,11 +64,12 @@ def export(db_path: Path, project_id: int) -> str:
         if p is None:
             raise ValueError(f"no project with id {project_id}")
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        out = [f"# FlowState: {p['name']}", "",
+        name = _out(p["name"])   # the header too (audit N-F11)
+        out = [f"# FlowState: {name}", "",
                f"<!-- flowstate-export project={p['id']} exported={now} -->",
                "_Edit lines or add new ones under a heading, then run "
-               f"`flowstate import-md --project \"{p['name']}\" <this file>`. Changes and new lines go to "
-               "the review queue; nothing is deleted._", ""]
+               f"`flowstate import-md --project \"{name.replace('`', chr(39))}\" <this file>`. Changes "
+               "and new lines go to the review queue; nothing is deleted._", ""]
         if p["description"]:
             out += [_out(p["description"]), ""]
         out.append("## Todos")
@@ -101,8 +109,10 @@ def export(db_path: Path, project_id: int) -> str:
                 out += ["", "## Links (read-only)"]
                 for r in rows:
                     v = links._view(conn, r)
-                    to = v["to"].get("url") or f"{v['to']['label']} ({v['to']['project']})"
-                    out.append(f"- {v['from']['label']} ({v['from']['project']}) {v['link_type']} {to}")
+                    to = _out(v["to"].get("url")) or \
+                        f"{_out(v['to']['label'])} ({_out(v['to']['project'])})"
+                    out.append(f"- {_out(v['from']['label'])} ({_out(v['from']['project'])}) "
+                               f"{_out(v['link_type'])} {to}")
         return "\n".join(out) + "\n"
     finally:
         conn.close()
@@ -181,7 +191,7 @@ def import_text(db_path: Path, project_id: int, text: str, source: str = "markdo
             row = conn.execute(f"SELECT * FROM {table} WHERE id = ?", (rid,)).fetchone()
             new = {}
             if _flat(it["text"]) not in (_flat(row[col]), _out(row[col])):
-                new[col] = it["text"][:500]
+                new[col] = _restore(row[col], _flat(it["text"]))[:500]
             if rkind == "todo" and it["done"] is not None:
                 is_done = row["status"] == "done"
                 if it["done"] != is_done:

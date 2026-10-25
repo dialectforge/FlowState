@@ -8,9 +8,20 @@ from typing import Optional
 from datetime import datetime
 from .utils import get_db, data_dir
 
+def _inside(base: Path, path: Path) -> Path:
+    """`path` when it stays inside `base` (links resolved), else ValueError (audit N-F25: a
+    project named `../../x`, or a link under projects/, must not lead outside the data folder)."""
+    base_r, path_r = base.resolve(), path.resolve()
+    if path_r != base_r and base_r not in path_r.parents:
+        raise ValueError("That path would lead outside FlowState's projects folder; refused.")
+    return path
+
+
 def _get_project_bundle_path(project_name: str) -> Path:
-    """Get the path to a project's bundle directory."""
-    return data_dir() / "projects" / f"{project_name.lower().replace(' ', '-')}.flowstate"
+    """Get the path to a project's bundle directory (always inside data_dir()/projects)."""
+    base = data_dir() / "projects"
+    slug = project_name.lower().replace(' ', '-').replace("\0", "")
+    return _inside(base, base / f"{slug}.flowstate")
 
 
 def _compute_file_hash(file_path: Path) -> str:
@@ -79,9 +90,10 @@ def attach_file(
     # Determine storage path
     if copy_to_bundle:
         bundle_path = _get_project_bundle_path(project.name)
-        attachments_dir = bundle_path / "attachments"
+        attachments_dir = _inside(bundle_path.parent, bundle_path / "attachments")
         attachments_dir.mkdir(parents=True, exist_ok=True)
-        
+        _inside(data_dir() / "projects", attachments_dir)   # (a link made meanwhile)
+
         # Copy file to bundle
         dest_path = attachments_dir / file_name
         # Handle name collision
@@ -194,7 +206,7 @@ def remove_attachment(
             project = db.get_project(attachment['project_id'])
             if project:
                 bundle_path = _get_project_bundle_path(project.name)
-                file_path = bundle_path / attachment['file_path']
+                file_path = _inside(bundle_path, bundle_path / attachment['file_path'])
                 if file_path.exists():
                     os.remove(file_path)
         
@@ -227,7 +239,8 @@ _CODE_TYPES = _TEXT_TYPES - {"txt", "md", "markdown", "rst", "csv", "tsv", "log"
 def _file_of(row, project_name: str) -> Path:
     if row["is_external"]:
         return Path(row["file_path"])
-    return _get_project_bundle_path(project_name) / row["file_path"]
+    bundle = _get_project_bundle_path(project_name)
+    return _inside(bundle, bundle / row["file_path"])
 
 
 def _read_text(path: Path, file_type: str) -> Optional[str]:
@@ -267,7 +280,10 @@ def _sections(text: str, headings: bool = False):
 
 def _index(conn, row, project_name: str) -> int:
     """Index one attachment's text (inside the caller's transaction). Returns sections."""
-    text = _read_text(_file_of(row, project_name), row["file_type"])
+    try:
+        text = _read_text(_file_of(row, project_name), row["file_type"])
+    except ValueError:   # a stored path leading outside the projects folder: never read
+        text = None
     conn.execute("DELETE FROM content_locations WHERE attachment_id = ? AND location_type = 'line' "
                  "AND related_problem_id IS NULL AND related_learning_id IS NULL", (row["id"],))
     n = 0

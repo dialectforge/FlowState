@@ -262,7 +262,7 @@ def test_replaces_and_dismissing_the_old_pair_close_the_card(backend, seeded_db)
     assert first and third   # both saved; the card closed around them
 
 
-def test_explicit_card_is_one_brief_line_without_ids(backend):
+def test_explicit_card_is_one_brief_line_with_ids_inside_the_fence(backend):
     S = backend
     a = decide(S, "Charge in USD only")["record"]["id"]
     b = decide(S, "Offer a yearly plan")["record"]["id"]
@@ -270,8 +270,10 @@ def test_explicit_card_is_one_brief_line_without_ids(backend):
                                 "topic": "API sessions", "item_id": a, "target_id": b}))
     brief = call(S, "start_here", {"project": "Alpha"})[1]
     text = brief if isinstance(brief, str) else json.dumps(brief)
-    assert "Two AIs disagree about API sessions." in text
-    assert f"D{a} vs D{b}" not in text
+    from flowstate.stored import END, START
+    line = f"Two AIs disagree about API sessions: D{a} vs D{b}."   # (N-F16: ids, fenced)
+    assert line in text and text.index(START) < text.index(line) < text.index(END)
+    assert "Possible conflicts" not in text
 
 
 def test_list_includes_the_card_and_walk_does_not_treat_it_as_yes_no(backend, seeded_db):
@@ -457,7 +459,8 @@ def test_explicit_flag_is_one_question_not_a_card_and_a_possible_conflict(backen
     assert [k for _i, k in pending(seeded_db)] == ["disagreement"]
     assert rows(seeded_db, "SELECT COUNT(*) FROM decision_conflicts")[0][0] == 0
     brief = call(S, "start_here", {"project": "Alpha"})[1]
-    assert "Two AIs disagree about API sessions." in brief and f"D{newer['record']['id']} vs" not in brief
+    assert f"Two AIs disagree about API sessions: D{older} vs D{newer['record']['id']}." in brief
+    assert "Possible conflicts" not in brief
 
 
 def test_same_component_card_absorbs_the_possible_conflict_item(backend, seeded_db):

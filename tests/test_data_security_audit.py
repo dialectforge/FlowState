@@ -115,10 +115,14 @@ def test_d1_an_older_repo_that_tracked_the_database_stops_tracking_it(data):
     _git("init", "-q", cwd=data)
     _git("add", "-A", cwd=data)
     _git("commit", "-qm", "old version committed everything", cwd=data)
+    # sync refuses (untracking it would delete it on a 2.4.3 peer, N-F14); migrate does it
     r = git_ops.git_sync("tidy")
-    assert r["success"] and "flowstate.db" in r["no_longer_tracked"]
+    assert r["success"] is False and r["step"] == "legacy" and "flowstate.db" in r["still_tracked"]
+    r = git_ops.git_migrate()
+    assert r["success"] and "flowstate.db" in r["untracked"], r
+    assert git_ops.git_sync("tidy")["success"]
     assert set(_git("ls-files", cwd=data).split()) == ALLOWED - {"README.md"}   # (no init here)
-    assert (data / "flowstate.db").exists()   # kept on disk
+    assert (data / "flowstate.db").read_text() == "secret-marker"   # kept on disk, unchanged
 
 
 def test_d1_remotes_must_be_private_github_or_the_users_unchecked_choice(data, tmp_path):

@@ -187,9 +187,11 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
         # An open possible conflict: neither side is settled. The newer one stays, tagged;
         # the older one's text is left out (one pointer per older one, which search reaches).
         disputed, against = {}, {}   # older id -> newer ids; newer id -> older ids
-        for r in conflicts.open_pairs(conn, pid):
-            disputed.setdefault(r["old_id"], []).append(r["new_id"])
-            against.setdefault(r["new_id"], []).append(r["old_id"])
+        pairs = [(r["new_id"], r["old_id"]) for r in conflicts.open_pairs(conn, pid)]
+        pairs += [p for p in conflicts.card_pairs(conn, pid) if p not in pairs]   # N-F16
+        for new_id, old_id in pairs:
+            disputed.setdefault(old_id, []).append(new_id)
+            against.setdefault(new_id, []).append(old_id)
         linked = links.brief_lines(conn, pid) if prof["linked"] else []
         alerts = links.alert_lines(conn, pid)
         conflict_line = conflicts.brief_line(conn, pid)
@@ -277,8 +279,6 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
         b.add(line)
     if conflict_line:
         b.add(conflict_line)
-    if card_line:
-        b.add(card_line)
     if card_hint:
         b.add(card_hint)
     if last:
@@ -302,8 +302,11 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
 
     tag = lambda kind, rid: provenance.tag(meta[kind].get(rid))
     from .stored import END, START
-    marked = any((todos, problems, changes, decisions, learnings)) \
+    marked = any((todos, problems, changes, decisions, learnings, card_line)) \
         and b.add("\n" + START)   # audit D6: stored text is data, not instructions
+    fence = (len(b.lines) - 1,) if marked else ()
+    if marked and card_line:   # its topic is an app's words: inside the fence (N-F16)
+        b.add(_one_line(card_line, 240))
     section("Open todos", todos, todo_total,
             lambda t: f"- [{priority.label(t['priority'])}] #{t['id']} {_one_line(t['title'], 90)}"
                       + (f" ({t['status']})" if t["status"] in ("in_progress", "blocked") else "")
@@ -343,8 +346,8 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
             lambda l: f"- [{l['category'] or 'other'}{', verified' if l['verified'] else ''}] "
                       f"{_one_line(l['insight'], 160)}" + tag("learning", l["id"]),
             prof["learnings"][1], "learning")
-    if marked:
-        b.add(END)
+    if marked and b.add(END):
+        fence += (len(b.lines) - 1,)
     footer = ("\nMore detail: manage_todos(action=list), manage_problems(action=list), "
               "search (answer=true to ask).")
     if size != "deep":
@@ -358,7 +361,8 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
                 b.add(ln)
     b.add(footer)
 
-    text = b.text()
+    from .stored import unfence   # a fake START / END in stored text can't move the fence (N-F29)
+    text = "\n".join(ln if i in fence else unfence(ln) for i, ln in enumerate(b.lines))
     if len(text) > cap:  # cannot happen by construction; belt and braces
         text = text[: cap - 16] + "\n...(truncated)"
     return text

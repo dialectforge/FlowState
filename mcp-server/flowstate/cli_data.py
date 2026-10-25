@@ -1,12 +1,12 @@
 """The user's own data commands (2.4.4, data security audit), registered by cli.py:
 
-    flowstate data-git status | init | remote URL [--unchecked] | sync [-m TEXT] | clone URL
+    flowstate data-git status | init | remote URL [--unchecked] | sync [-m TEXT] | clone URL | migrate
     flowstate erase    TYPE:ID [TYPE:ID ...] | --deleted-before DAYS   [--dry-run] [--db FILE]
     flowstate tighten  [--dry-run] [--db FILE]
     flowstate rules    list --project P | add --project P "TEXT" | remove ID   (you confirm add, remove)
 
-data-git remote / sync / clone send FlowState data off this computer (or pull a repository
-into it), so they are never tools: an AI app gets `user_only` and is told to ask you
+data-git remote / sync / clone / migrate send FlowState data off this computer (or pull a
+repository into it), so they are never tools: an AI app gets `user_only` and is told to ask you
 (audit D1). They ask for your `y` on the controlling terminal (cli_review.Terminal), never from
 piped input. erase (audit D5) does the same. tighten makes FlowState's own existing files
 owner-only (audit D9); it changes nothing else.
@@ -47,9 +47,12 @@ def _confirm(question: str, refused: str) -> int:
 # ---------------------------------------------------------------- data-git
 def _export_all(db: Path, folder: Path) -> int:
     """export/<project>-<id>.md for every project (the markdown export, defused: D20); files
-    of projects that are gone are removed. Returns the number written."""
+    of projects that are gone are removed. Returns the number written. The folder and files
+    are owner-only (audit N-F28), and nothing is written through a link (audit N-F12: the
+    caller refuses when git_ops.unsafe_entries finds one; each write also refuses one)."""
     import sqlite3
-    from . import dbconn, markdown_io
+    from . import dbconn, markdown_io, privatefs
+    from .tools import git_ops
     conn = dbconn.connect(str(db), timeout=5.0)
     try:
         rows = conn.execute("SELECT id, name FROM projects ORDER BY id").fetchall()
@@ -58,15 +61,20 @@ def _export_all(db: Path, folder: Path) -> int:
     finally:
         conn.close()
     out = folder / "export"
-    out.mkdir(exist_ok=True)
+    if out.is_symlink() or (out.exists() and not out.is_dir()):
+        raise git_ops.UnsafePath("export")
+    if out.exists():
+        privatefs.lock(out)   # an export folder an earlier version made readable by others
+    else:
+        privatefs.private_dir(out)
     keep = set()
     for pid, name in rows:
         fname = (re.sub(r"[^A-Za-z0-9._-]+", "-", str(name or "project")).strip("-.")[:60]
                  or "project") + f"-{pid}.md"
-        (out / fname).write_text(markdown_io.export(db, pid), encoding="utf-8")
+        git_ops.safe_write(out / fname, markdown_io.export(db, pid), private=True)
         keep.add(fname)
     for old in out.glob("*.md"):
-        if old.name not in keep:
+        if old.name not in keep and (old.is_file() or old.is_symlink()):
             old.unlink()
     return len(keep)
 
@@ -118,14 +126,45 @@ def _data_git(a, db: Path) -> int:
                       "the remote you set?", "syncing")
         if rc:
             return rc
-        n = _export_all(db, db.parent)
-        r = git_ops.git_sync(a.message)
-        if r.get("no_longer_tracked"):
-            say(f"Taken out of git (kept on disk): {', '.join(r['no_longer_tracked'][:10])}. "
-                f"Older commits still hold them; see the README (data-git).")
+        if (db.parent / ".git").exists():
+            # nothing is written through a link someone pushed (N-F12), and an older
+            # repository that still holds the database waits for `migrate` (N-F14)
+            refusal = (git_ops.LEGACY.format(paths=git_ops._list(legacy))
+                       if (legacy := git_ops.never_tracked_in("HEAD")) else None)
+            if not refusal and (bad := git_ops.unsafe_entries(db.parent)):
+                refusal = git_ops.UNSAFE_HERE.format(paths=git_ops._list(bad))
+            if refusal:
+                say(f"Refused: {refusal}")
+                return 1
+        try:
+            n = _export_all(db, db.parent)
+        except git_ops.UnsafePath as e:
+            say("Refused: " + git_ops.UNSAFE_HERE.format(paths=str(e)))
+            return 1
+        r = git_ops.git_sync(a.message, db_path=db)
         say(f"Exported {n} project(s). " + (("Pushed." if r.get("pushed") else r.get("message", ""))
                                              if r.get("success") else f"FAILED: {r.get('error')}"))
         return 0 if r.get("success") else 1
+    if act == "migrate":
+        legacy = git_ops.never_tracked_in("HEAD") if (db.parent / ".git").exists() else []
+        rc = _confirm("Take the database, settings and keys out of this data-git repository "
+                      "for good" + (f" ({git_ops._list(legacy, 4)})" if legacy else "") + "? "
+                      "Every other computer that syncs it must already run FlowState 2.4.4 or "
+                      "newer: on a computer still on 2.4.3 or older, its next sync deletes its "
+                      "database. A safety copy of this computer's database is made first, and "
+                      "the files stay on this disk.", "migrating data-git")
+        if rc:
+            return rc
+        r = git_ops.git_migrate(db_path=db)
+        if r.get("success"):
+            gone = r.get("untracked") or []
+            say((f"Taken out of git (kept on this disk): {git_ops._list(gone)}. " if gone else "")
+                + (r.get("message") or ("Pushed. " if r.get("pushed") else "")
+                   + "Now run `flowstate data-git sync`. Older commits still hold those files; "
+                     "see the README (data-git)."))
+            return 0
+        say(f"FAILED: {r.get('error')}")
+        return 1
     if act == "clone":
         if not a.value:
             say("Use: flowstate data-git clone URL")
@@ -135,6 +174,9 @@ def _data_git(a, db: Path) -> int:
             return rc
         r = git_ops.git_clone(a.value)
         say("Cloned." if r.get("success") else f"FAILED: {r.get('error')}")
+        if r.get("unsafe"):
+            say("Warning: it holds links or other special entries FlowState won't write through "
+                f"or sync: {git_ops._list(r['unsafe'])}. Remove them before you sync.")
         return 0 if r.get("success") else 1
     return 2
 
@@ -251,8 +293,9 @@ def _rule_remove(db: Path, rule_id) -> int:
 
 def register(sub) -> None:
     p = sub.add_parser("data-git", help="git for FlowState's data folder (the markdown export "
-                                        "and attachments only); remote / sync / clone: you confirm")
-    p.add_argument("action", choices=["status", "init", "remote", "sync", "clone"])
+                                        "and attachments only); remote / sync / clone / migrate: "
+                                        "you confirm")
+    p.add_argument("action", choices=["status", "init", "remote", "sync", "clone", "migrate"])
     p.add_argument("value", nargs="?", help="remote / clone: the git URL")
     p.add_argument("--unchecked", action="store_true",
                    help="remote: a non-GitHub remote FlowState can't check is private")

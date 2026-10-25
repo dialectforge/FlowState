@@ -749,8 +749,13 @@ def brief_line(conn, pid: int) -> Optional[str]:
         shown.append(r)
     if not shown:
         return None
+    ref = lambda t, i: f"D{i}" if t == "decision" else f"{t} #{i}"   # noqa: E731
+    r = shown[0]
+    topic = " ".join(str(r["topic"] or "").split())[:80]
     extra = f" (+{len(shown) - 1} more)" if len(shown) > 1 else ""
-    return f"Two AIs disagree about {shown[0]['topic']}{extra}."
+    # the brief puts this line inside its "records below" fence: the topic is an app's words
+    return (f"Two AIs disagree about {topic}: {ref(r['a_type'], r['a_id'])} vs "
+            f"{ref(r['b_type'], r['b_id'])}{extra}.")
 
 
 def brief_hint(conn, pid: int, project: str) -> Optional[str]:

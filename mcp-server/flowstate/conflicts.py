@@ -355,6 +355,27 @@ def open_pairs(conn, pid: int) -> list:
             ORDER BY c.new_id DESC, c.old_id DESC""", (pid,)).fetchall()
 
 
+def card_pairs(conn, pid: int) -> list:
+    """Open disagreement cards between two decisions (flagged with conflicts_with or
+    manage_links flag_conflict), as (new_id, old_id) like open_pairs: neither side replaced by
+    a supersedes link. The brief tags them the same way (audit N-F16)."""
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='conflict_cards'"
+                    ).fetchone() is None:
+        return []
+    gone = ("NOT EXISTS (SELECT 1 FROM record_links s WHERE s.to_type='decision' AND "
+            "s.to_id={} AND s.link_type='supersedes' AND s.removed_at IS NULL)")
+    has_links = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                             "AND name='record_links'").fetchone() is not None
+    rows = conn.execute(
+        f"""SELECT a_id, b_id FROM conflict_cards c WHERE project_id = ? AND status = 'open'
+            AND a_type = 'decision' AND b_type = 'decision' AND a_id != b_id
+            AND EXISTS (SELECT 1 FROM conversations WHERE id = c.a_id)
+            AND EXISTS (SELECT 1 FROM conversations WHERE id = c.b_id)
+            {('AND ' + gone.format('c.a_id') + ' AND ' + gone.format('c.b_id')) if has_links else ''}
+            ORDER BY id DESC""", (pid,)).fetchall()
+    return [(max(a, b), min(a, b)) for a, b in rows]
+
+
 def brief_line(conn, pid: int) -> Optional[str]:
     """ "Possible conflicts: D31 vs D12, ..." (open pairs, newest first, at most BRIEF_MAX),
     or None when there are none."""
