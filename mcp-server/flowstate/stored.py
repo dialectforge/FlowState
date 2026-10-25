@@ -64,11 +64,24 @@ def _edits(text: str, strict: bool, keep_fence: bool):
         for rx in (_JS, _DATA):
             for m in rx.finditer(text):
                 ins[m.end()] = ins.get(m.end(), "") + " "
-    if "&" in text and _ENTITY.search(text) and \
-            _PROBE.search(re.sub(r"[\t\n\r]", "", html.unescape(text))):
+    if "&" in text and _ENTITY.search(text) and _hidden_scheme(text):
         for m in _ENTITY.finditer(text):
             rep[m.start()] = "\uff06"
     return rep, ins
+
+
+def _hidden_scheme(text: str) -> bool:
+    """A scheme hidden with entities, also encoded twice or three times ("jav&amp;#97;script"
+    decodes to "jav&#97;script", then to "javascript": task 56, N7)."""
+    dec = text
+    for _ in range(3):
+        nxt = html.unescape(dec)
+        if _PROBE.search(re.sub(r"[\t\n\r]", "", nxt)):
+            return True
+        if nxt == dec:
+            return False
+        dec = nxt
+    return False
 
 
 def _apply(text: str, rep: dict, ins: dict):

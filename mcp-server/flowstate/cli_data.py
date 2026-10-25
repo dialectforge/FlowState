@@ -102,6 +102,9 @@ def _exported_before(listed: Path) -> set:
 def cmd_data_git(a) -> int:
     from .tools import utils
     db = _db(a)
+    # a data folder that is itself a link (to a synced drive, say) is used where it points:
+    # data-git refuses links inside the folder, not the folder you chose (task 56, N4)
+    db = db.parent.resolve() / db.name
     before = utils.data_dir
     utils.data_dir = lambda: db.parent   # this command's database, not the server default
     try:
@@ -198,10 +201,8 @@ def _data_git(a, db: Path) -> int:
         if rc:
             return rc
         r = git_ops.git_clone(a.value)
-        say("Cloned." if r.get("success") else f"FAILED: {r.get('error')}")
-        if r.get("unsafe"):
-            say("Warning: it holds links or other special entries FlowState won't write through "
-                f"or sync: {git_ops._list(r['unsafe'])}. Remove them before you sync.")
+        say("Cloned." if r.get("success") else
+            f"{'Refused' if r.get('refused') else 'FAILED'}: {r.get('error')}")
         return 0 if r.get("success") else 1
     return 2
 

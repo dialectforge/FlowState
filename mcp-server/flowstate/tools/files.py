@@ -17,6 +17,32 @@ def _inside(base: Path, path: Path) -> Path:
     return path
 
 
+def _copy_new(src: Path, dest: Path) -> None:
+    """Copy into a file that doesn't exist yet, never through a link (task 56, N6: a link
+    pointing nowhere made shutil.copy2 write wherever it pointed). Owner-only, like FlowState's
+    other files."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) \
+        | getattr(os, "O_BINARY", 0)
+    fd = os.open(str(dest), flags, 0o600)
+    try:
+        with open(src, "rb") as fin, os.fdopen(fd, "wb") as fout:
+            fd = None
+            shutil.copyfileobj(fin, fout)
+    except BaseException:
+        if fd is not None:
+            os.close(fd)
+        try:
+            dest.unlink()
+        except OSError:
+            pass
+        raise
+    try:
+        st = os.stat(src)
+        os.utime(dest, ns=(st.st_atime_ns, st.st_mtime_ns))
+    except OSError:
+        pass
+
+
 def _get_project_bundle_path(project_name: str) -> Path:
     """Get the path to a project's bundle directory (always inside data_dir()/projects)."""
     base = data_dir() / "projects"
@@ -96,14 +122,14 @@ def attach_file(
 
         # Copy file to bundle
         dest_path = attachments_dir / file_name
-        # Handle name collision
+        # Handle name collision (a link counts as taken, even one pointing nowhere)
         counter = 1
-        while dest_path.exists():
+        while os.path.lexists(dest_path):
             stem = source_path.stem
             dest_path = attachments_dir / f"{stem}_{counter}{source_path.suffix}"
             counter += 1
-        
-        shutil.copy2(source_path, dest_path)
+
+        _copy_new(source_path, dest_path)
         stored_path = str(dest_path.relative_to(bundle_path))
         is_external = False
     else:

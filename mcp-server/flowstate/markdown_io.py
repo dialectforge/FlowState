@@ -68,7 +68,9 @@ def export(db_path: Path, project_id: int) -> str:
         out = [f"# FlowState: {name}", "",
                f"<!-- flowstate-export project={p['id']} exported={now} -->",
                "_Edit lines or add new ones under a heading, then run "
-               f"`flowstate import-md --project \"{name.replace('`', chr(39))}\" <this file>`. Changes "
+               # the project's number, not its name: an AI-written name in a shell command
+               # could run something when pasted (task 56, N5)
+               f"`flowstate import-md --project {int(p['id'])} <this file>`. Changes "
                "and new lines go to the review queue; nothing is deleted._", ""]
         if p["description"]:
             out += [_out(p["description"]), ""]

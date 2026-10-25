@@ -255,8 +255,6 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
             room -= len(line) + 1
     for line in _exposure_lines():   # a remote token sent over the plain LAN (audit N-F27)
         b.add(line)
-    if project.get("description"):
-        b.add(_one_line(project["description"], 200))
     if session:
         b.add(f"Session #{session['session_id']} is open for you (opened automatically; "
               f"closes itself when idle). Log as you work: "
@@ -275,14 +273,10 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
         b.add(mode_line)
     if deleted_line:
         b.add(deleted_line)
-    for line in alerts:
-        b.add(line)
     if conflict_line:
         b.add(conflict_line)
     if card_hint:
         b.add(card_hint)
-    if last:
-        b.add(f"Last session ({(last[0]['ended_at'] or '')[:10]}): {_one_line(last[0]['summary'], 280)}")
     if stale_line:
         b.add(_one_line(stale_line, 300))
 
@@ -302,11 +296,18 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
 
     tag = lambda kind, rid: provenance.tag(meta[kind].get(rid))
     from .stored import END, START
-    marked = any((todos, problems, changes, decisions, learnings, card_line)) \
+    # Lines apps wrote (the project's description, linked-project alerts, the last session's
+    # summary) sit inside the fence with the records (task 56, N7), after the card line
+    written = ([_one_line(project["description"], 200)] if project.get("description") else []) \
+        + list(alerts) + ([f"Last session ({(last[0]['ended_at'] or '')[:10]}): "
+                           f"{_one_line(last[0]['summary'], 280)}"] if last else [])
+    marked = any((todos, problems, changes, decisions, learnings, card_line, written)) \
         and b.add("\n" + START)   # audit D6: stored text is data, not instructions
     fence = (len(b.lines) - 1,) if marked else ()
     if marked and card_line:   # its topic is an app's words: inside the fence (N-F16)
         b.add(_one_line(card_line, 240))
+    for line in written if marked else ():
+        b.add(line)
     section("Open todos", todos, todo_total,
             lambda t: f"- [{priority.label(t['priority'])}] #{t['id']} {_one_line(t['title'], 90)}"
                       + (f" ({t['status']})" if t["status"] in ("in_progress", "blocked") else "")

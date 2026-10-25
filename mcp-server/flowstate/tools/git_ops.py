@@ -197,6 +197,8 @@ def may_commit(path: str) -> bool:
     top = path.split("/", 1)[0]
     if top not in ALLOWED_TOP or (top in (".gitignore", "README.md") and path != top):
         return False
+    if name.lower() in (".gitattributes", ".gitmodules"):   # they change how git writes files
+        return False                                         # here (task 56, N6)
     return not (is_secret_file(path) or _NEVER.search(name))
 
 
@@ -834,22 +836,46 @@ def git_clone(remote_url: str, local_path: Optional[str] = None) -> dict:
     if target_path.exists() and any(target_path.iterdir()):
         return {"success": False, "error": f"Directory not empty: {target_path}"}
     
-    # Clone
-    target_path.parent.mkdir(parents=True, exist_ok=True)
+    # Clone without checking anything out, look at what it holds, then check it out
+    from .. import privatefs
+    made = not target_path.exists()
+    privatefs.private_dir(target_path.parent)
     success, stdout, stderr = _run_git_command(
-        ["clone", remote_url, str(target_path)],
+        ["clone", "--no-checkout", remote_url, str(target_path)],
         cwd=target_path.parent
     )
-    
+
     if not success:
         return {"success": False, "error": stderr}
 
     out = {"success": True, "path": str(target_path), "remote_url": remote_url}
-    # what came in: links (a later sync would refuse to write through them) and files an
-    # older FlowState committed (the next sync asks for `flowstate data-git migrate`)
-    odd = [p for m, p in tree_entries("HEAD", cwd=target_path) if m not in OK_MODES]
+    # links (they would make FlowState write elsewhere on this computer) and .gitattributes /
+    # .gitmodules are refused before anything is written (task 56, N6): nothing is checked out
+    entries = tree_entries("HEAD", cwd=target_path)
+    odd = [p for m, p in entries if m not in OK_MODES or
+           p.rsplit("/", 1)[-1].lower() in (".gitattributes", ".gitmodules")]
     if odd:
-        out["unsafe"] = odd
+        import shutil
+        shutil.rmtree(target_path / ".git", ignore_errors=True)
+        if made:
+            shutil.rmtree(target_path, ignore_errors=True)
+        return {"success": False, "refused": True, "unsafe": odd,
+                "error": "The repository holds links or git settings files FlowState won't "
+                         f"write: {_list(odd)}. Nothing was cloned; remove them from the "
+                         "repository first."}
+    if entries:
+        ok, _o, err = _run_git_command(["checkout", "-q", "-f", "HEAD"], cwd=target_path)
+        if not ok:
+            return {"success": False, "error": f"git checkout failed: {_last_line(err)}"}
+    # owner-only at once, not only after the first sync (task 56, N-F28 gap)
+    privatefs.lock(target_path)
+    for sub in ("export", "projects"):
+        d = target_path / sub
+        if d.is_dir() and not d.is_symlink():
+            privatefs.lock(d)
+            for f in d.rglob("*"):
+                if not f.is_symlink():
+                    privatefs.lock(f)
     return out
 
 
