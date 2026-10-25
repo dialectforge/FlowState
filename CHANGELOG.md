@@ -396,7 +396,8 @@ Most setups need nothing. Check these after updating:
   elsewhere (through the relay, your own tunnel, or another computer on your network) gets
   "Open the review list on your phone from the FlowState link you saved, or run `flowstate
   review-page` on your computer." instead, in the brief, the review list and walk, answers that
-  queue something, the relay's "phone only" refusal and the review card. Your
+  queue something, the relay's "phone only" refusal and the review card (`flowstate relay
+  chat-approvals` says so too). Your
   flowstatemcp.com account page shows the link to bookmark. The relay hostname no longer answers
   `/health` (anyone can list relay addresses from the certificate logs), and the daily crt.sh
   check sends a plain `flowstate` user agent. Anyone who knows your relay address can still tell
@@ -585,8 +586,9 @@ Erase
 - A short title like "fix" no longer blanks another record's session-log line. A record deleted
   together with its project can be erased (the project's delete can still be undone). A hard
   rule you removed can be erased: `flowstate erase rule:ID` (an active rule points you to
-  `flowstate rules remove`). `--deleted-before 0` includes deletes made the same second, a huge
-  number no longer crashes, and composed / decomposed accents match.
+  `flowstate rules remove`). Its summary says the rule's text was blanked. `--deleted-before 0`
+  includes deletes made the same second, a huge number no longer crashes, and composed /
+  decomposed accents match.
 
 Files and the off-site copy
 - `flowstate backup --dir DIR` makes the folder you chose owner-only like the default one, and
