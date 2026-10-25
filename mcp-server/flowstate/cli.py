@@ -76,7 +76,12 @@ def cmd_migrate(a) -> int:
 
 def cmd_backup(a) -> int:
     from .backup import BackupError, backup_now
+    from .privatefs import auto_tighten
     db = _db(a)
+    loose = auto_tighten(db)   # files an older FlowState left readable by others (N-F31)
+    if loose:
+        say(f"Made {len(loose)} of FlowState's files and folders owner-only (an older version "
+            f"had left them readable by other users of this computer).")
     try:
         r = backup_now(db, Path(a.dir) if a.dir else None, prune=not a.no_prune)
     except BackupError as e:
@@ -90,24 +95,34 @@ def cmd_backup(a) -> int:
     return 0
 
 
-def _push(db: Path, dry_run: bool) -> int:
-    from .offsite import OffsiteError, push_backup
+def _push(db: Path, dry_run: bool, replace_newer: bool = False) -> int:
+    from .offsite import OffsiteError, push_backup, remove_staging
     cfg = _offsite_cfg()
     if not cfg.get("repo"):
+        left = remove_staging()   # an old unencrypted staging copy goes even so (N-F37)
+        if left:
+            say(left)
         say("Off-site backup is not set up (flowstate offsite setup --repo OWNER/NAME).")
         return 1
     try:
         r = push_backup(db, cfg["repo"], branch=cfg.get("branch") or "flowstate-backup",
-                        dry_run=dry_run)
+                        dry_run=dry_run, replace_newer=replace_newer)
     except OffsiteError as e:
         say(f"Off-site backup REFUSED/FAILED: {e}")
         return 1
+    if r.get("staging_left"):
+        say("WARNING: " + r["staging_left"])
     if r.get("dry_run"):
         say(f"Off-site dry run: github.com/{r['repo']} is private. Nothing was pushed.")
     else:
         say(f"Off-site backup pushed to github.com/{r['repo']} branch {r['branch']} "
             f"(private; encrypted on this computer; files: {', '.join(r['files'])}).")
-        if r.get("new_key"):
+        if r.get("key_changed"):
+            say(f"WARNING: the off-site encryption key CHANGED: this copy uses key "
+                f"{r['key_id']}, the last one used {r['key_changed']}. Copies made before can "
+                f"only be read with the OLD recovery code. Save the new one now: run "
+                f"`flowstate offsite key` in your own terminal.")
+        elif r.get("new_key"):
             say("A new encryption key was made for it and kept in this computer's credential "
                 "store. Save its recovery code now: run `flowstate offsite key` in your own "
                 "terminal. Without it, a new computer can't read the off-site copy.")
@@ -118,7 +133,7 @@ def _show_recovery_code(key: bytes) -> bool:
     """The recovery code goes to the user's own terminal only, never to stdout (an AI app
     running setup for the user must not get it in its chat). False: no terminal here."""
     from .cli_review import open_terminal
-    from .offsite_crypto import recovery_code
+    from .offsite_crypto import key_id, recovery_code
     tty = open_terminal()
     if tty is None:
         return False
@@ -128,9 +143,15 @@ def _show_recovery_code(key: bytes) -> bool:
         tty.tell("  " + recovery_code(key))
     finally:
         tty.close()
-    try:   # the brief stops reminding (server._offsite_key_line)
-        paths.update_config(lambda cfg: cfg.get("offsite") is not None
-                            and cfg["offsite"].__setitem__("recovery_code_shown", True))
+    kid = key_id(key)
+
+    def shown(cfg):   # the brief stops reminding for THIS key (offsite.key_line; N-F9)
+        off = cfg.get("offsite")
+        if isinstance(off, dict):
+            off["recovery_code_key"] = off["key_in_use"] = kid
+            off.pop("recovery_code_shown", None)
+    try:
+        paths.update_config(shown)
     except Exception:  # noqa: BLE001 - only a reminder
         pass
     return True
@@ -140,7 +161,11 @@ def _decrypted(src: Path):
     """An encrypted off-site copy (.fsenc): decrypted into a private file next to the restores,
     with this computer's key or the recovery code typed in the terminal. None: refused."""
     from . import offsite_crypto as OC
-    key = OC.get_key()
+    try:
+        key = OC.get_key()
+    except OC.CryptoError as e:   # unreadable or damaged: the recovery code still works
+        say(f"(This computer's off-site key can't be used: {e})")
+        key = None
     if key is None or OC.key_id(key) != OC.file_key_id(src):
         from .cli_review import open_terminal
         tty = open_terminal()
@@ -159,10 +184,16 @@ def _decrypted(src: Path):
             return None
     out = paths.backup_dir() / "restored" / f"decrypted-{datetime.now():%Y%m%d-%H%M%S}.db"
     try:
-        OC.decrypt_file(src, out, key)
+        info = OC.decrypt_file(src, out, key)
     except OC.CryptoError as e:
         say(f"Restore REFUSED: {e}")
         return None
+    if info.get("created"):   # sealed in the encrypted header: can't be changed (N-F34)
+        made = datetime.fromtimestamp(info["created"]).strftime("%Y-%m-%d %H:%M")
+        say(f"This encrypted copy was made on {made} (this computer's time). If you expected "
+            f"a newer one, someone may have put an older copy in its place.")
+    else:
+        say("This encrypted copy is from an older FlowState and doesn't record when it was made.")
     return out
 
 
@@ -203,7 +234,11 @@ def _restore(a, src: Path) -> int:
 
 
 def cmd_offsite(a) -> int:
-    from .offsite import OffsiteError, check_repo_name, require_private
+    from .offsite import OffsiteError, check_repo_name, remove_staging, require_private
+    if a.action in ("setup", "disable"):   # an old unencrypted staging copy goes (N-F37)
+        left = remove_staging()
+        if left:
+            say("WARNING: " + left)
     if a.action == "setup":
         try:
             repo = check_repo_name(a.repo or "")
@@ -212,9 +247,14 @@ def cmd_offsite(a) -> int:
             say(f"Not set up: {e}")
             return 1
         branch = a.branch or "flowstate-backup"
+        keep = ("pushed_key", "key_in_use", "recovery_code_key", "last_push_utc")   # which key's code was seen
+
+        def setup(cfg):
+            old = cfg.get("offsite") if isinstance(cfg.get("offsite"), dict) else {}
+            cfg["offsite"] = {"repo": repo, "branch": branch,
+                              **{k: old[k] for k in keep if old.get(k)}}
         try:
-            p = paths.update_config(lambda cfg: cfg.__setitem__(
-                "offsite", {"repo": repo, "branch": branch}))
+            p = paths.update_config(setup)
         except (paths.ConfigUnreadable, TimeoutError) as e:
             say(f"Not set up: {e}")
             return 1
@@ -224,7 +264,10 @@ def cmd_offsite(a) -> int:
         from .offsite_crypto import CryptoError, get_or_create_key
         try:
             key, made = get_or_create_key()
-        except (CryptoError, Exception) as e:  # noqa: BLE001 - the push makes it later
+        except CryptoError as e:   # unreadable / damaged: never replaced (N-F6)
+            say(f"The encryption key isn't ready: {e}")
+            return 0
+        except Exception as e:  # noqa: BLE001 - the push makes it later
             say(f"(The encryption key will be made at the first push: {type(e).__name__}.)")
             return 0
         if not _show_recovery_code(key):
@@ -232,8 +275,12 @@ def cmd_offsite(a) -> int:
                 "yourself in a terminal window and save it.")
         return 0
     if a.action == "key":
-        from .offsite_crypto import get_key
-        key = get_key()
+        from .offsite_crypto import CryptoError, get_key
+        try:
+            key = get_key()
+        except CryptoError as e:
+            say(f"Can't show the recovery code: {e}")
+            return 1
         if key is None:
             say("No off-site key yet; it is made at setup or the first push.")
             return 1
@@ -255,7 +302,7 @@ def cmd_offsite(a) -> int:
         say(f"Off-site: github.com/{cfg['repo']} branch {cfg.get('branch')} (encrypted)"
             if cfg.get("repo") else "Off-site backup: not set up.")
         return 0
-    return _push(_db(a), dry_run=a.dry_run)
+    return _push(_db(a), dry_run=a.dry_run, replace_newer=a.replace_newer)
 
 
 def cmd_schedule(a) -> int:
@@ -386,16 +433,30 @@ def cmd_remote(a) -> int:
         if p is not None and paths.inside_git_worktree(p.parent):   # before anything is made
             say(f"Refused: {p.parent} is inside a git folder. Nothing was created.")
             return 1
+        if p is not None and (p.is_symlink() or (p.exists() and not p.is_file())):
+            say(f"Refused: {p} is a symbolic link or not a plain file (FlowState doesn't write "
+                f"a token through a link). Nothing was created.")   # N-F32
+            return 1
         try:
             cid, token = store.add_token_client(a.name, scopes, a.days)
         except ValueError as e:
             say(f"Not added: {e}")
             return 1
         if p is not None:
-            from .privatefs import write_private
-            write_private(p, token + "\n")   # owner-only (audit D10)
+            from .privatefs import is_private, write_private
+            try:
+                write_private(p, token + "\n")   # owner-only (audit D10), never via a link
+                private = is_private(p)
+            except OSError as e:
+                store.revoke_client(cid)
+                say(f"Not added: the token file couldn't be written safely ({e}). The token "
+                    f"was cancelled.")
+                return 1
             say(f"App '{a.name}' added as {cid} ({' '.join(scopes)}). Token written to {p} "
-                f"(readable by your account only); paste it into the app, then delete the file.")
+                + ("(readable by your account only)" if private else
+                   "(WARNING: this drive doesn't keep file permissions, so other users of "
+                   "this computer may be able to read it)")
+                + "; paste it into the app, then delete the file.")
         else:
             say(f"App '{a.name}' added as {cid} ({' '.join(scopes)}).")
             say("Its token is shown ONCE below. Paste it into the app as the header "
@@ -542,6 +603,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--branch", help="branch for backups (default flowstate-backup)")
     p.add_argument("--db")
     p.add_argument("--dry-run", action="store_true", help="push: only check the repo is private")
+    p.add_argument("--replace-newer", action="store_true",
+                   help="push: replace the copy on GitHub even if it is newer than this one")
     p.set_defaults(fn=cmd_offsite)
 
     p = sub.add_parser("schedule-backups", help="nightly backup via the OS scheduler")

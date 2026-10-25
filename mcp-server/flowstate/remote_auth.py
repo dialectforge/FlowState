@@ -139,7 +139,8 @@ CREATE TABLE IF NOT EXISTS lan_exposures (                            -- audit N
 class AuthStore:
     def __init__(self, path: Optional[Path] = None):
         self.path = Path(path) if path else auth_db_path()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        from .privatefs import private_file
+        private_file(self.path)   # its folder 0700 and the file 0600 from the start (N-F31)
         with self._conn() as c:
             c.executescript(_DDL)
         try:

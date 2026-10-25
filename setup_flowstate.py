@@ -195,12 +195,12 @@ def ensure_db(db: Path, dry: bool) -> str:
     say(f"[db] creating new database: {db}")
     if not dry:
         if not db.parent.exists():   # FlowState's own folder: owner-only (audit D9)
-            db.parent.mkdir(parents=True, mode=0o700)
+            _mkdir_private(db.parent)
             if os.name != "nt":
-                os.chmod(db.parent, 0o700)
+                _chmod(db.parent, 0o700)
         os.close(os.open(str(db), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
         if os.name != "nt":
-            os.chmod(db, 0o600)
+            _chmod(db, 0o600)
         conn = sqlite3.connect(str(db))
         try:
             conn.executescript(SCHEMA.read_text(encoding="utf-8"))
@@ -426,31 +426,100 @@ def backup(path: Path) -> Path:
     return dest
 
 
+_warned_perms = []
+
+
+def _chmod(path, mode: int, fd: "int | None" = None) -> None:
+    """chmod / fchmod that never stops setup: a drive without file permissions (USB, exFAT,
+    many SMB shares) refuses it; the file is still written, and setup says so once (N-F7)."""
+    try:
+        os.fchmod(fd, mode) if fd is not None else os.chmod(path, mode)
+    except OSError:
+        if not _warned_perms:
+            _warned_perms.append(path)
+            say(f"[note] this drive doesn't support file permissions; {path} may be readable "
+                f"by other users of this computer")
+
+
+def _mkdir_private(d: Path) -> None:
+    """mkdir -p with mode 0700; a drive that refuses the mode gets a plain folder (N-F7)."""
+    try:
+        d.mkdir(parents=True, exist_ok=True, mode=0o700)
+    except OSError:
+        if not d.is_dir():
+            d.mkdir(parents=True, exist_ok=True)
+        _chmod(d, 0o700)
+
+
+def _windows() -> bool:
+    return os.name == "nt"
+
+
+def _save_acl(path: Path) -> "Path | None":
+    """Windows: the file's own access list, saved with `icacls /save` so it can be put back
+    after the file is replaced (os.replace gives the new file the folder's list; N-F30)."""
+    if not _windows() or not path.exists():
+        return None
+    out = path.with_name(path.name + ".flowstate-acl")
+    try:
+        out.unlink(missing_ok=True)
+        r = subprocess.run(["icacls", str(path), "/save", str(out), "/q"],
+                           stdin=subprocess.DEVNULL, capture_output=True, timeout=20,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        return out if r.returncode == 0 and out.exists() else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _restore_acl(path: Path, saved: "Path | None") -> None:
+    if saved is None:
+        return
+    try:
+        r = subprocess.run(["icacls", str(path.parent), "/restore", str(saved), "/q"],
+                           stdin=subprocess.DEVNULL, capture_output=True, timeout=20,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if r.returncode != 0:
+            say(f"[note] couldn't put back the access list of {path} after writing it")
+    except (OSError, subprocess.SubprocessError):
+        say(f"[note] couldn't put back the access list of {path} after writing it")
+    finally:
+        try:
+            saved.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def atomic_write(path: Path, text: str) -> None:
     """Write `path` via a temp file that already has the right permissions: the original
     file's own mode, or owner-only (0600) for a new file, so a private config never becomes
     readable by other accounts, not even for a moment (audit D3). The apps that read these
     files run as you, so they are unaffected. Windows: the temp file sits in the same folder
-    and gets that folder's access list, as the app's own file does."""
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    and gets that folder's access list; the original file's own list is saved first and put
+    back after the replace (re-audit N-F30)."""
+    _mkdir_private(path.parent)
     tmp = path.with_name(path.name + ".flowstate-tmp")
     try:
         mode = stat.S_IMODE(path.stat().st_mode)
     except FileNotFoundError:
         mode = 0o600
+    acl = _save_acl(path)
     tmp.unlink(missing_ok=True)
     fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
     try:
-        if os.name != "nt":
-            os.fchmod(fd, mode)   # whatever the umask
+        if not _windows():
+            _chmod(tmp, mode, fd)   # whatever the umask
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
             fd = None
             f.write(text)
         os.replace(tmp, path)
+        _restore_acl(path, acl)
+        acl = None
     finally:
         if fd is not None:
             os.close(fd)
         tmp.unlink(missing_ok=True)
+        if acl is not None:
+            acl.unlink(missing_ok=True)
 
 
 def register_json(path: Path, entry: dict, dry: bool) -> str:

@@ -412,7 +412,7 @@ def test_d8_d11_push_sends_only_the_encrypted_file_and_leaves_no_copy(backend, s
     assert set(files) == {"flowstate-backup.db.fsenc", "manifest.json"}
     blob = subprocess.run(["git", "show", "flowstate-backup:flowstate-backup.db.fsenc"],
                           cwd=bare, capture_output=True, check=True).stdout
-    assert blob.startswith(OC.MAGIC) and MARK.encode() not in blob
+    assert blob.startswith(OC.MAGIC2) and MARK.encode() not in blob
     again = offsite.push_backup(seeded_db, "example-owner/backups", staging=staging,
                                 remote_url=str(bare), checker=lambda _r: "PRIVATE")
     assert again["new_key"] is False and again["key_id"] == r["key_id"]
@@ -486,9 +486,12 @@ def test_d9_windows_uses_an_owner_only_acl(monkeypatch, tmp_path):
     seen = []
     monkeypatch.setattr(privatefs, "_windows", lambda: True)
     monkeypatch.setenv("USERNAME", "someone")
+    monkeypatch.delenv("USERDOMAIN", raising=False)
     monkeypatch.setattr(privatefs.subprocess, "run",
                         lambda cmd, **kw: seen.append(cmd) or subprocess.CompletedProcess(cmd, 0))
+    monkeypatch.setattr(privatefs, "_SID", [])
     privatefs.private_dir(tmp_path / "a" / "b")
+    seen = [c for c in seen if c[0] == "icacls"]
     assert [c[1] for c in seen] == [str(tmp_path / "a"), str(tmp_path / "a" / "b")]
     assert all("/inheritance:r" in c and "someone:(OI)(CI)F" in c and "*S-1-5-18:(OI)(CI)F" in c
                for c in seen)

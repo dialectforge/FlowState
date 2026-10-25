@@ -85,6 +85,8 @@ def init_backend(db_path: Optional[Path] = None) -> None:
     path = Path(db_path) if db_path else default_db_path()
     backend.db_path, backend.error, backend.tracker = path, None, None
     backend.migration_error = None
+    from .privatefs import auto_tighten
+    auto_tighten(path)   # owner-only what an older version left readable (N-F31); never raises
     try:
         db = Database(path)
         conn = sqlite3.connect(str(path), timeout=5.0)
