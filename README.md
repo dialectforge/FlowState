@@ -652,6 +652,11 @@ protocol is in [docs/relay-protocol.md](docs/relay-protocol.md).
   yours alone whatever words an AI passes: adding or removing one waits for your own click or
   key. They are shown first in every brief; FlowState can't stop an AI from doing something
   outside FlowState.
+- **"Type `y` in your terminal" stops AI tools, not an AI with its own shell.** `flowstate
+  approve`, `rules add` / `remove`, `erase`, `data-git` and the off-site recovery code need a
+  real terminal, so an AI can't pass them through FlowState's tools or by piping input. An AI
+  that can run programs on your computer could still fake a terminal, or read and change the
+  database file and the credential store directly; FlowState can't stop that.
 - **Phone approvals and the phone list need the relay and trust flowstatemcp.com's sign-in.**
   They only exist if you use the optional FlowStateMCP hosted relay. This release pins the
   site's two public keys (`fsa-1`, `fsa-2`). The site vouches for who signed in but never sees

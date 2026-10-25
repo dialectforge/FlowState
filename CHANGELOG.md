@@ -349,7 +349,9 @@
 - **The off-site copy is encrypted.** Each nightly copy is encrypted on this computer
   (AES-256-GCM) before it is pushed; GitHub only gets `flowstate-backup.db.fsenc` and the
   manifest. The key is made the first time and kept in the OS credential store; `flowstate
-  offsite key` shows its recovery code in your terminal (never in an AI's output), and the
+  offsite key` shows its recovery code only in a real terminal, never on normal output, so it
+  doesn't land in an AI's chat when an AI runs setup for you (an AI with its own shell on this
+  computer could still get at it, or read the key from the credential store), and the
   brief reminds the AI to tell you until you have seen it. `flowstate restore <file>.fsenc`
   decrypts with this computer's key or asks for the recovery code. The staging folder is
   deleted after every push, so no extra copy of the database (or old nights' copies) stays.
@@ -362,8 +364,10 @@
   "Open the review list on your phone from the FlowState link you saved, or run `flowstate
   review-page` on your computer." instead, in the brief, the review list and walk, answers that
   queue something, the relay's "phone only" refusal and the review card. Your
-  flowstatemcp.com account page shows the link to bookmark. The relay hostname no longer answers `/health` (anyone can list relay addresses
-  from the certificate logs), and the daily crt.sh check sends a plain `flowstate` user agent.
+  flowstatemcp.com account page shows the link to bookmark. The relay hostname no longer answers
+  `/health` (anyone can list relay addresses from the certificate logs), and the daily crt.sh
+  check sends a plain `flowstate` user agent. Anyone who knows your relay address can still tell
+  whether your computer is connected (the connection fails when it is off).
 - **Deleting a project or attachment says the files stay** on disk, and how to erase them.
 - **`export-md` is defused**: images, HTML tags and comments, and `javascript:` in record text
   can't load anything when you open the export in a markdown viewer; importing an unchanged
