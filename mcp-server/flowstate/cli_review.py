@@ -30,7 +30,8 @@ COMMANDS = ("review", "approve", "reject", "approvals")
 
 
 def say(msg: str) -> None:
-    print(msg, flush=True)
+    # text from apps and records is in many lines: no escape code reaches the terminal (NEW-7)
+    print(term.safe(msg, newlines=True), flush=True)
 
 
 def _db(a) -> Path:
@@ -55,12 +56,12 @@ class Terminal:
             raise OSError("not a terminal")
 
     def ask(self, prompt: str) -> str:
-        self.out.write(prompt)
+        self.out.write(term.safe(prompt, newlines=True))
         self.out.flush()
         return self.inp.readline().strip()
 
     def tell(self, text: str) -> None:
-        self.out.write(text + "\n")
+        self.out.write(term.safe(text, newlines=True) + "\n")
         self.out.flush()
 
     def close(self) -> None:
@@ -91,23 +92,26 @@ def open_terminal():
 
 def _one_line(text, n: int = 100) -> str:
     t = " ".join(str(text or "").split())
-    return t if len(t) <= n else t[: n - 3] + "..."
+    t = t if len(t) <= n else t[: n - 3] + "..."
+    return term.safe(t)   # escape codes shown, never run (NEW-7)
 
 
 def _describe(item: dict, project: str, db: Path = None) -> list:
-    lines = [f"Review item #{item['id']} ({item['kind']}) in {project}, queued by "
-             f"{item.get('app') or item.get('source') or 'unknown'}"
-             + (f" on {item['machine']}" if item.get("machine") else "") + ":",
+    lines = [f"Review item #{item['id']} ({term.safe(item['kind'])}) in {term.safe(project)}, queued by "
+             f"{term.safe(item.get('app') or item.get('source') or 'unknown')}"
+             + (f" on {term.safe(item['machine'])}" if item.get("machine") else "") + ":",
              f"  {_one_line(item.get('summary'), 300)}"]
     if item.get("details"):
         lines.append(f"  details: {_one_line(item['details'], 400)}")
     if item["kind"] == "delete":
         p = json.loads(item.get("payload") or "{}")
-        lines.append(f"  deletes: {p.get('record_type')} {p.get('project_name') or ''}".rstrip())
+        lines.append(f"  deletes: {term.safe(p.get('record_type'))} "
+                     f"{term.safe(p.get('project_name') or '')}".rstrip())
     if item["kind"] == "session_summary" and db is not None:   # what Keep would keep
         from . import session_contents
         c = session_contents.for_item(db, {**item, "project": project})
-        lines.extend("  " + x for x in [session_contents.when_line(c)] + session_contents.lines(c) if x)
+        lines.extend("  " + term.safe(x) for x in [session_contents.when_line(c)]
+                     + session_contents.lines(c) if x)
         if c and c["entries"] and item.get("status") == "pending":
             from .review import KEEP_ALL_HOW
             lines.append(f"  Approving is Keep all: {KEEP_ALL_HOW} One record: "
@@ -120,7 +124,7 @@ def _project_name(db: Path, pid) -> str:
     conn = sqlite3.connect(str(db))
     try:
         row = conn.execute("SELECT name FROM projects WHERE id = ?", (pid,)).fetchone()
-        return row[0] if row else f"project #{pid}"
+        return term.safe(row[0]) if row else f"project #{pid}"
     finally:
         conn.close()
 
@@ -138,8 +142,9 @@ def cmd_review(a) -> int:
         return 0
     for it in items:
         mark = "" if it.get("status") == "pending" else f" [{it.get('status')}]"
-        say(f"#{it['id']:<5} {it.get('project') or it.get('project_id')}: {it['kind']}{mark}, by "
-            f"{it.get('app') or it.get('source') or '?'}: {_one_line(it.get('summary'), 80)}")
+        say(f"#{it['id']:<5} {term.safe(it.get('project') or it.get('project_id'))}: "
+            f"{term.safe(it['kind'])}{mark}, by "
+            f"{term.safe(it.get('app') or it.get('source') or '?')}: {_one_line(it.get('summary'), 80)}")
     say("Decide one with `flowstate approve <id>` or `flowstate reject <id>` (asks you to confirm here).")
     return 0
 
@@ -175,7 +180,8 @@ def _records(a) -> int:
             return 0
         for e in entries:
             acts = "/".join(e.get("actions") or [])
-            say(f"  {e['key']:<16} {e.get('state_label', '')}: {session_contents.head(e)}"
+            say(f"  {term.safe(e['key']):<16} {term.safe(e.get('state_label', ''))}: "
+                f"{term.safe(session_contents.head(e))}"
                 + (f"  [{acts}]" if acts else ""))
         if item["status"] == "pending":
             say(session_records.EXPLAIN)
@@ -195,8 +201,8 @@ def _records(a) -> int:
             "none here (piped input doesn't count). Run it yourself in a terminal window.")
         return 2
     try:
-        tty.tell(f"Session summary #{item['id']} in {project}: {session_contents.head(e)}"
-                 f" ({e.get('state_label', '')})")
+        tty.tell(f"Session summary #{item['id']} in {project}: {term.safe(session_contents.head(e))}"
+                 f" ({term.safe(e.get('state_label', ''))})")
         word = session_records.ACTION_WORDS[action]
         extra = " It is deleted after a safety copy; restore brings it back." \
             if action == "remove" else ""

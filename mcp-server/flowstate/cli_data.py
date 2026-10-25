@@ -15,11 +15,14 @@ owner-only (audit D9); it changes nothing else.
 import re
 from pathlib import Path
 
+from . import term
+
 COMMANDS = ("data-git", "erase", "tighten", "rules")
 
 
 def say(msg: str) -> None:
-    print(msg, flush=True)
+    # text from apps and records is in many lines: no escape code reaches the terminal (NEW-7)
+    print(term.safe(msg, newlines=True), flush=True)
 
 
 def _db(a) -> Path:
@@ -239,11 +242,15 @@ def cmd_rules(a) -> int:
         return 2
     if a.action == "list":
         for r in rules.list_rules(db, pid)["rules"]:
-            say(f"R{r['id']} ({rules.who_set(r)}): {r['rule']}")
+            say(f"R{r['id']} ({term.safe(rules.who_set(r))}): {term.safe(r['rule'])}")
         return 0
     if not a.text:
         say('Use: flowstate rules add --project P "Never push to main"')
         return 2
+    if term.has_controls(a.text):   # a rule shows exactly as typed, or not at all (NEW-7)
+        say("Not added: the rule holds control or invisible formatting characters "
+            f"({term.safe(a.text)}); type it plainly.")
+        return 1
     rc = _confirm(f'Add the hard rule "{" ".join(a.text.split())}"? Every AI working on this '
                   f'project is told never to break it.', "adding a hard rule")
     if rc:
@@ -280,7 +287,7 @@ def _rule_remove(db: Path, rule_id) -> int:
     if row[1]:
         say(f"R{rid} was already removed.")
         return 0
-    rc = _confirm(f'Remove the hard rule R{rid} "{row[0]}" from {row[2]}? AIs will no longer be '
+    rc = _confirm(f'Remove the hard rule R{rid} "{term.safe(row[0])}" from {term.safe(row[2])}? AIs will no longer be '
                   f'told to follow it (it stays on record as removed).', "removing a hard rule")
     if rc:
         return rc
@@ -319,7 +326,7 @@ def _rule_confirm(db: Path, rule_id) -> int:
     if row[2]:
         say(f"R{rid} is already yours.")
         return 0
-    rc = _confirm(f'Confirm the hard rule R{rid} "{row[0]}" in {row[3]} as your own? An app added '
+    rc = _confirm(f'Confirm the hard rule R{rid} "{term.safe(row[0])}" in {term.safe(row[3])} as your own? An app added '
                   f'it; every AI working on this project is told never to break it.',
                   "confirming a hard rule")
     if rc:

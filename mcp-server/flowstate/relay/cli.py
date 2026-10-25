@@ -24,10 +24,12 @@ from datetime import datetime
 from pathlib import Path
 
 from . import API_BASE, TUNNEL_HOST, TUNNEL_PORT, RelayError, RelayWaitlisted
+from .. import term
 
 
 def say(msg: str) -> None:
-    print(msg, flush=True)
+    # text from apps and records is in many lines: no escape code reaches the terminal (NEW-7)
+    print(term.safe(msg, newlines=True), flush=True)
 
 
 def _store():

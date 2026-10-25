@@ -103,12 +103,25 @@ def _pending(conn, pid: int, text: str):
 
 
 def _waiting(conn, pid: int) -> list:
-    """(app, rule text) of each rule waiting for the user's OK in this project."""
+    """(who asked, rule text) of each rule waiting for the user's OK in this project: the
+    sign-in it came with (asked_by, task 57), else the app's name."""
     if not conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'review_items'").fetchone():
         return []
-    return [(r[0] or "", r[1] or "") for r in conn.execute(
-        "SELECT source, json_extract(payload, '$.rule') FROM review_items WHERE project_id = ? "
-        f"AND kind = 'rule' AND status = 'pending' AND {_ADD}", (pid,))]
+    return [(r[0] or r[1] or "", r[2] or "") for r in conn.execute(
+        "SELECT json_extract(payload, '$.asked_by'), source, json_extract(payload, '$.rule') "
+        f"FROM review_items WHERE project_id = ? AND kind = 'rule' AND status = 'pending' "
+        f"AND {_ADD}", (pid,))]
+
+
+def asked_by(client: str) -> str:
+    """Who a waiting rule counts against (MAX_PENDING_PER_APP): a key's, token's or OAuth
+    app's own sign-in when the app has one, never only the name it sends, which it could
+    change on every call to dodge the cap (task 56 Low); else the app's name (stdio)."""
+    from . import identity
+    ident = identity.current()
+    if ident is not None and ident.credential:
+        return f"{ident.identity_source}|{ident.credential}"[:120]
+    return (client or "unknown")[:80]
 
 
 def _check_queue(conn, pid: int, client: str) -> None:
@@ -118,8 +131,8 @@ def _check_queue(conn, pid: int, client: str) -> None:
         raise RuleError("rules_queue_full", f"{MAX_PENDING} hard rules already wait for the "
                         "user's OK in this project. Ask the user to decide those first "
                         "(`flowstate review`).")
-    who = (client or "unknown")[:80].casefold()
-    if sum(1 for a, _ in waiting if a[:80].casefold() == who) >= MAX_PENDING_PER_APP:
+    who = asked_by(client).casefold()
+    if sum(1 for a, _ in waiting if a[:120].casefold() == who) >= MAX_PENDING_PER_APP:
         raise RuleError("rules_queue_full", f"This app already has {MAX_PENDING_PER_APP} hard "
                         "rules waiting for the user's OK in this project. Ask the user to "
                         "decide those first.")
@@ -145,9 +158,14 @@ def _check(conn, pid: int, text: str):
 
 
 def _text(rule: str) -> str:
+    from . import term
     text = " ".join((rule or "").split())
     if not text:
         raise RuleError("rule_required", "Give the rule text, e.g. rule=\"Never push to main\".")
+    if term.has_controls(text):   # a rule reads the same everywhere it is shown (NEW-7)
+        raise RuleError("rule_has_controls", "A hard rule can't hold control or invisible "
+                        "formatting characters (terminal escape codes, direction overrides, "
+                        "zero-width marks). Type it plainly.")
     if len(text) > MAX_RULE:
         raise RuleError("rule_too_long", f"A rule is at most {MAX_RULE} characters (this one is "
                         f"{len(text)}). Say it shorter, or split it.")
@@ -172,7 +190,8 @@ def add(db_path: Path, pid: int, rule: str, client: str) -> dict:
                 None, pid, "rule", f'Add this hard rule? "{text}"',
                 "An AI app asked to add this rule. Every AI working on this project is told to "
                 "never break a hard rule, so only you set them. Approve to add it; reject to "
-                "leave it out.", {"rule": text, "user_only": True}, (client or "unknown")[:80],
+                "leave it out.", {"rule": text, "user_only": True, "asked_by": asked_by(client)},
+                (client or "unknown")[:80],
                 conn=conn)
             conn.commit()
         return {"queued_for_review": item, "project_id": pid,

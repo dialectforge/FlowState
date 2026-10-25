@@ -32,6 +32,7 @@ from . import paths
 from . import cli_data
 from . import cli_more
 from . import cli_review
+from . import term
 
 COMMANDS = ("migrate", "backup", "restore", "offsite", "schedule-backups", "token",
             "scan-secrets", "remote", "keys", "relay") + cli_more.COMMANDS + cli_review.COMMANDS \
@@ -39,7 +40,8 @@ COMMANDS = ("migrate", "backup", "restore", "offsite", "schedule-backups", "toke
 
 
 def say(msg: str) -> None:
-    print(msg, flush=True)
+    # text from apps and records is in many lines: no escape code reaches the terminal (NEW-7)
+    print(term.safe(msg, newlines=True), flush=True)
 
 
 def _default_db() -> Path:
@@ -386,7 +388,7 @@ def cmd_scan(a) -> int:
     finally:
         conn.close()
     for t, i, c, k in hits:
-        say(f"{t} #{i} {c}: looks like a {k}")
+        say(f"{t} #{i} {term.safe(c)}: looks like a {k}")
     say(f"{len(hits)} possible secret(s) found (values not shown).")
     return 0
 
@@ -473,7 +475,7 @@ def cmd_remote(a) -> int:
             state = "REVOKED " + _when(c["revoked_at"]) if c["revoked_at"] else \
                 ("waiting for approval" if not c["approved_at"] else "active")
             was = store.former_names(c["id"])
-            say(f"{c['id']}  {c['name']!r}  {c['kind']}  {c['scopes']}  added {_when(c['created_at'])}"
+            say(f"{c['id']}  {term.safe(repr(c['name']))}  {c['kind']}  {c['scopes']}  added {_when(c['created_at'])}"
                 f"  last used {_when(c['last_used_at'])}  {state}"
                 + (f"  (was {', '.join(repr(n) for n in was)})" if was else ""))
             e = exposed.get(c["id"])

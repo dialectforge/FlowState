@@ -15,11 +15,15 @@
     flowstate name           ["New name" | --reset]   (this FlowState's display name: install_name.py)
 """
 
+import sys
 from pathlib import Path
+
+from . import term
 
 
 def say(msg: str) -> None:
-    print(msg, flush=True)
+    # text from apps and records is in many lines: no escape code reaches the terminal (NEW-7)
+    print(term.safe(msg, newlines=True), flush=True)
 
 
 def _db(a) -> Path:
@@ -44,7 +48,7 @@ def cmd_cleanup(a) -> int:
     kinds = tuple(k.strip() for k in a.kinds.split(",") if k.strip())
     found = cleanup.suggest(db, pid, kinds)
     for s in found:
-        say(f"- {s['summary']}")
+        say(f"- {term.safe(s['summary'])}")
     say(f"{len(found)} suggestion(s).")
     if a.queue:
         res = cleanup.queue(db, found, source="cleanup (cli)")
@@ -62,7 +66,7 @@ def cmd_apps(a) -> int:
     if a.action == "list":
         rows = activity.apps(db)
         for r in rows:
-            say(f"{activity.app_label(r)}: {'PAUSED' if r['paused'] else 'on'}, last seen {r['last_seen'] or '-'}, "
+            say(f"{term.safe(activity.app_label(r))}: {'PAUSED' if r['paused'] else 'on'}, last seen {r['last_seen'] or '-'}, "
                 f"{r['calls']} calls ({r['writes'] or 0} writes, {r['errors'] or 0} errors)")
         say(f"{len(rows)} app(s).")
         return 0
@@ -72,14 +76,15 @@ def cmd_apps(a) -> int:
             return 1
         held = activity.still_paused_by(db, a.app) if a.action == "resume" else {}
         names = activity.set_paused_all(db, a.app, a.action == "pause", "cli")
-        also = f" (with the key / sign-in it uses: {', '.join(names[1:])})" if names[1:] else ""
-        say(f"{a.app}{also}: {'paused (it can still read; its writes are refused)' if a.action == 'pause' else 'resumed'}.")
+        also = f" (with the key / sign-in it uses: {term.safe(', '.join(names[1:]))})" if names[1:] else ""
+        say(f"{term.safe(a.app)}{also}: {'paused (it can still read; its writes are refused)' if a.action == 'pause' else 'resumed'}.")
         for key, others in held.items():
-            say(activity.held_text(a.app, key, others))
+            say(term.safe(activity.held_text(a.app, key, others)))
         return 0
     for r in activity.recent(db, a.app, a.limit):
-        say(f"{r['at']} {r['app']}: {r['tool']}{('/' + r['action']) if r['action'] else ''}"
-            f"{(' [' + r['project'] + ']') if r['project'] else ''} "
+        say(f"{r['at']} {term.safe(r['app'])}: {term.safe(r['tool'])}"
+            f"{('/' + term.safe(r['action'])) if r['action'] else ''}"
+            f"{(' [' + term.safe(r['project']) + ']') if r['project'] else ''} "
             f"{'write' if r['write'] else 'read'} {'ok' if r['ok'] else 'error ' + (r['error'] or '')}")
     return 0
 
@@ -117,8 +122,8 @@ def cmd_export_md(a) -> int:
         from .privatefs import write_private
         write_private(out, text)   # it holds the project's records: owner-only (audit D9)
         say(f"Wrote {out}.")
-    else:
-        print(text, end="")
+    else:   # on a terminal, escape codes in record text are shown, not run (NEW-7)
+        print(term.safe(text, newlines=True) if sys.stdout.isatty() else text, end="")
     return 0
 
 
@@ -153,7 +158,7 @@ def cmd_git_capture(a) -> int:
     if a.action == "status":
         rows = G.status(db)
         for r in rows:
-            say(f"{r['project']}: {'on' if r['enabled'] else 'off'}, {r['repo_path']}, "
+            say(f"{term.safe(r['project'])}: {'on' if r['enabled'] else 'off'}, {term.safe(r['repo_path'])}, "
                 f"last commit {(r['last_commit'] or '-')[:8]}, last run {r['last_run_at'] or '-'}")
         say(f"{len(rows)} project(s) set up; every other project is off (the default).")
         return 0
@@ -163,7 +168,7 @@ def cmd_git_capture(a) -> int:
         for r in G.status(db):
             if r["enabled"]:
                 res = G.run(db, r["project_id"], S._save_commit)
-                say(f"{r['project']}: {res['captured']} new commit(s)")
+                say(f"{term.safe(r['project'])}: {res['captured']} new commit(s)")
         return 0
     if not a.project:
         say("Name the project with --project.")
