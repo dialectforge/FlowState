@@ -70,9 +70,35 @@ _LOOKS = {
     "ᴛ": "t", "ᴜ": "u", "ᴠ": "v", "ᴡ": "w", "ᴢ": "z", "ᴀ": "a", "ʙ": "b", "ᴄ": "c", "ᴅ": "d",
     "ᴇ": "e", "ꜰ": "f", "ᴋ": "k", "ʀ": "r", "ꜱ": "s", "ʏ": "y",
 }
-# brackets and dashes that read as the plain ones
-_BRACKETS = {ch: "(" for ch in "[{⟨⟦⟮⦅〔〖〘〚❨❪❬❮❰❲❴⁽₍﹙（［｛⸨"}
-_BRACKETS.update({ch: ")" for ch in "]}⟩⟧⟯⦆〕〗〙〛❩❫❭❯❱❳❵⁾₎﹚）］｝⸩"})
+# (task 57, task 56 C) Armenian, Cherokee, Lisu and Coptic letters that pass for Latin ones.
+# Keyed by both the lower-case and the case-folded form (Python folds Cherokee to capitals).
+_MORE_LOOKS = {
+    # Armenian
+    "\u0585": "o", "\u057d": "u", "\u0581": "g", "\u0570": "h", "\u0578": "n", "\u057c": "n",
+    "\u0566": "q", "\u0584": "p", "\u0561": "w",
+    # Cherokee (capital letters; the small ones follow by case)
+    "\u13aa": "a", "\u13f4": "b", "\u13df": "c", "\u13a0": "d", "\u13ac": "e", "\u13c0": "g",
+    "\u13bb": "h", "\u13a5": "l", "\u13ab": "j", "\u13e6": "k", "\u13de": "l", "\u13b7": "m",
+    "\u13c1": "n", "\u13eb": "o", "\u13be": "o", "\u13e2": "p", "\u13a1": "r", "\u13da": "s",
+    "\u13a2": "t", "\u13d9": "v", "\u13d4": "w", "\u13c3": "z", "\u13a9": "y",
+    # Lisu
+    "\ua4ee": "a", "\ua4d0": "b", "\ua4da": "c", "\ua4d3": "d", "\ua4f0": "e", "\ua4dd": "f",
+    "\ua4d6": "g", "\ua4e7": "h", "\ua4f2": "l", "\ua4d9": "j", "\ua4d7": "k", "\ua4e1": "l",
+    "\ua4df": "m", "\ua4e0": "n", "\ua4f3": "o", "\ua4d1": "p", "\ua4e3": "r", "\ua4e2": "s",
+    "\ua4d4": "t", "\ua4f4": "u", "\ua4e6": "v", "\ua4ea": "w", "\ua4eb": "x", "\ua4ec": "y",
+    "\ua4dc": "z",
+    # Coptic (small letters; the capitals follow by case)
+    "\u2c81": "a", "\u2c89": "e", "\u2c93": "l", "\u2c95": "k", "\u2c99": "m", "\u2c9b": "n",
+    "\u2c9f": "o", "\u2ca3": "p", "\u2ca5": "c", "\u2ca7": "t", "\u2ca9": "y", "\u2cad": "x",
+    "\u2cb1": "w", "\u2c8d": "z", "\u2c87": "d",
+}
+for _ch, _to in list(_MORE_LOOKS.items()):
+    for _form in {_ch, _ch.lower(), _ch.upper(), _ch.casefold()}:
+        if len(_form) == 1:
+            _LOOKS.setdefault(_form, _to)
+# brackets and dashes that read as the plain ones (‹ › < > « » too: task 56 C)
+_BRACKETS = {ch: "(" for ch in "[{⟨⟦⟮⦅〔〖〘〚❨❪❬❮❰❲❴⁽₍﹙（［｛⸨‹<«﹤＜〈《"}
+_BRACKETS.update({ch: ")" for ch in "]}⟩⟧⟯⦆〕〗〙〛❩❫❭❯❱❳❵⁾₎﹚）］｝⸩›>»﹥＞〉》"})
 
 
 def _one(ch: str) -> str:

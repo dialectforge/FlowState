@@ -494,6 +494,21 @@ def cmd_remote(a) -> int:
             say("Which token? flowstate remote keep-token --client <id from `flowstate remote "
                 "clients`>")
             return 1
+        from .cli_review import open_terminal
+        tty = open_terminal()   # an AI with a shell can't clear the warning by piping y (E)
+        if tty is None:
+            say("Refused: keeping a token that crossed the network asks you to confirm in a "
+                "terminal, and there is none here (piped input doesn't count). Run it yourself "
+                "in a terminal window.")
+            return 2
+        try:
+            if tty.ask(f"Keep using {a.client_id} although it was sent over plain HTTP on your "
+                       f"network (anyone there could have read it)? Type y to confirm: "
+                       ).strip().lower() not in ("y", "yes"):
+                say("Not confirmed; nothing changed.")
+                return 1
+        finally:
+            tty.close()
         ok = store.keep_exposed(a.client_id)
         say(f"{a.client_id}: kept; the warning about it being sent over the LAN is gone (it "
             f"comes back if it is sent that way again)." if ok

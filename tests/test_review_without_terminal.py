@@ -868,8 +868,13 @@ def test_on_this_computer_is_decided_by_the_server(backend):
                                  ("lan", "192.0.2.51", False), ("relay", "127.0.0.1", False),
                                  ("public", "127.0.0.1", False)):
         c = TestClient(Gate(app, None, "/mcp", listener=listener), client=(peer, 5000))
-        c.get("/health", headers=SPOOF)
+        own = {k: v for k, v in SPOOF.items() if k.lower().startswith(("x-flowstate", "flowstate"))}
+        c.get("/health", headers=own)
         assert seen[LOCAL_KEY] is want and seen[LISTENER_KEY] == listener, (listener, peer)
+        # (task 57, A) a proxy's forwarding headers on a loopback request: through a proxy
+        # on this computer from somewhere else, so never local
+        c.get("/health", headers=SPOOF)
+        assert seen[LOCAL_KEY] is False, (listener, peer)
     assert popup.on_this_computer() is True                              # stdio
     for scope, want in (({LISTENER_KEY: "lan", LOCAL_KEY: True}, True),
                         ({LISTENER_KEY: "lan", LOCAL_KEY: False}, False), ({LISTENER_KEY: "lan"}, False),

@@ -176,14 +176,17 @@ def test_oauth_app_names_go_through_the_same_checks(store):
     store.add_token_client("Cursor", list(RA.SCOPES))
     app_keys.add(store, "Desk key")
     assert _oauth(store, "o1", "Cur​sor") == "Cursor (2)"            # invisible, then taken
+    store.approve("o1")   # (task 57, D) only an approved app holds its name
     assert _oauth(store, "o2", CYR_C + "ursor") == CYR_C + "ursor (3)"     # lookalike: taken
     assert _oauth(store, "o3", "desk key") == "desk key (2)"              # a key's name
     assert _oauth(store, "o4", "unknown") == "OAuth app unknown"
     assert _oauth(store, "o5", "Grok (via Cursor)") == "Grok"
+    store.approve("o5")
     assert _oauth(store, "o6", "Ｇｒｏｋ") == "Grok (2)"   # full-width Grok
     assert _oauth(store, "o7", "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8") == \
         "unnamed OAuth app"
     assert _oauth(store, "o8", "Claude") == "Claude"
+    store.approve("o8")
     assert _oauth(store, "o9", "Claude") == "Claude (2)"                  # as before
 
 
@@ -244,7 +247,22 @@ def test_a_token_sent_over_the_plain_lan_is_flagged_not_revoked(seeded_db, tmp_p
     assert "Security warning" in brief and cid in brief and "Relay App" in brief
     assert "192.0.2" not in brief                        # no LAN address for AI apps
     assert other not in brief
-    assert cli.main(["remote", "keep-token", "--client", cid]) == 0
+    assert "keep-token" not in brief                     # (task 57, E) not handed to an AI
+    from flowstate import cli_review
+    from test_session_records import FakeTTY
+    import pytest as _pytest
+    mp = _pytest.MonkeyPatch()
+    try:
+        mp.setattr(cli_review, "open_terminal", lambda: None)
+        assert cli.main(["remote", "keep-token", "--client", cid]) == 2   # no terminal: refused
+        assert cid in store.lan_exposures()
+        mp.setattr(cli_review, "open_terminal", lambda: FakeTTY(["n"]))
+        assert cli.main(["remote", "keep-token", "--client", cid]) == 1
+        assert cid in store.lan_exposures()
+        mp.setattr(cli_review, "open_terminal", lambda: FakeTTY(["y"]))
+        assert cli.main(["remote", "keep-token", "--client", cid]) == 0
+    finally:
+        mp.undo()
     assert store.lan_exposures() == {} and "Security warning" not in \
         build_brief(seeded_db, {"id": 1, "name": "Alpha"})
     assert _post(app, tok, "192.0.2.10") == 401          # sent that way again: back

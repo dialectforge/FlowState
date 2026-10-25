@@ -488,20 +488,59 @@ def phone_hidden(db_path: Path) -> bool:
     return _elsewhere() and review_handle(db_path) is not None
 
 
-def scrub_handle(result):
-    """For an app elsewhere: "phone (<this device's handle>)", the label 2.4.3 saved with phone
-    decisions (history, who did what, the brief), becomes "phone" in its answer. Only the exact
-    label with this device's handle: record text is left alone."""
+def _phone_labels(db_path: Optional[Path]) -> set:
+    """Every "phone (<handle>)" label FlowState itself saved here: this device's handle now,
+    and any earlier one (the relay turned off, or enrolled again under a new handle: task 56,
+    B), read from where 2.4.3 wrote them (decided_by, approval_log, history clients)."""
+    out = set()
+    handle = relay_handle()
+    if handle:
+        out.add(f"phone ({handle})")
+    if db_path is None:
+        return out
+    try:
+        conn = _conn(db_path)
+    except sqlite3.Error:
+        return out
+    try:
+        for table, col in (("review_items", "decided_by"), ("approval_log", "client"),
+                           ("record_history", "client"), ("review_mode_log", "client")):
+            try:
+                out |= {r[0] for r in conn.execute(
+                    f'SELECT DISTINCT "{col}" FROM "{table}" WHERE "{col}" LIKE \'phone (%)\'')
+                    if _PHONE_LABEL.fullmatch(r[0] or "")}
+            except sqlite3.Error:
+                continue
+    finally:
+        conn.close()
+    return out
+
+
+_PHONE_LABEL = re.compile(r"phone \([A-Za-z0-9][A-Za-z0-9._-]{1,62}\)")
+
+
+def scrub_handle(result, db_path: Optional[Path] = None):
+    """For an app elsewhere: "phone (<handle>)", the label 2.4.3 saved with phone decisions
+    (history, who did what, the brief), becomes "phone" in its answer, with this device's
+    handle and any earlier one. Only those exact labels: record text is left alone."""
     if not _elsewhere():
         return result
-    handle = relay_handle()
-    if not handle:
+    if db_path is None:
+        try:
+            from . import server as S
+            db_path = S.backend.db_path
+        except Exception:  # noqa: BLE001
+            db_path = None
+    labels = _phone_labels(db_path)
+    if not labels:
         return result
-    old = f"phone ({handle})"
 
     def walk(v):
         if isinstance(v, str):
-            return v.replace(old, "phone") if old in v else v
+            for old in labels:
+                if old in v:
+                    v = v.replace(old, "phone")
+            return v
         if isinstance(v, dict):
             return {k: walk(x) for k, x in v.items()}
         if isinstance(v, list):

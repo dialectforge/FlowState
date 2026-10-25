@@ -30,6 +30,7 @@ import html
 import json
 import logging
 import os
+import re
 import secrets
 import sqlite3
 import threading
@@ -228,10 +229,14 @@ class AuthStore:
     # lookalike letters ("Сursor" with a Cyrillic С) don't make a different name. Pairs made
     # before 2.4.4 (a key and a token both "Cursor") keep working as they are.
     def _name_taken(self, c, name: str, except_id: Optional[str] = None) -> Optional[str]:
-        """The id of the token, OAuth app or key that has (or had) this name, else None."""
+        """The id of the token, OAuth app or key that has (or had) this name, else None. An
+        OAuth registration the owner never approved holds no name (task 56, D: anyone who
+        knows the tunnel or relay address can register one); it gets a number at approval
+        if its name was taken meanwhile (approve)."""
         from .names import skeleton
         key = skeleton(name)
-        rows = list(c.execute("SELECT id, name FROM clients")) + \
+        rows = list(c.execute("SELECT id, name FROM clients WHERE NOT (kind = 'oauth' AND "
+                              "approved_at IS NULL)")) + \
             list(c.execute("SELECT client_id AS id, name FROM client_names")) + \
             list(c.execute("SELECT id, name FROM app_keys"))
         for r in rows:
@@ -489,6 +494,17 @@ class AuthStore:
 
     def approve(self, client_id: str) -> None:
         with self._conn() as c:
+            row = c.execute("SELECT name, approved_at FROM clients WHERE id = ?",
+                            (client_id,)).fetchone()
+            if row is not None and row["approved_at"] is None:
+                # taken by a key, token or app approved since it registered: "Cursor (2)"
+                base = re.sub(r" \(\d+\)$", "", row["name"] or "") or "unnamed OAuth app"
+                name, n = row["name"], 1
+                while self._name_taken(c, name, except_id=client_id):
+                    n += 1
+                    name = f"{base} ({n})"
+                if name != row["name"]:
+                    c.execute("UPDATE clients SET name = ? WHERE id = ?", (name, client_id))
             c.execute("UPDATE clients SET approved_at = COALESCE(approved_at, ?) WHERE id = ?",
                       (time.time(), client_id))
 
@@ -833,6 +849,21 @@ LOCAL_KEY = "flowstate.on_this_computer"
 CLIENT_IP_KEY = "flowstate.client_ip"
 
 
+# Headers a proxy or tunnel adds. A loopback request that carries one came through a proxy
+# on this computer from somewhere else (task 56, A): it doesn't count as "on this computer"
+# (no 127.0.0.1 review link, no phone link with the handle, no popups, and a remote token on
+# it is treated as sent over the LAN). FLOWSTATE_LAN_PROXY=1 says the LAN listener sits
+# behind such a proxy, for one that adds none of them: then no caller counts as local.
+PROXY_HEADERS = (b"forwarded", b"x-forwarded-for", b"x-forwarded-host", b"x-real-ip",
+                 b"cf-connecting-ip", b"true-client-ip", b"via", b"x-client-ip")
+
+
+def proxied(headers: dict) -> bool:
+    if os.environ.get("FLOWSTATE_LAN_PROXY", "").strip().lower() in ("1", "true", "yes", "on"):
+        return True
+    return any(h in headers for h in PROXY_HEADERS)
+
+
 def is_loopback(peer) -> bool:
     """The socket peer address is this computer (127.0.0.0/8, ::1, ::ffff:127.x)."""
     import ipaddress
@@ -860,14 +891,20 @@ def lan_remote_tokens_allowed() -> bool:
         return False
 
 
-def exposure_text(cid: str, name: str, at: float) -> str:
+def exposure_text(cid: str, name: str, at: float, for_user: bool = True) -> str:
+    """The warning about a remote token sent over the LAN. `for_user` (the user's own
+    `flowstate remote clients`): with the command that keeps it anyway. The brief (an AI reads
+    it) only says the user decides, in their terminal (task 56, E)."""
     from datetime import datetime
     day = datetime.fromtimestamp(at).strftime("%Y-%m-%d")
+    keep = (f"to keep it anyway: `flowstate remote keep-token --client {cid}` (asks for your y)."
+            if for_user else "keeping it anyway is the user's own choice, in their terminal "
+                             "(`flowstate remote clients` shows how).")
     return (f"The remote token {name!r} ({cid}) was sent over plain HTTP from another computer "
             f"on your network on {day}; FlowState refused it, but anyone on that network could "
             f"have read it and could use it over the internet. Revoke it with `flowstate remote "
             f"revoke --client {cid}` and make a new one (or give that app a LAN key: `flowstate "
-            f"keys add`); to keep it anyway: `flowstate remote keep-token --client {cid}`.")
+            f"keys add`); {keep}")
 
 
 def exposure_lines() -> list[str]:
@@ -890,7 +927,8 @@ def exposure_lines() -> list[str]:
             conn.close()
     except sqlite3.Error:
         return []
-    return ["Security warning (tell the user once): " + exposure_text(*r) for r in rows]
+    return ["Security warning (tell the user once): " + exposure_text(*r, for_user=False)
+            for r in rows]
 
 
 def lan_warning(host: str) -> Optional[str]:
@@ -945,11 +983,12 @@ class Gate:
         scope[LISTENER_KEY] = self.listener
         # the real socket peer (uvicorn runs with proxy_headers=False), never a header; the relay
         # agent also connects from loopback, so only the LAN listener can count as local
-        scope[LOCAL_KEY] = self.listener == "lan" and is_loopback((scope.get("client") or ("",))[0])
         from starlette.authentication import AuthCredentials
         from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
         t0 = time.monotonic()
         headers = dict(scope.get("headers") or [])
+        scope[LOCAL_KEY] = self.listener == "lan" and \
+            is_loopback((scope.get("client") or ("",))[0]) and not proxied(headers)
         ip = self._ip(scope, headers)
         scope[CLIENT_IP_KEY] = ip
         path = scope.get("path", "")
@@ -983,7 +1022,7 @@ class Gate:
                                 [(b"www-authenticate", challenge.encode())])
                     return
                 if (self.listener == "lan" and info.identity_source == "remote_token"
-                        and not is_loopback((scope.get("client") or ("",))[0])
+                        and not scope.get(LOCAL_KEY)   # another computer, or through a proxy (A)
                         and not lan_remote_tokens_allowed()):
                     # LAN traffic is plain HTTP: a remote token seen on the Wi-Fi would work
                     # from anywhere through the relay or tunnel (audit D4); it has crossed the

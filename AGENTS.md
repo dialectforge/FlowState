@@ -143,7 +143,7 @@ All commands run with the venv Python: `<venv python> -m flowstate <command>`.
 | rename a remote token (user) | `flowstate remote rename "<old name or id>" "<new name>"`: same token, new name (at most 50 characters); refused if another app has or had the name, revoked ones too (new tokens and keys follow the same rule; keys and tokens share one list, lookalike names count as the same, and names FlowState uses itself (unknown, phone, user, ...) are refused); past records keep the old name; a paused one stays paused |
 | per-app keys for the local/LAN HTTP server (user) | `flowstate keys add --name NAME [--read-only] [--workspace W]` (shows the key once) / `keys list` / `keys revoke --id ID` (or `--name NAME`) |
 | pause an app (user) | `flowstate apps list` / `apps pause --app NAME` / `apps resume --app NAME` (also pauses / resumes the key, token or sign-in it uses; a key two apps share stays paused while either is paused) |
-| keep a remote token sent over the LAN (user) | `flowstate remote keep-token --client <id>` clears the warning that the token crossed the plain-HTTP LAN listener from another computer (or revoke it) |
+| keep a remote token sent over the LAN (user) | `flowstate remote keep-token --client <id>` (asks for the user's `y` in a terminal; never run it for them) clears the warning that the token crossed the plain-HTTP LAN listener from another computer or through a proxy (or revoke it) |
 
 Backups go to `FLOWSTATE_BACKUP_DIR` or the per-OS default (Windows
 `%LOCALAPPDATA%\flowstate\backups`, macOS `~/Library/Application Support/flowstate/backups`,
@@ -322,6 +322,10 @@ attach files, or ask for or approve deletes. The shared token keeps working as b
 Endpoint: `http://<host>:8766/mcp`, header `Authorization: Bearer <token>`. `GET /health`
 answers `{"ok": true}` without a token (for tunnel health checks). Bind to `127.0.0.1`
 behind a tunnel or reverse proxy, or to the machine's LAN address for LAN use. The token must be 16+ characters.
+A request through a proxy on this computer never counts as coming from this computer (no
+local review link, phone link or popups; a remote token on it counts as sent over the LAN):
+FlowState goes by the proxy's forwarding headers, and with a proxy that adds none, set
+`FLOWSTATE_LAN_PROXY=1`.
 
 Client snippets for HTTP (replace `<url>`; keep the token out of shared files):
 
@@ -512,6 +516,7 @@ The same guidance is available as the MCP prompt `flowstate-start`.
 | `FLOWSTATE_MODEL` | | stdio: the model name to record when the app passes none (set it only if you know it) |
 | `FLOWSTATE_WORKSPACE` | this computer's name | stdio: the machine / workspace name recorded with each change |
 | `FLOWSTATE_REVIEW_PORT` | 8770 | the review page FlowState starts on 127.0.0.1 when a link is needed (taken: any free port; `0` any free port; `off` no page or link) |
+| `FLOWSTATE_LAN_PROXY` | | `1`: the LAN listener sits behind a proxy on this computer, so no caller counts as "on this computer" (a loopback request with `X-Forwarded-For`, `Forwarded`, `Via` or a similar header never does) |
 | `FLOWSTATE_CONFIG_DIR` | Windows `%APPDATA%\flowstate`, macOS `~/Library/Application Support/flowstate`, Linux `~/.config/flowstate` | FlowState settings (off-site repo name; never secrets) |
 
 ## Working on this repo

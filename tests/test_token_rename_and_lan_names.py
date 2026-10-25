@@ -343,6 +343,7 @@ def test_an_oauth_app_signing_up_again_under_a_taken_name_gets_a_number(store):
         info = OAuthClientInformationFull(client_id=f"oauth-{i}", client_name="Claude",
                                           redirect_uris=["https://claude.ai/api/mcp/auth_callback"])
         store.save_oauth_client(info)
+        store.approve(f"oauth-{i}")   # (task 57, D) an approved app holds its name
         ids.append(store.client_row(f"oauth-{i}")["name"])
     assert ids == ["Claude", "Claude (2)", "Claude (3)"]
 
