@@ -156,3 +156,31 @@ def test_card_sign_ins_are_their_own_list_and_a_re_registered_oauth_app_keeps_it
     assert not CARD_TOOLS & net_names(S, "x", card_token("Claude (2)", "remote_token"), "public")
     assert not CARD_TOOLS & net_names(S, "x", card_token("Claudette (2)", "oauth_client"), "public")
 
+
+
+# ---------------------------------------------------------------- a card tap whose save fails
+def test_a_disagreement_tap_whose_save_fails_keeps_its_code(backend, claims_ui, monkeypatch):
+    """(task 56 Low) The tap's code was used up before the call's save committed: a save that
+    then failed left the card saying "expired". The code is used up only once it commits."""
+    from flowstate import saves
+    from test_card_trust import call, codes
+    S, db = backend, backend.backend.db_path
+    a = call(S, "log_work", {"project": "Alpha", "kind": "decision", "summary": "Use REST for the API"},
+             app="Cursor")[1]
+    call(S, "log_work", {"project": "Alpha", "kind": "decision", "summary": "Use gRPC for the API",
+                         "conflicts_with": a["record"]["id"], "topic": "the API"}, app="Cursor")
+    [(item,)] = _q(db, "SELECT id FROM review_items WHERE kind = 'disagreement'")
+    r, _ = call(S, "show_conflict_card", {"project": "Alpha", "item_id": item})
+    tap = {"item_id": item, "keep": "a", "project": "Alpha", "tap": codes(r)[str(item)]}
+    real, broken = saves._activity, [True]
+
+    def flaky(*a, **kw):
+        if broken[0]:
+            raise RuntimeError("disk went away after the tap")
+        return real(*a, **kw)
+    monkeypatch.setattr(saves, "_activity", flaky)
+    _r, body = call(S, "resolve_conflict_card", tap)
+    assert "error" in body and status(db, item) == "pending"
+    broken[0] = False
+    _r, body = call(S, "resolve_conflict_card", tap)               # the same code works again
+    assert body.get("resolved") == item and status(db, item) == "approved", body

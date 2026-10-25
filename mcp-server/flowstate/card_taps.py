@@ -105,34 +105,46 @@ def redeem(code, item_id, card: str, client: Optional[str]):
     return True
 
 
-def settle(result, ok: Optional[bool] = None):
+def settle(result, ok: Optional[bool] = None, db_path=None):
     """After a tap: the code it reserved (if any) is used up when the tap was saved (`ok`, by
-    default: the answer is not an error), else given back for the next tap. Returns `result`."""
+    default: the answer is not an error), else given back for the next tap. Returns `result`.
+    Inside a save of `db_path` (saves.py: the call is one commit) that waits for the save's
+    end: a save that is rolled back gives the code back (task 56 Low: the tap failed, the
+    card must still work)."""
     h = _held.get()
     if h is None:
         return result
     _held.set(None)
     if ok is None:
         ok = not (isinstance(result, dict) and "error" in result)
-    with _lock:
-        got = _codes.get(h)
-        if got is not None:
-            if ok:
-                del _codes[h]
-            else:
-                got[4] = False
+    if db_path is not None and ok:
+        from . import dbconn
+        dbconn.after(db_path, lambda committed: _finish(h, committed))
+    else:
+        _finish(h, ok)
     return result
 
 
-def resolve(fn, *a):
-    """Run a card's tap `fn(*a)` and settle its code, also when it raises."""
+def _finish(h: str, used: bool) -> None:
+    with _lock:
+        got = _codes.get(h)
+        if got is not None:
+            if used:
+                del _codes[h]
+            else:
+                got[4] = False
+
+
+def resolve(fn, db_path, *a):
+    """Run a card's tap `fn(db_path, *a)` and settle its code, also when it raises, and only
+    once its save has committed."""
     _held.set(None)
     try:
-        result = fn(*a)
+        result = fn(db_path, *a)
     except BaseException:
         settle(None, ok=False)
         raise
-    return settle(result)
+    return settle(result, db_path=db_path)
 
 
 def for_cards(item_ids, card: str, client: Optional[str]) -> dict:
