@@ -316,6 +316,11 @@ hostname, downloads each new certificate (`https://crt.sh/?d=<id>`, at most 50 p
 compares the SHA-256 of its SubjectPublicKeyInfo with the local key(s). Any mismatch is an
 alert: an ERROR log line, `flowstate relay status` (exit code 2), and a warning line at the top
 of every `start_here` result until the user runs `flowstate relay ct-ack --id <crt.sh id>`.
+These requests send a plain `User-Agent: flowstate` (no version); like any web request they
+show crt.sh the computer's IP address, and the hostname names the user's relay address. Every
+certificate is public in the CT logs anyway, so anyone can list relay hostnames; for that
+reason the device doesn't answer `GET /health` through its relay hostname (404), so the
+address can't be used to see whether the computer is on.
 
 ## 7. Limits and timeouts (summary)
 

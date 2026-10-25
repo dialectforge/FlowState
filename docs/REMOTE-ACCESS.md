@@ -88,8 +88,13 @@ claude.ai or ChatGPT work through Cloudflare Access Managed OAuth; whether the p
    **LAN keys vs remote tokens.** `flowstate keys add --name "<app>" [--read-only]` makes a
    per-app key for the **local/LAN** listener only (prefix `fs_lk_`); it is refused on the
    public URL, just like the LAN token. `flowstate remote add-client` makes a per-app
-   **remote** token (prefix `fs_ct_`) for the public listener (it also works on the LAN
-   listener, as before). A key or token is often shared by several apps (or named after another
+   **remote** token (prefix `fs_ct_`) for the public listener. On the LAN listener a remote
+   token works only from this computer (127.0.0.1): **LAN traffic is plain HTTP and not
+   encrypted**, so a token sent over the Wi-Fi can be copied by anyone on that network, and a
+   remote token would then work from anywhere through the relay or tunnel. FlowState refuses it
+   from other computers (401 `remote_token_on_lan`) unless you run `flowstate remote lan-tokens
+   on` (it asks for your `y`). Give LAN apps LAN keys instead. FlowState also prints a warning
+   when it starts on a LAN address. A key or token is often shared by several apps (or named after another
    app), so everywhere (LAN, your own tunnel, the relay) the app recorded is the name the
    connecting app sends, and the key's or token's name is recorded beside it, in the machine
    column: "<the key's workspace> (signed in as <key name>)" (or "lan (signed in as ...)"
@@ -120,7 +125,9 @@ claude.ai or ChatGPT work through Cloudflare Access Managed OAuth; whether the p
      `FLOWSTATE_AUTH_DB`), not in your data folder;
    - access tokens last 1 hour; refresh tokens last 30 days and change on every use;
    - the log has one line per request with no bodies, no query strings and no tokens;
-   - `GET /health` answers `{"ok": true, ...}` without a token and says nothing about your data.
+   - `GET /health` answers `{"ok": true, ...}` without a token and says nothing about your data
+     (on your own tunnel and the LAN; not through the relay, whose addresses are public in the
+     certificate logs).
 7. **Optional second lock (recommended):** a Cloudflare Access rule on the path `/consent`
    only, allowing just your own login (for example a one-time code sent to you). Then even
    someone who learns the passphrase can't approve an app. Don't put Access on `/mcp`,
