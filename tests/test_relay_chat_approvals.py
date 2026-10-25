@@ -355,3 +355,18 @@ def test_parser_has_the_command():
     from flowstate.cli import build_parser
     a = build_parser().parse_args(["relay", "chat-approvals", "on"])
     assert a.state == "on" and a.fn
+
+
+def test_status_and_off_say_relay_ais_give_no_link(backend, monkeypatch, capsys):
+    """(task 60, L-4) Since 2.4.4 a relay AI gives no phone link (it holds the relay handle):
+    status and `off` say it tells you to decide on your phone, from your saved review link."""
+    from flowstate import cli_review
+    from flowstate.relay import cli as relay_cli
+    db = backend.backend.db_path
+    run = lambda state: relay_cli.cmd_chat_approvals(argparse.Namespace(state=state, db=str(db)))  # noqa: E731
+    monkeypatch.setattr(cli_review, "open_terminal", lambda: None)
+    for state in (None, "off"):
+        assert run(state) == 0
+        out = capsys.readouterr().out
+        assert "tell you to decide on your phone instead, from your saved review link" in out
+        assert "phone link" not in out

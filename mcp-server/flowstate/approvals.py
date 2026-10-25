@@ -26,7 +26,8 @@ can pass the user's OK along: only a human click or keypress decides, in this or
   3. terminal `flowstate approve <id>` asks for the user's `y` on their own terminal.
 
 Through the relay (2.4.2), an AI can't approve or reject any review item in the chat by
-default: the answer gives the user's phone link instead. `flowstate relay chat-approvals on`
+default: the answer tells the user to decide on their phone, from their saved review link
+(2.4.4: no link in it, it holds the relay handle). `flowstate relay chat-approvals on`
 (the user's terminal only; relay_chat_on) lets it quote the user as before, except for the
 user-only items above.
 

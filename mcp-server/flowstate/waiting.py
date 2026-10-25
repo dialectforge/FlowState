@@ -592,8 +592,9 @@ PHONE_ONLY_WHY = ("This request came through the relay, where approving and reje
 def phone_only(db_path: Optional[Path], item_id) -> Optional[dict]:
     """An AI's manage_review approve / reject (server._review_decide). Through the relay, while
     chat approvals are off (the default; `flowstate relay chat-approvals on` allows them), a
-    pending item is refused with its own phone link (else the review list's) and the walk's
-    guidance. None: go on as usual (another connection, the setting is on, or the item is
+    pending item is refused with where the user decides (the item's phone link only for an
+    app on this computer; through the relay a sentence, approvals.PHONE_ELSEWHERE) and the
+    walk's guidance. None: go on as usual (another connection, the setting is on, or the item is
     missing or already decided: the usual answer says so)."""
     from .popup import listener
     if db_path is None or listener() != "relay" or approvals.relay_chat_on(db_path):

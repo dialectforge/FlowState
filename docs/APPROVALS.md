@@ -155,7 +155,7 @@ chat by default. What the code enforces (`waiting.phone_only`, called first in
 - Not affected: stdio, the LAN listener and the public (own tunnel) listener; the phone page,
   the phone review list and the popup (they decide as the user, with no app identity).
 - A disagreement card is the same rule when an agent uses `manage_review` approve / reject:
-  chat approvals off means `phone_only` and the review link; on means the agent may pass
+  chat approvals off means `phone_only` and where the user decides (a sentence, no link); on means the agent may pass
   `keep="a"`, `"b"` or `"both"` with the user's words. The in-chat card is drawn when the
   AI calls `show_conflict_card` (read-only; its tool definition names the card's `ui://`
   resource, which is how MCP Apps hosts decide what to draw). The card's buttons call
@@ -163,7 +163,8 @@ chat by default. What the code enforces (`waiting.phone_only`, called first in
   so it is left off the model's tool list unless the host advertises MCP Apps) and it refuses
   `user_request`, `message`, `text` and `reason`. A client that doesn't advertise MCP Apps
   can't show the card, so the tool refuses it (`not_a_card_tap`); through the relay it
-  follows the same chat-approvals setting (off: `phone_only` with the phone link). Its audit
+  follows the same chat-approvals setting (off: `phone_only`, telling the user to decide on
+  their phone from their saved link). Its audit
   path is `card`. The review page
   and the phone page audit as `review page`; an agent quoting the user audits as `chat`. A
   card closed because a decision was replaced, or because the user said the old possible-conflict
@@ -198,8 +199,8 @@ chat by default. What the code enforces (`waiting.phone_only`, called first in
   buttons, Approve and Reject (with an optional reason typed in the card, at most 300
   characters), call the app-only `resolve_review_card`. It refuses `user_request`, `message`,
   `text` and `reason` (`not_a_card_tap`; only the card's own `reject_reason` is taken), refuses
-  clients without MCP Apps, and through the relay follows chat approvals (off: `phone_only`
-  with the phone link). User-only items (`user_only` above) and every delete are drawn without
+  clients without MCP Apps, and through the relay follows chat approvals (off: `phone_only`,
+  telling the user to decide on their phone from their saved link). User-only items (`user_only` above) and every delete are drawn without
   buttons, with the phone link or, on this computer, the review page link; `resolve_review_card`
   refuses them (`user_only`) even if called. A decision runs the same apply step as
   `manage_review` approve / reject (`review_apply.py`) and every one is logged in `approval_log`
