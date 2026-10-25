@@ -464,8 +464,13 @@ def prepare(listing: dict, db_path: Path, scopes, project_id: Optional[int] = No
     # Hard rules (adding or removing one) never get a box: an app that answers its own box
     # could pass for the user (task 54; re-audit N-F26). They stay listed with where to decide.
     held = [it for it in items if it.get("kind") == "rule"]
-    out["_walk"] = {"ids": [it["id"] for it in items if it.get("kind") not in ("disagreement", "rule")],
+    # "Did you say this?" items too: only the user turns an app's claim into "you said so",
+    # on the review page, their phone or in their terminal (AGENTS.md; task 56 Info)
+    said = [it for it in items if it.get("kind") == "source"]
+    out["_walk"] = {"ids": [it["id"] for it in items
+                            if it.get("kind") not in ("disagreement", "rule", "source")],
                     "held": _lines(held, db_path=db_path) if held else [],
+                    "said": _lines(said, db_path=db_path) if said else [],
                     "cards": [c for c in cards if c], "project_id": project_id,
                     "may_decide": scopes is None or "flowstate:write" in scopes,
                     "links": links(db_path, local), "local": local}
@@ -483,6 +488,11 @@ def conflict_cards_line(db_path: Path, it: dict) -> Optional[str]:
 NOT_SHOWN = "No boxes were shown here; nothing was decided."
 HELD_NOTE = ("Hard rules get no box here: the user adds or removes one only on the review page, "
              "their phone or with `flowstate approve <id>` in their terminal.")
+
+
+SAID_NOTE = ("\"Did you say this?\" items get no box here: only the user confirms that they said "
+             "something, on the review page, their phone or with `flowstate approve <id>` in "
+             "their terminal.")
 
 
 def how_to_decide(ways: dict, why: str, local: bool = True, show: str = "this list") -> str:
@@ -734,6 +744,9 @@ async def walk(result: dict, session, client: str) -> dict:
     if plan.get("held"):
         result["hard_rules"] = plan["held"]
         result["hard_rules_note"] = HELD_NOTE
+    if plan.get("said"):
+        result["said_by_you"] = plan["said"]
+        result["said_by_you_note"] = SAID_NOTE
     result["note"] = _counts(done) + (
         " Then this app answered a box at once, faster than a person could, so FlowState "
         "stopped: that box was not shown and nothing more was decided." if unseen else "")

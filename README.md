@@ -233,9 +233,9 @@ prompt `flowstate-start`.
   app's claim. Once you confirm it yourself it says `(user, confirmed by the user)`, and
   `search` and `manage_history` show who set the tag and when. Changing an
   existing record to `user_stated` is yours alone, approvals on or off: the app's request
-  leaves the tag as it is and queues one review item, which you confirm on the review page or
-  with `flowstate approve <id>` (with approvals on, also in the popup or on your phone). No app
-  can confirm it for you. A `user_stated` write that repeats another app's `ai_inferred` record
+  leaves the tag as it is and queues one review item, which you confirm on the review page, on
+  your phone or with `flowstate approve <id>`; no popup, review walk box or in-chat card offers
+  it. No app can confirm it for you. A `user_stated` write that repeats another app's `ai_inferred` record
   is saved as `ai_inferred`. What this doesn't cover: FlowState can't check that an app
   quoting you at log time is telling the truth; the tag then names that app.
 

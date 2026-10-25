@@ -452,7 +452,8 @@ don't show server instructions:
 11. Todo priorities are critical / urgent / normal / low (older names high and medium still
    work). `log_work(source=user_stated|ai_inferred|from_code)` says where a record came from
    (who set it is stored). Changing an existing record to `user_stated` only queues it for the
-   user to confirm themselves (review page or terminal; approvals on or off); no app can approve it.
+   user to confirm themselves (review page, phone or terminal; approvals on or off; never a popup,
+   walk box or card); no app can approve it.
    `manage_memory(action="stale")` lists facts (paths, ports, config) not checked for 60 days;
    `manage_memory(action="mark_checked")` after checking one. `search(query=..., answer=true)`
    answers a question from the records, with their ids, and says so when FlowState has nothing

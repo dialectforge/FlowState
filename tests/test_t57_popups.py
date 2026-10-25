@@ -184,3 +184,20 @@ def test_a_disagreement_tap_whose_save_fails_keeps_its_code(backend, claims_ui, 
     broken[0] = False
     _r, body = call(S, "resolve_conflict_card", tap)               # the same code works again
     assert body.get("resolved") == item and status(db, item) == "approved", body
+
+
+# ---------------------------------------------------------------- "did you say this?" items
+def test_did_you_say_this_items_get_no_box_in_the_walk(backend, relay_dir):
+    """(task 56 Info) AGENTS.md: the user confirms a user_stated change on the review page,
+    their phone or in their terminal; the walk holds those items back, like hard rules."""
+    from flowstate import review as R
+    S, db = backend, backend.backend.db_path
+    said = R.add_item(db, 1, "source", "Did you say this? Use Postgres", None,
+                      {"record_type": "decision", "record_id": 1, "title": "Use Postgres",
+                       "user_only": True}, source="Cursor")
+    other = suggest(S, "Use Redis for caching")
+    seen = []
+    out = call(S, "manage_review", {"action": "walk"}, answers=[acc(approve=True)] * 3, seen=seen)
+    assert len(seen) == 1 and out["walked"] == [f"#{other}: approved"]
+    assert status(db, said) == "pending"
+    assert out["said_by_you"] and "review page" in out["said_by_you_note"]
