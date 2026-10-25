@@ -62,7 +62,7 @@ def cmd_apps(a) -> int:
     if a.action == "list":
         rows = activity.apps(db)
         for r in rows:
-            say(f"{r['app']}: {'PAUSED' if r['paused'] else 'on'}, last seen {r['last_seen'] or '-'}, "
+            say(f"{activity.app_label(r)}: {'PAUSED' if r['paused'] else 'on'}, last seen {r['last_seen'] or '-'}, "
                 f"{r['calls']} calls ({r['writes'] or 0} writes, {r['errors'] or 0} errors)")
         say(f"{len(rows)} app(s).")
         return 0
@@ -70,8 +70,9 @@ def cmd_apps(a) -> int:
         if not a.app:
             say("Name the app with --app (see `flowstate apps list`).")
             return 1
-        activity.set_paused(db, a.app, a.action == "pause", "cli")
-        say(f"{a.app}: {'paused (it can still read; its writes are refused)' if a.action == 'pause' else 'resumed'}.")
+        names = activity.set_paused_all(db, a.app, a.action == "pause", "cli")
+        also = f" (with the key / sign-in it uses: {', '.join(names[1:])})" if names[1:] else ""
+        say(f"{a.app}{also}: {'paused (it can still read; its writes are refused)' if a.action == 'pause' else 'resumed'}.")
         return 0
     for r in activity.recent(db, a.app, a.limit):
         say(f"{r['at']} {r['app']}: {r['tool']}{('/' + r['action']) if r['action'] else ''}"
@@ -185,19 +186,29 @@ def cmd_git_capture(a) -> int:
     return 0
 
 
+def _settings(fn) -> int:
+    """A settings command, with a broken or busy config.json said in one plain sentence."""
+    from . import paths
+    try:
+        return fn()
+    except (paths.ConfigUnreadable, TimeoutError) as e:
+        say(f"Not changed: {e}")
+        return 1
+
+
 def cmd_update(a) -> int:
     from . import updates
     if a.action == "check":
-        return updates.cli_check(a.sub, say)
+        return _settings(lambda: updates.cli_check(a.sub, say, _db(a)))
     if a.action == "self-update":
-        return updates.cli_self_update(a.sub, _db(a), say)
+        return _settings(lambda: updates.cli_self_update(a.sub, _db(a), say))
     from . import selfupdate
     return selfupdate.cli(a, say)
 
 
 def cmd_name(a) -> int:
     from . import install_name
-    return install_name.cli(a.value, a.reset, _db(a), say)
+    return _settings(lambda: install_name.cli(a.value, a.reset, _db(a), say))
 
 
 COMMANDS = ("cleanup", "apps", "meaning", "review-page", "export-md", "import-md", "import-memory",

@@ -54,11 +54,12 @@ from typing import Callable, Optional, Union
 from urllib.parse import urlencode
 
 from . import dbconn
-from . import activity, approvals, history, identity, install_name, review, review_mode, updates, who
+from . import activity, approvals, history, identity, install_name, paths, review, review_mode, updates, who
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8770   # 8766 = LAN server, 8767 = public listener
-COOKIE = "fs_review"
+COOKIE = "fs_review"            # the page `flowstate review-page` opens (Settings you can change)
+LINK_COOKIE = "fs_review_link"  # the open-link page (read-only Settings)
 CLIENT = "review-page"
 USER_WORDS = "The user did this on the FlowState review page ({what})."
 
@@ -109,7 +110,17 @@ def _e(v) -> str:
     return html.escape("" if v is None else str(v), quote=True)
 
 
-MAX_SESSIONS = 20   # open-link mode: the oldest browser session goes first
+MAX_SESSIONS = 20   # the least recently used browser session goes first
+NEW_PER_MINUTE = 10   # open-link mode: new browser sessions a minute (more: wait a moment)
+LINK_ONLY = ("Only you decide this one, and this page can be opened by any program on this "
+             "computer, so it isn't decided here. Nothing changed. Use the page "
+             "`flowstate review-page` opens, or `flowstate approve {id}` in your terminal.")
+LINK_REVIEW_OFF = ("Approvals are on, so turning review off isn't done on this page (any program "
+                   "on this computer can open it). Nothing changed. Use the page "
+                   "`flowstate review-page` opens, or `flowstate review-mode` in your terminal.")
+LINK_RECORD = ("Approvals are on, so Remove and Bring back aren't done on this page (any program "
+               "on this computer can open it). Nothing changed. Use the page "
+               "`flowstate review-page` opens.")
 CONFIRM_SECONDS = 5 * 60   # a settings confirm page must be answered within this
 MAX_CONFIRMS = 50
 SETTING_WORDS = "set on the FlowState review page"
@@ -161,7 +172,8 @@ class Page:
     def __init__(self, db_path: Union[Path, Callable[[], Path]], port: int = DEFAULT_PORT,
                  open_link: bool = False, base: str = "", client: str = CLIENT,
                  user_words: str = USER_WORDS, stylesheet: Optional[str] = None,
-                 sign_out: Optional[str] = None, settings: Optional[str] = None):
+                 sign_out: Optional[str] = None, settings: Optional[str] = None,
+                 secret_path: bool = False):
         self._db = db_path if callable(db_path) else Path(db_path)
         self.port = port
         self.open_link = open_link
@@ -179,6 +191,15 @@ class Page:
         self.settings = settings or ("off" if base else "read" if open_link else "edit")
         if self.settings not in ("off", "read", "edit"):
             raise ValueError("settings must be off, read or edit")
+        # `flowstate review-page`: the page lives under a secret path, and its cookie is sent
+        # only there. Browsers send a 127.0.0.1 cookie to every port, so without it any other
+        # local web server (a dev server an agent started) would get the Settings session.
+        self.secret_path = bool(secret_path and not base)
+        if self.secret_path:
+            self.base = "/s/" + secrets.token_urlsafe(18)
+        self.cookie = COOKIE if not open_link else LINK_COOKIE   # the two pages never share one
+        self.flashes: dict[str, str] = {}   # session -> the last action's answer (shown once)
+        self._new: list = []                # when recent sessions were made (open-link mode)
         self.confirms: dict[str, dict] = {}   # hash of a confirm token -> session, change, time
 
     @property
@@ -188,14 +209,28 @@ class Page:
     def launch_url(self) -> str:
         if self.open_link:
             return f"http://{HOST}:{self.port}/"
-        return f"http://{HOST}:{self.port}/?{urlencode({'key': self.launch_key})}"
+        return f"http://{HOST}:{self.port}{self.base}/?{urlencode({'key': self.launch_key})}"
 
-    def new_session(self) -> str:
+    def new_session(self) -> Optional[str]:
+        """A fresh browser session; None in open-link mode when too many were made just now
+        (a program visiting over and over can't push the user's own session out)."""
+        if self.open_link:
+            now = _clock()
+            self._new = [t for t in self._new if now - t < 60]
+            if len(self._new) >= NEW_PER_MINUTE:
+                return None
+            self._new.append(now)
         sess = secrets.token_urlsafe(32)
         self.sessions[sess] = secrets.token_urlsafe(24)
         while len(self.sessions) > MAX_SESSIONS:
-            self.sessions.pop(next(iter(self.sessions)))
+            old = next(iter(self.sessions))
+            self.sessions.pop(old)
+            self.flashes.pop(old, None)
         return sess
+
+    def used(self, sess: str) -> None:
+        """Mark a session as just used: the least recently used one goes first."""
+        self.sessions[sess] = self.sessions.pop(sess)
 
     # ------------------------------------------------------------ data
     def _conn(self):
@@ -217,6 +252,8 @@ class Page:
         item = review.get_item(self.db_path, int(form["item_id"]))
         if not item:
             return "That item no longer exists."
+        if self.open_link and approvals.user_only(item) and item["status"] == "pending":
+            return LINK_ONLY.format(id=item["id"])
         args = {"item_id": item["id"], "user_request": self.user_words.format(what="Approve"),
                 **{k: form[k] for k in ("summary", "details", "move_to", "confirm_name", "keep")
                    if str(form.get(k, "")).strip()}}
@@ -248,6 +285,10 @@ class Page:
         """Keep / Remove / Bring back on one record of a waiting session summary
         (session_records.py), as the user, labelled with this page."""
         from . import session_records
+        if self.open_link and form.get("action") in ("remove", "restore"):
+            item = review.get_item(self.db_path, int(form["item_id"]))
+            if item and approvals.is_on(self.db_path, item["project_id"]):
+                return LINK_RECORD
         try:
             res = session_records.decide(self.db_path, int(form["item_id"]), form.get("record"),
                                          form.get("action") or "", self.client)
@@ -257,6 +298,8 @@ class Page:
 
     def set_mode(self, form: dict) -> str:
         pid = int(form["project_id"]) if form.get("project_id") else None
+        if self.open_link and form.get("mode") == "off" and approvals.is_on(self.db_path, pid):
+            return LINK_REVIEW_OFF
         try:
             r = review_mode.set_mode(self.db_path, form.get("mode"),
                                      [k for k in review_mode.KINDS if form.get(f"kind_{k}")], pid,
@@ -269,27 +312,20 @@ class Page:
     def set_app(self, form: dict) -> str:
         app = form.get("app", "")
         paused = form.get("paused") == "1"
-        was = activity.is_paused(self.db_path, app)
-        activity.set_paused(self.db_path, app, paused, self.client)
-        self._log(f"app:{app.strip()[:70]}", "paused" if was else "running",
-                  "paused" if paused else "running")
-        return f"{app}: {'paused' if paused else 'resumed'}."
+        names = activity.pause_names(self.db_path, app)
+        for n in names:
+            was = activity.is_paused(self.db_path, n)
+            activity.set_paused(self.db_path, n, paused, self.client)
+            self._log(f"app:{n.strip()[:70]}", "paused" if was else "running",
+                      "paused" if paused else "running")
+        also = f" (with {', '.join(names[1:])}, the key or sign-in it uses)" if names[1:] else ""
+        return f"{app}{also}: {'paused' if paused else 'resumed'}."
 
     # ------------------------------------------------------------ settings (local page only)
     def _log(self, scope: str, old: Optional[str], new: Optional[str]) -> None:
         """One review_mode_log row for a setting changed here (the settings that don't log
         themselves: app pauses, phone links, popup apps, config.json)."""
-        conn = self._conn()
-        try:
-            if not review_mode.available(conn):
-                return
-            identity.insert(conn, "review_mode_log", {
-                "scope": scope, "old_mode": old, "new_mode": new, "client": self.client[:80],
-                "caller": self.client[:80], "user_request": SETTING_WORDS,
-                "changed_at": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())}, self.client)
-            conn.commit()
-        finally:
-            conn.close()
+        approvals.log_setting(self.db_path, scope, old, new, self.client, SETTING_WORDS)
 
     def _project_ids(self) -> set:
         return {p["id"] for p in self.projects()}
@@ -411,6 +447,18 @@ class Page:
             return (f"Added {name.lower()}, but claude.ai and Anthropic apps never get a popup, "
                     "whatever the list says.")
         return f"{'Added' if op == 'add' else 'Removed'} {name.lower()}."
+
+    def set_cards(self, form: dict, sess: str) -> str:
+        if self.settings != "edit":
+            return READ_ONLY
+        name, op = approvals.clean_client_name(form.get("name", "")), form.get("op")
+        if op not in ("add", "remove") or not name:
+            return "Give the app's name as it connects (its MCP client name)."
+        before = approvals.card_clients(self.db_path)
+        approvals.change_card_clients(self.db_path, name, op == "add", self.client)
+        self._log("card_clients", ", ".join(sorted(before)),
+                  f"{'added' if op == 'add' else 'removed'} {name}")
+        return f"{'Added' if op == 'add' else 'Removed'} {name}."
 
     def set_self_update(self, form: dict, sess: str) -> str:
         if self.settings != "edit":
@@ -705,6 +753,7 @@ class Page:
         if scope.startswith("app:"):
             return f"Pause {scope[4:]}"
         return {"phone_approvals": "Phone approval links", "popup_clients": "Popup apps",
+                "card_clients": "Review card apps",
                 "config:self_update": "Updates by flowstate update",
                 install_name.SCOPE: "Name of this FlowState",
                 "config:update_check": "Daily update check"}.get(scope, scope)
@@ -826,6 +875,24 @@ class Page:
             f"<ul>{items}</ul>" if popup else "<b>no apps</b>.", add,
             "claude.ai, Claude Desktop and other Anthropic apps never get a popup, whatever this "
             "list says (they don't show one)."))
+        cards = sorted(approvals.card_clients(db))
+        items = "".join(
+            f"<li>{_e(n)}" + (f"<form method='post' action='{self.base}/settings/cards'>{hidden}"
+                              f"<input type='hidden' name='op' value='remove'><input type='hidden' "
+                              f"name='name' value='{_e(n)}'><button>Remove</button></form>"
+                              if edit else "") + "</li>" for n in cards)
+        add = (f"<form method='post' action='{self.base}/settings/cards'>{hidden}"
+               "<input type='hidden' name='op' value='add'><div class='row'>"
+               "<input type='text' name='name' maxlength='80' placeholder=\"the app's MCP client name\" "
+               "autocomplete='off'><button class='go'>Add</button></div></form>") if edit else ""
+        out.append(self._row(
+            "Apps that may show review cards in the chat",
+            "These apps get the in-chat cards with Approve, Reject, Keep and Remove buttons. A "
+            "tap counts as yours, so only add an app that draws the cards itself (claude-ai is "
+            "Claude Desktop and claude.ai). Other apps get the text and your review page link.",
+            f"<ul>{items}</ul>" if cards else "<b>no apps</b>.", add,
+            "Each tap carries a one-use code only the card gets; an app never decides what it "
+            "queued itself on its own card."))
         no_relay = "" if relay else "Only used with the FlowState relay (not set up here)."
         out.append(self._row(
             "Phone approval links",
@@ -966,21 +1033,26 @@ def create_app(page: Page):
         return PlainTextResponse(text, status_code=code, headers=headers)
 
     def session_of(request) -> Optional[str]:
-        tok = request.cookies.get(COOKIE, "")
+        tok = request.cookies.get(page.cookie, "")
         for s in page.sessions:
             if tok and hmac.compare_digest(tok, s):
+                page.used(s)
                 return s
         return None
+
+    def set_cookie(resp, sess: str):
+        resp.set_cookie(page.cookie, sess, httponly=True, samesite="strict", path=f"{page.base}/")
+        return resp
 
     def host_ok(request) -> bool:
         return request.headers.get("host", "").lower() in allowed_hosts
 
     def page_html(request, sess: str):
+        flash = page.flashes.pop(sess, "")   # only FlowState's own answer, never the address's
         if request.query_params.get("view") == "who":
-            return HTMLResponse(page.render_who(page.sessions[sess],
-                                                request.query_params.get("flash", ""),
+            return HTMLResponse(page.render_who(page.sessions[sess], flash,
                                                 dict(request.query_params)), headers=headers)
-        return HTMLResponse(page.render(page.sessions[sess], request.query_params.get("flash", ""),
+        return HTMLResponse(page.render(page.sessions[sess], flash,
                                         request.query_params.get("project", ""),
                                         request.query_params.get("status", "pending")
                                         if request.query_params.get("status") in
@@ -1003,17 +1075,16 @@ def create_app(page: Page):
                 return deny(403, "This link has expired. Run `flowstate review-page` again.")
             page.launch_key = None   # one time only
             sess = page.new_session()
-            resp = RedirectResponse("/", status_code=303, headers=headers)
-            resp.set_cookie(COOKIE, sess, httponly=True, samesite="strict", path="/")
-            return resp
+            return set_cookie(RedirectResponse(f"{page.base}/", status_code=303, headers=headers),
+                              sess)
         sess = session_of(request)
         if not sess and page.open_link:
             # A click on the link (often from another app or site, so a SameSite=Strict cookie
             # wouldn't survive a redirect): the page and its cookie come in this one answer.
             sess = page.new_session()
-            resp = page_html(request, sess)
-            resp.set_cookie(COOKIE, sess, httponly=True, samesite="strict", path="/")
-            return resp
+            if sess is None:
+                return deny(429, "Too many new visits to this page just now; try again in a minute.")
+            return set_cookie(page_html(request, sess), sess)
         if not sess:
             return deny(403, "Open the page with the link from `flowstate review-page`.")
         return page_html(request, sess)
@@ -1036,16 +1107,18 @@ def create_app(page: Page):
                 return deny(403, "Form expired; reload the page.")
             try:
                 msg = fn(form, sess) if with_session else fn(form)
+            except (paths.ConfigUnreadable, TimeoutError) as e:   # a plain sentence, no path secrets
+                msg = str(e)
             except (ValueError, KeyError, sqlite3.Error, approvals.ApprovalError, OSError) as e:
                 msg = f"Could not do that: {type(e).__name__}"
             if isinstance(msg, _Html):   # the settings confirm step: a page of its own
                 return HTMLResponse(msg, headers=headers)
-            return RedirectResponse("/?" + urlencode({**({"view": back} if back else {}),
-                                                       "flash": msg[:300]}),
+            page.flashes[sess] = msg[:300]
+            return RedirectResponse(f"{page.base}/" + (f"?{urlencode({'view': back})}" if back else ""),
                                     status_code=303, headers=headers)
         return handler
 
-    return Starlette(routes=[
+    routes = [
         Route("/", index, methods=["GET"]),
         Route("/ping", ping, methods=["GET"]),
         Route("/approve", action(page.approve), methods=["POST"]),
@@ -1059,11 +1132,17 @@ def create_app(page: Page):
         *[Route(f"/settings/{name}", action(fn, with_session=True), methods=["POST"])
           for name, fn in (("approvals", page.set_approvals), ("relay-chat", page.set_relay_chat),
                            ("phone", page.set_phone), ("popup", page.set_popup),
+                           ("cards", page.set_cards),
                            ("self-update", page.set_self_update),
                            ("name", page.set_display_name),
                            ("update-check", page.set_update_check),
                            ("confirm", page.confirm), ("cancel", page.cancel))],
-    ])
+    ]
+    if not page.base:
+        return Starlette(routes=routes)
+    from starlette.routing import Mount
+    ping_route = [r for r in routes if r.path == "/ping"]
+    return Starlette(routes=ping_route + [Mount(page.base, routes=routes)])
 
 
 def serve(db_path: Path, port: int = DEFAULT_PORT, open_browser: bool = True,
@@ -1079,16 +1158,12 @@ def serve(db_path: Path, port: int = DEFAULT_PORT, open_browser: bool = True,
     except OSError as e:
         raise SystemExit(f"Couldn't start the review page on 127.0.0.1: {e}") from e
     if sock.getsockname()[1] != port and _ping(port, db_path):
-        # the shortcut, while a FlowState here already serves this database's linked page
-        sock.close()
-        print(f"FlowState's review page is already open at http://{HOST}:{port}/ (this computer only).",
-              flush=True)
-        if open_browser:
-            import webbrowser
-            webbrowser.open(f"http://{HOST}:{port}/")
-        return
+        # FlowState's link page has the usual port. That page is read-only (any program here
+        # can open it), so this one, with Settings you can change, takes a free port.
+        print(f"The read-only review link page is on port {port}; this page, with Settings you "
+              f"can change, uses port {sock.getsockname()[1]}.", flush=True)
     port = sock.getsockname()[1]
-    page = Page(db_path, port, settings="edit")
+    page = Page(db_path, port, settings="edit", secret_path=True)
     app = create_app(page)
     url = page.launch_url()
     print(f"FlowState review page on http://{HOST}:{port}/ (this computer only). Ctrl+C stops it.",

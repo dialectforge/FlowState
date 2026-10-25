@@ -9,7 +9,7 @@ import pytest
 from mcp import types
 from mcp.shared.memory import create_connected_server_and_client_session
 
-from flowstate import approvals, conflict_cards, popup, review, waiting
+from flowstate import approvals, card_taps, conflict_cards, popup, review, waiting
 from flowstate.conflict_card_ui import CARD_HTML, MIME, UI_URI
 from flowstate.review_page import HOST, Page, create_app
 from fsa_test_keys import make_key
@@ -32,6 +32,11 @@ def call(S, name, args, app="Cursor"):
     except ValueError:
         body = text
     return r, body
+
+
+def tap_code(item, app="Claude Desktop"):
+    """The one-use code show_conflict_card gives a card (made here directly)."""
+    return card_taps.mint(item, "conflict", app)
 
 
 def ok(res):
@@ -343,7 +348,8 @@ def test_card_tap_resolves_and_refuses_chat_text(backend, seeded_db, monkeypatch
                                                 "message": "keep the first one"})
     assert body["error"] == "not_a_card_tap"
     assert rows(seeded_db, "SELECT status FROM review_items WHERE id = ?", item)[0][0] == "pending"
-    saved = ok(call(S, "resolve_conflict_card", {"item_id": item, "keep": "a", "project": "Alpha"}))
+    saved = ok(call(S, "resolve_conflict_card", {"item_id": item, "keep": "a", "project": "Alpha",
+                                                 "tap": tap_code(item)}, app="Claude Desktop"))
     assert saved["resolved"] == item and saved["keep"] == "a"
     assert "Kept the older one" in saved["text"]
     assert rows(seeded_db, "SELECT path, decision FROM approval_log WHERE item_id = ?", item) == \
@@ -368,7 +374,8 @@ def test_card_tap_needs_an_mcp_apps_client_and_is_phone_only_through_the_relay(
     assert f"https://flowstatemcp.com/approve/testbox/{item}?n=" in json.dumps(body)
     assert rows(seeded_db, "SELECT status FROM review_items WHERE id = ?", item)[0][0] == "pending"
     approvals.set_relay_chat(seeded_db, True)
-    assert ok(call(S, "resolve_conflict_card", tap))["resolved"] == item
+    assert ok(call(S, "resolve_conflict_card", {**tap, "tap": tap_code(item)},
+                   app="Claude Desktop"))["resolved"] == item
 
 
 def test_card_follows_the_mcp_apps_handshake():
@@ -427,7 +434,7 @@ def test_review_page_keep_a_logs_the_review_page_path(backend, seeded_db):
     import re
     csrf = re.search(r'name="csrf" value="([^"]+)"', client.get("/").text).group(1)
     r = client.post("/approve", data={"item_id": item, "csrf": csrf, "keep": "a"})
-    assert r.status_code == 303 and "Kept+the+older" in r.headers["location"].replace(" ", "+")
+    assert r.status_code == 303 and "Kept the older" in client.get(r.headers["location"]).text
     assert rows(db, "SELECT status FROM conflict_cards WHERE review_item_id = ?", item)[0][0] == "kept_a"
     assert rows(db, "SELECT path, decision FROM approval_log WHERE item_id = ?", item) == \
         [("review page", "kept_a")]
@@ -481,7 +488,8 @@ def test_flagging_a_pair_that_already_waits_closes_the_older_item_and_deciding_c
     assert pending(db) == [(flagged, "disagreement")]
     assert rows(db, "SELECT status FROM review_items WHERE id = ?", auto)[0][0] == "rejected"
     monkeypatch.setattr(conflict_cards, "client_has_ui", lambda: True)
-    ok(call(S, "resolve_conflict_card", {"item_id": flagged, "keep": "b", "project": "Alpha"}))
+    ok(call(S, "resolve_conflict_card", {"item_id": flagged, "keep": "b", "project": "Alpha",
+                                         "tap": tap_code(flagged)}, app="Claude Desktop"))
     assert pending(db) == []
     assert rows(db, "SELECT status FROM decision_conflicts") == [("dismissed_compatible",)]
 
@@ -532,7 +540,8 @@ def test_show_conflict_card_reads_one_or_all_and_never_decides(backend, seeded_d
     _r, body = call(S, "show_conflict_card", {"item_id": 99999})
     assert body["error"] == "record_not_found"
     assert len(pending(seeded_db, "disagreement")) == 2   # showing decides nothing
-    saved = call(S, "resolve_conflict_card", {"item_id": one, "keep": "both", "project": "Alpha"})[0]
+    saved = call(S, "resolve_conflict_card", {"item_id": one, "keep": "both", "project": "Alpha",
+                                              "tap": tap_code(one)}, app="Claude Desktop")[0]
     assert saved.structuredContent["cards"][0]["resolved"] is True
     r, _body = call(S, "show_conflict_card", {"item_id": one})
     assert r.structuredContent["cards"][0]["detail"].startswith("Kept both")

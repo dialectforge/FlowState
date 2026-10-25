@@ -10,7 +10,7 @@ import pytest
 from mcp import types
 from mcp.shared.memory import create_connected_server_and_client_session
 
-from flowstate import approvals, conflict_cards, popup, review, review_cards
+from flowstate import approvals, card_taps, conflict_cards, popup, review, review_cards
 from flowstate.review_card_ui import CARD_HTML, MIME, UI_URI
 from fsa_test_keys import make_key
 
@@ -64,9 +64,12 @@ def session_item(db, text="Worked on the login page"):
                            {}, "auto-session", session_id=sid)
 
 
-def tap(S, item, decision, **kw):
+def tap(S, item, decision, app="Cursor", **kw):
+    """A tap from the card: with the one-use code show_review_card gave that card (made here
+    directly; test_tap_codes_* check that show_review_card hands them out)."""
+    kw.setdefault("tap", card_taps.mint(item, "review", app))
     return call(S, "resolve_review_card", {"item_id": item, "decision": decision,
-                                           "project": "Alpha", **kw})
+                                           "project": "Alpha", **kw}, app=app)
 
 
 @pytest.fixture
@@ -191,8 +194,9 @@ def test_every_kind_gets_a_card(backend, seeded_db, ui):
               "source": 'Mark the learning "Alpha lesson" in Alpha as something you said yourself '
                         '(user_stated)?',
               "delete": 'Delete the todo "Alpha todo" from Alpha?'}
-    for what, item in made.items():
-        r, body = call(S, "show_review_card", {"project": "Alpha", "item_id": item})
+    for what, item in made.items():   # shown in another app than the one that ran the import
+        r, body = call(S, "show_review_card", {"project": "Alpha", "item_id": item},
+                       app="Claude Desktop")
         card = r.structuredContent["cards"][0]
         assert card["title"] == titles[what], (what, card["title"])
         assert card["text"] and card["kind_label"], what
@@ -250,7 +254,7 @@ def test_card_uses_the_same_apply_functions_as_manage_review(backend, seeded_db,
     b = ok(call(S, "log_work", {"project": "Alpha", "kind": "decision",
                                 "summary": "Use session cookies with JWT for API auth"}))
     conflict = next(f["review_item_id"] for f in b["possible_conflicts"])
-    ok(tap(S, conflict, "reject"))   # they fit together: the pair is dismissed
+    ok(tap(S, conflict, "reject", app="Claude Desktop"))   # they fit together: the pair is dismissed
     assert rows(db, "SELECT status FROM decision_conflicts WHERE review_item_id = ?", conflict) == \
         [("dismissed_compatible",)]
     assert a
@@ -277,7 +281,8 @@ def test_already_decided_and_wrong_project(backend, seeded_db, ui):
     assert tap(S, item, "reject")[1]["error"] == "already_decided"
     other = suggest(S, "Use NATS for events")
     _r, body = call(S, "resolve_review_card", {"item_id": other, "decision": "approve",
-                                               "project": "Beta Project"})
+                                               "project": "Beta Project",
+                                               "tap": card_taps.mint(other, "review", "Cursor")})
     assert body["error"] == "project_mismatch" and status(seeded_db, other) == "pending"
     assert tap(S, 99999, "approve")[1]["error"] == "record_not_found"
 

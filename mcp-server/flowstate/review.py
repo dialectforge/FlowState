@@ -192,6 +192,12 @@ def _claim(db_path: Path, item_id: int, status: str, client: str, user_request: 
             conn.rollback()
             raise ReviewError("already_decided",
                               f"Review item #{item_id} is already {row['status']}.")
+        if row["kind"] == "session_summary":
+            from . import session_records
+            if session_records.busy(dict(row)):   # a record's Remove is under way
+                conn.rollback()
+                raise ReviewError("busy", f"A record of review item #{item_id} is being removed "
+                                          f"right now; try again in a moment.")
         sets, who = identity.set_sql(conn, "review_items", client, prefix="decided_")
         conn.execute(f"""UPDATE review_items SET status = ?, decided_at = ?, decided_by = ?,
                         user_request = ?, reject_reason = ?{sets} WHERE id = ?""",
@@ -250,7 +256,8 @@ def strip_tag(text: str) -> str:
 
 def approve(db_path: Path, item_id: int, user_request: str, client: str,
             apply: Callable[[dict, dict], tuple[str, Optional[int]]],
-            edits: Optional[dict] = None, others: Optional[dict] = None) -> dict:
+            edits: Optional[dict] = None, others: Optional[dict] = None,
+            path: Optional[str] = None) -> dict:
     """Approve (optionally after editing summary/details). `apply(item, payload)` creates
     the record for log_work kinds and returns (table, id). `others` maps further item kinds
     (cleanup, edit) to `fn(item, edits) -> (table, id)`."""
@@ -263,7 +270,7 @@ def approve(db_path: Path, item_id: int, user_request: str, client: str,
             if item["session_id"] is None:
                 raise ReviewError("session_missing", "The session for this summary no longer exists.")
             from . import session_records   # Keep all: every record not removed is kept too
-            session_records.keep_rest(db_path, item, client)
+            session_records.keep_rest(db_path, item, client, path)
             _set_session(db_path, item["session_id"], _with_removed(db_path, item,
                                                                     strip_tag(summary)),
                          "approved", item_id)

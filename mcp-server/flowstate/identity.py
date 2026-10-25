@@ -102,9 +102,22 @@ def stdio_machine() -> Optional[str]:
     return clean(os.environ.get("FLOWSTATE_WORKSPACE")) or clean(socket.gethostname())
 
 
+# "(via ...)" and "(signed in as ...)" are how FlowState shows a key's or sign-in's name next
+# to the app's; an app may not put them in its own name to look like one
+_LOOKALIKE = re.compile(r"\s*\(\s*(via|signed\s+in\s+as)\b[^)]*\)?", re.I)
+
+
+def _app_name(client) -> Optional[str]:
+    """The name an app sent, tidied, without anything that imitates FlowState's own marks."""
+    name = clean(client)
+    if name is None:
+        return None
+    return clean(_LOOKALIKE.sub("", name))
+
+
 def _sent_name(client) -> Optional[str]:
     """The MCP client name the app sent at initialize, or None (none sent: "unknown")."""
-    name = clean(client)
+    name = _app_name(client)
     return None if name is None or name.lower() == "unknown" else name
 
 
@@ -116,7 +129,7 @@ def resolve(client: str, http: bool = False, token=None, headers: Optional[dict]
     headers = headers or {}
     model = clean(model_arg)
     if not http:   # stdio: the app that started this process
-        return Identity(clean(client) or "unknown",
+        return Identity(_app_name(client) or "unknown",
                         model or clean(os.environ.get("FLOWSTATE_MODEL")),
                         stdio_machine(), "self_reported", PROCESS_SESSION)
     model = model or clean(headers.get("x-flowstate-model"))
@@ -142,7 +155,7 @@ def resolve(client: str, http: bool = False, token=None, headers: Optional[dict]
         return Identity(_sent_name(client) or name, model, _signed_in("lan", name), source,
                         session, name, aka)
     # the one shared LAN token: the app name is only the app's own say-so
-    return Identity(clean(client) or "unknown", model, workspace,
+    return Identity(_app_name(client) or "unknown", model, workspace,
                     "shared_token" if token is not None else "self_reported", session)
 
 

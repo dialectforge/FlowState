@@ -40,7 +40,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # tests/: fsa_test_keys
-from fsclient import (PY, REPO, HttpClient, StdioClient, ToolError, guard_log, real_dirs,  # noqa: E402
+from fsclient import (PY, REPO, HttpClient, StdioClient, ToolError, _parse_result, guard_log, real_dirs,  # noqa: E402
                       sandbox_env, wait_port)
 from terminal_run import run_in_terminal, run_no_terminal, start_in_terminal, stop_in_terminal  # noqa: E402
 
@@ -2200,7 +2200,14 @@ def s15_review_card(W):
         sc = walk.get("show_card") if isinstance(walk, dict) else None
         R.check(15, "the walk on an MCP Apps host points at show_review_card",
                 isinstance(sc, str) and sc.startswith(f'show_review_card(project="{Q}"'), short(walk))
-        shown = host.call("show_review_card", project=Q)
+        raw = c.request("tools/call", {"name": "show_review_card", "arguments": {"project": Q}})
+        shown = _parse_result(raw)
+        codes = (raw.get("_meta") or {}).get("flowstate/taps") or {}
+        seen = json.dumps(raw.get("content")) + json.dumps(raw.get("structuredContent"))
+        R.check(15, "each card's one-use tap code is only in the result's _meta, not in the text "
+                    "or the card data",
+                {str(ia), str(ib)} <= set(codes) and not any(v in seen for v in codes.values()),
+                sorted(codes))
         ids = [x.get("review_item_id") for x in (shown.get("review_cards") or [])]
         R.check(15, "show_review_card shows the waiting items oldest first and decides nothing",
                 ia in ids and ib in ids and ids.index(ia) < ids.index(ib)
@@ -2211,9 +2218,21 @@ def s15_review_card(W):
         no_ui = plain.call("resolve_review_card", item_id=ia, decision="approve", project=Q)
         R.check(15, "a tap from an app without MCP Apps is refused", no_ui.get("error") == "not_a_card_tap",
                 short(no_ui))
-        ok_a = host.call("resolve_review_card", item_id=ia, decision="approve", project=Q)
+        bare = host.call("resolve_review_card", item_id=ia, decision="approve", project=Q)
+        forged = host.call("resolve_review_card", item_id=ia, decision="approve", project=Q,
+                           tap="made-up-code-0123456789")
+        R.check(15, "a tap without the card's own code (the model calling the tool) is refused",
+                bare.get("error") == "not_a_card_tap" and forged.get("error") == "not_a_card_tap"
+                and W.count("review_items", f"id = {ia} AND status = 'pending'") == 1,
+                (short(bare), short(forged)))
+        ok_a = host.call("resolve_review_card", item_id=ia, decision="approve", project=Q,
+                         tap=codes.get(str(ia)))
         ok_b = host.call("resolve_review_card", item_id=ib, decision="reject", project=Q,
-                         reject_reason="We know that already")
+                         reject_reason="We know that already", tap=codes.get(str(ib)))
+        again = host.call("resolve_review_card", item_id=ib, decision="approve", project=Q,
+                          tap=codes.get(str(ib)))
+        R.check(15, "a tap code works once", again.get("error") in ("not_a_card_tap", "already_decided"),
+                short(again))
         rows = W.q("SELECT item_id, path, decision FROM approval_log WHERE item_id IN (?, ?) ORDER BY id",
                    (ia, ib))
         R.check(15, "Approve saves the todo, Reject keeps the reason, both logged with path card",
@@ -2372,6 +2391,18 @@ def report(W, started, test_changed, live_changed):
     return "\n".join(lines)
 
 
+def said(hc, base: str, r) -> str:
+    """The review page's answer to a post: kept on the page's side and shown once on the page
+    the post redirects to (2.4.4: never in the address)."""
+    import html as _html
+    if r.status_code != 303:
+        return ""
+    page = hc.get(base.rstrip("/").rsplit("/s/", 1)[0] + r.headers["location"]
+                  if r.headers["location"].startswith("/") else r.headers["location"])
+    m = re.search(r"<p class='ok'>(.*?)</p>", page.text, re.S)
+    return _html.unescape(m.group(1)) if m else ""
+
+
 def s17_settings_page(W):
     """The Settings section: read-only on the page an AI's link opens; changed on the page
     `flowstate review-page --print-url` opens (its one-time link read from its own terminal),
@@ -2398,7 +2429,7 @@ def s17_settings_page(W):
                                                         "state": "on"},
                      headers={"Origin": link.rstrip("/")}, follow_redirects=False)
         R.check(17, "a settings post on the link page changes nothing",
-                ro.status_code == 303 and "nothing+changed" in ro.headers.get("location", "")
+                ro.status_code == 303 and "nothing changed" in said(hc, link, ro)
                 and W.q("SELECT key, value FROM approval_settings ORDER BY key") == settings
                 and W.count("review_mode_log") == before, ro.headers.get("location"))
         # this FlowState's display name (task 43): set in the terminal, shown on the page, logged
@@ -2430,14 +2461,15 @@ def s17_settings_page(W):
                                     "--port", str(port)], b"One-time link:", env=W.env, cwd=str(REPO),
                                    timeout=40)
     try:
-        lm = re.search(r"One-time link: (http://127\.0\.0\.1:\d+/\?key=[A-Za-z0-9_-]+)", shown)
+        lm = re.search(r"One-time link: (http://127\.0\.0\.1:\d+(/s/[A-Za-z0-9_-]+)/\?key=[A-Za-z0-9_-]+)", shown)
         R.check(17, "`flowstate review-page --print-url` shows its one-time link on its own terminal", lm,
                 "(link not shown)")
         if not lm:
             return
-        base = f"http://127.0.0.1:{port}"
+        origin = f"http://127.0.0.1:{port}"
+        base = origin + lm.group(2)   # the Settings page lives under its own secret path
         wait_port("127.0.0.1", port, 20)
-        hdr = {"Origin": base}
+        hdr = {"Origin": origin}
         with httpx.Client(timeout=20, follow_redirects=False) as hc:
             r = hc.get(lm.group(1))
             page = hc.get(base + "/")
@@ -2464,21 +2496,20 @@ def s17_settings_page(W):
             form = {"token": tok.group(1) if tok else "", "setting": "approvals", "scope": "", "state": "off"}
             wrong = post("/settings/confirm", **{**form, "setting": "relay_chat", "state": "on"})
             R.check(17, "a confirm token used for another change changes nothing (and is used up)",
-                    "no+longer+valid" in wrong.headers.get("location", "")
+                    "no longer valid" in said(hc, base, wrong)
                     and W.count("approval_settings", "key = 'approvals' AND value = 'on'") == 1)
             ask = post("/settings/approvals", scope="", state="off")
             tok = re.search(r"name='token' value='([^']+)'", ask.text)
             form["token"] = tok.group(1) if tok else ""
-            ok = post("/settings/confirm", **form)
-            replay = post("/settings/confirm", **form)
+            ok = said(hc, base, post("/settings/confirm", **form))   # each answer is shown once
+            replay = said(hc, base, post("/settings/confirm", **form))
             R.check(17, "Yes on the confirm page turns them off; the same token again is refused",
-                    "now+off" in ok.headers.get("location", "")
-                    and "no+longer+valid" in replay.headers.get("location", "")
+                    "now off" in ok and "no longer valid" in replay
                     and W.count("approval_settings", "key = 'approvals' AND value = 'off'") == 1,
-                    (ok.headers.get("location"), replay.headers.get("location")))
+                    (ok, replay))
             ign = post("/settings/relay-chat", state="on")
             R.check(17, "without the relay, a relay setting post is ignored",
-                    "not+set+up+here" in ign.headers.get("location", "")
+                    "not set up here" in said(hc, base, ign)
                     and W.count("approval_settings", "key = 'relay_chat_approvals'") == 0)
         rows = W.q("SELECT scope, client, caller, app, machine, identity_source FROM review_mode_log "
                    "WHERE id > (SELECT COALESCE(MAX(id), 0) - 3 FROM review_mode_log) ORDER BY id")

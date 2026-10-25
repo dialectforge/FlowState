@@ -67,6 +67,9 @@ DEFAULT_REDIRECT_HOSTS = ["claude.ai", "claude.com", "chatgpt.com", "www.cursor.
                           "cursor.com", "localhost", "127.0.0.1"]
 
 TOKEN_PREFIX = {"access": "fs_at_", "refresh": "fs_rt_", "static": "fs_ct_", "code": "fs_ac_"}
+# a token's, OAuth app's or key's name: short enough that "<machine> (signed in as <name>)"
+# is always recorded whole (identity.MAX_LEN), so the sign-in still knows its own records
+MAX_NAME = 50
 APP_KEY_PREFIX = "fs_lk_"   # per-app keys for the local / LAN listener (app_keys.py)
 
 
@@ -179,14 +182,48 @@ class AuthStore:
                 c.execute("INSERT INTO failures (at) VALUES (?)", (time.time(),))
         return ok
 
+    # -- names: who wrote what is matched by the sign-in's name (identity.same_sign_in), so a
+    # name is never given to a second token or OAuth app: not one in use, not one revoked, not
+    # one an app had before a rename (case doesn't count). Keys keep their own list (app_keys).
+    def _name_taken(self, c, name: str, except_id: Optional[str] = None) -> Optional[str]:
+        """The id that has (or had) this name, else None."""
+        fold = name.casefold()
+        for r in c.execute("SELECT id, name FROM clients"):
+            if r["id"] != except_id and (r["name"] or "").casefold() == fold:
+                return r["id"]
+        for r in c.execute("SELECT client_id, name FROM client_names"):
+            if r["client_id"] != except_id and (r["name"] or "").casefold() == fold:
+                return r["client_id"]
+        return None
+
+    @staticmethod
+    def check_name(name: str, what: str = "the name") -> str:
+        """The tidied name, or ValueError with a sentence: empty, too long for "(signed in as
+        <name>)" to be recorded whole, or secret-looking."""
+        from .identity import clean
+        name = " ".join((name or "").split())
+        if not name:
+            raise ValueError(f"{what} is empty; give the app a name")
+        if len(name) > MAX_NAME:
+            raise ValueError(f"{what} is longer than {MAX_NAME} characters")
+        if clean(name) != name:
+            raise ValueError(f"{what} looks like it holds a secret; pick a plain name")
+        return name
+
     # -- clients
     def add_token_client(self, name: str, scopes: list[str],
                          days: Optional[int] = None) -> tuple[str, str]:
-        """(client_id, token). The token is returned once and only its hash is kept."""
+        """(client_id, token). The token is returned once and only its hash is kept. A name
+        another token or OAuth app has, or had, is refused (ValueError)."""
+        name = self.check_name(name)
         cid = "tok_" + secrets.token_hex(6)
         token = _new("static")
         now = time.time()
         with self._conn() as c:
+            other = self._name_taken(c, name)
+            if other:
+                raise ValueError(f"the name {name!r} is taken (by {other}, now, before a rename "
+                                 f"or before it was revoked); pick another, one per app")
             c.execute("INSERT INTO clients (id, name, kind, scopes, created_at, approved_at) "
                       "VALUES (?, ?, 'token', ?, ?, ?)", (cid, name, " ".join(scopes), now, now))
             c.execute("INSERT INTO tokens (hash, client_id, kind, family, scopes, created_at, "
@@ -206,10 +243,17 @@ class AuthStore:
             if n >= MAX_OAUTH_CLIENTS:
                 raise RegistrationError("invalid_client_metadata",
                                         "too many registered clients; revoke some first")
+            # the app picks its own name here, so a taken one gets a number: "Claude (2)"
+            base = " ".join((info.client_name or "unnamed app").split())[:MAX_NAME - 5].strip() \
+                or "unnamed app"
+            name, n = base, 1
+            while self._name_taken(c, name):
+                n += 1
+                name = f"{base} ({n})"
             c.execute("INSERT INTO clients (id, name, kind, scopes, info, created_at) "
                       "VALUES (?, ?, 'oauth', ?, ?, ?)",
-                      (info.client_id, (info.client_name or "unnamed app")[:80],
-                       info.scope or " ".join(SCOPES), info.model_dump_json(), now))
+                      (info.client_id, name, info.scope or " ".join(SCOPES),
+                       info.model_dump_json(), now))
 
     def oauth_client(self, client_id: str) -> Optional[OAuthClientInformationFull]:
         with self._conn() as c:
@@ -233,17 +277,10 @@ class AuthStore:
         show): no such app, several of that name, an empty or secret-looking new name, or one
         another app has, or had before a rename. The old name is kept in client_names, so the
         app is still the one that wrote what it saved under it (identity.same_sign_in)."""
-        from .identity import MAX_LEN, clean
         old = " ".join((old or "").split())
-        wanted = " ".join((new or "").split())
         if not old:
             raise ValueError("say which app: flowstate remote rename <old name> <new name>")
-        if not wanted:
-            raise ValueError("the new name is empty; give the app a name")
-        if len(wanted) > MAX_LEN:
-            raise ValueError(f"the new name is longer than {MAX_LEN} characters")
-        if clean(wanted) != wanted:
-            raise ValueError("the new name looks like it holds a secret; pick a plain name")
+        wanted = self.check_name(new, "the new name")
         with self._conn() as c:
             live = c.execute("SELECT id, name FROM clients WHERE revoked_at IS NULL").fetchall()
             hits = [r for r in live if r["id"] == old] or \
@@ -259,14 +296,10 @@ class AuthStore:
             cid, was = hits[0]["id"], hits[0]["name"]
             if wanted == was:
                 raise ValueError(f"{cid} is already named {was!r}; nothing changed")
-            taken = [r["id"] for r in live if r["id"] != cid
-                     and r["name"].casefold() == wanted.casefold()]
-            taken += [r["client_id"] for r in c.execute(
-                "SELECT client_id, name FROM client_names WHERE client_id != ?", (cid,))
-                if r["name"].casefold() == wanted.casefold()]
+            taken = self._name_taken(c, wanted, except_id=cid)   # revoked apps' names too
             if taken:
-                raise ValueError(f"the name {wanted!r} is taken (by {taken[0]}, now or before a "
-                                 f"rename); pick another")
+                raise ValueError(f"the name {wanted!r} is taken (by {taken}, now, before a "
+                                 f"rename or before it was revoked); pick another")
             c.execute("INSERT INTO client_names (client_id, name, until) VALUES (?, ?, ?)",
                       (cid, was, time.time()))
             c.execute("UPDATE clients SET name = ? WHERE id = ?", (wanted, cid))

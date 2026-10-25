@@ -99,6 +99,24 @@ def set_paused(db_path: Path, app: str, paused: bool, by: str) -> dict:
         conn.close()
 
 
+def pause_names(db_path: Path, app: str) -> list:
+    """The names Pause / Resume on `app` set: the app's own name and every key, token or
+    sign-in it came in on (apps()' "via"). An app's name is its own claim, so pausing only
+    that name would let it come back as "Grok Bot 2" on the same key; the key's name it can't
+    change."""
+    app = (app or "").strip()
+    row = next((a for a in apps(db_path) if a["app"] == app), None)
+    return [app] + [v for v in (row or {}).get("via", []) if v.casefold() != app.casefold()]
+
+
+def set_paused_all(db_path: Path, app: str, paused: bool, by: str) -> list:
+    """set_paused for each of pause_names(app); returns the names."""
+    names = pause_names(db_path, app)
+    for n in names:
+        set_paused(db_path, n, paused, by)
+    return names
+
+
 def apps(db_path: Path) -> list[dict]:
     """Every app seen (or paused), with last use and counts."""
     conn = _conn(db_path)
@@ -109,7 +127,9 @@ def apps(db_path: Path) -> list[dict]:
             """SELECT app, MAX(at) last_seen, COUNT(*) calls, SUM(write) writes,
                       SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) errors
                FROM activity_log GROUP BY app""")}
+        controls = {}
         for r in conn.execute("SELECT app, paused, changed_at FROM app_controls"):
+            controls[r["app"]] = bool(r["paused"])
             rows.setdefault(r["app"], {"app": r["app"], "last_seen": None, "calls": 0,
                                        "writes": 0, "errors": 0})
             rows[r["app"]]["paused"] = bool(r["paused"])
@@ -123,6 +143,8 @@ def apps(db_path: Path) -> list[dict]:
         for v in rows.values():
             v.setdefault("paused", False)
             v["via"] = sorted(v.get("via", []))
+            # writes are refused when the key or sign-in it uses is paused too
+            v["paused"] = v["paused"] or any(controls.get(x) for x in v["via"])
         return sorted(rows.values(), key=lambda v: v["last_seen"] or "", reverse=True)
     finally:
         conn.close()

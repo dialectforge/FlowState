@@ -45,7 +45,12 @@ EXPLAIN = ("These records were already saved when the AI wrote them. Keep marks 
            "Remove takes it back (after a safety copy; Bring back, or manage_history undo, "
            "restores it). Keep all keeps the summary and every record you haven't removed.")
 STATE_WORDS = {"kept": "kept", "removed": "removed by you", "gone": "no longer in FlowState",
-               "changed": "changed since this session", "": "not decided yet"}
+               "changed": "changed since this session", "removing": "being removed",
+               "": "not decided yet"}
+# A Remove (or Bring back) writes this marker first, in the same transaction that checks the
+# summary still waits; Keep all / Don't keep (review._claim) wait for it, in any process. A
+# marker older than this was left by a process that stopped half-way, and is ignored.
+MARK_SECONDS = 120
 ACTION_WORDS = {"keep": "Keep", "remove": "Remove", "restore": "Bring back"}
 _lock = threading.Lock()   # one decision at a time per process (the payload is read, then written)
 
@@ -104,6 +109,71 @@ def _ended(conn, item: dict) -> str:
     return str((row[0] if row else None) or item.get("created_at") or "")[:19]
 
 
+def own_edits(conn, item: dict) -> set:
+    """The edit ids of this session's own writes (the run ledger's change ids, which the edit
+    history uses as edit ids); empty when the ledger has none (cleared, or before 2.4.0)."""
+    sid = item.get("session_id")
+    if sid is None or conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND "
+                                   "name='run_writes'").fetchone() is None:
+        return set()
+    return {r[0] for r in conn.execute("SELECT change_id FROM run_writes WHERE session_id = ? "
+                                       "AND status = 'saved'", (sid,))}
+
+
+def _created_here(conn, table: str, rid: int, mine: set) -> Optional[bool]:
+    """Did one of this session's own writes create the row? None when that can't be known
+    (no ledger rows for the session)."""
+    if not mine:
+        return None
+    for (edit,) in conn.execute("SELECT edit_id FROM record_history WHERE table_name = ? AND "
+                                "record_id = ? AND old_row IS NULL AND new_row IS NOT NULL",
+                                (table, rid)):
+        if edit in mine:
+            return True
+    return False
+
+
+def _others_below(conn, table: str, rid: int, mine: set) -> int:
+    """How many rows a Remove would also take that another app's write created (a fix attempt
+    added to this session's problem later, say)."""
+    from . import deletes
+    try:   # the planner reads rows by name: a connection of its own on the same file
+        pconn = deletes.connect(Path(conn.execute("PRAGMA database_list").fetchone()[2]))
+        try:
+            gone, _changed = deletes.plan(pconn, table, rid)
+        finally:
+            pconn.close()
+    except Exception:  # noqa: BLE001 - the delete itself would refuse; nothing extra to say
+        return 0
+    n = 0
+    for (t, key) in gone:
+        if (t, key) == (table, rid) or not isinstance(key, int):
+            continue
+        made = [r[0] for r in conn.execute(
+            "SELECT edit_id FROM record_history WHERE table_name = ? AND record_id = ? AND "
+            "old_row IS NULL AND new_row IS NOT NULL", (t, key))]
+        if made and not set(made) & mine:
+            n += 1
+    return n
+
+
+def _marker_fresh(d: dict) -> bool:
+    try:
+        at = datetime.strptime(str(d.get("at"))[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return False
+    return (datetime.now(timezone.utc) - at).total_seconds() < MARK_SECONDS
+
+
+def busy(item_or_payload) -> bool:
+    """Is a Remove / Bring back on one of this summary's records under way right now?"""
+    p = item_or_payload if isinstance(item_or_payload, dict) and "record_decisions" in \
+        item_or_payload else _payload(item_or_payload if isinstance(item_or_payload, dict) else {})
+    rd = p.get("record_decisions") if isinstance(p.get("record_decisions"), dict) else {}
+    return any(isinstance(d, dict) and d.get("d") == "removing" and _marker_fresh(d)
+               for d in rd.values())
+
+
 def _changed_since(conn, table: str, rid: int, ended: str, own: set) -> bool:
     if not ended:
         return False
@@ -138,14 +208,30 @@ def annotate(conn, item: dict, entries: list) -> None:
     pending = item.get("status", "pending") == "pending"
     has_hist = _has_history(conn)
     ended = _ended(conn, item) if has_hist else ""
-    own = {e for d in decided.values() if isinstance(d, dict) for e in d.get("edits") or []}
+    mine = own_edits(conn, item) if has_hist else set()
+    # the session's own writes (its last one may land after `ended`, its start) and the
+    # user's own decisions here don't count as "changed since"
+    own = mine | {e for d in decided.values() if isinstance(d, dict) for e in d.get("edits") or []}
     for e in entries:
         k = key(e["kind"], e["id"])
         d = decided.get(k) if isinstance(decided.get(k), dict) else {}
         table = history.TABLES.get(e["kind"])
         created = e["kind"] in REMOVABLE and (e.get("verb") or "saved").split(", ")[0] == "saved"
+        if created and table and has_hist and not e["gone"]:
+            here = _created_here(conn, table, e["id"], mine)
+            if here is False:   # it was there already (a link added again), or the session deleted it
+                created = False
+                if e.get("verb") == "saved":
+                    e["verb"] = "already there"
+            elif _others_below(conn, table, e["id"], mine):
+                created = False   # Remove would take another app's later work with it
+                e["others_below"] = True
         state, actions = d.get("d") or "", []
-        if state == "removed" and e["gone"] and table and has_hist and d.get("edit"):
+        if state == "removing":   # a Remove under way (or one that stopped half-way)
+            state = "removing" if _marker_fresh(d) else ("gone" if e["gone"] else "")
+        if state == "removing":
+            pass
+        elif state == "removed" and e["gone"] and table and has_hist and d.get("edit"):
             old, back = _removed_row(conn, table, e["id"], d["edit"])
             name = deletes._row_name(table, old) if old else ""
             if name:
@@ -153,7 +239,7 @@ def annotate(conn, item: dict, entries: list) -> None:
             actions = ["restore"] if back else []
         elif state == "removed":   # brought back some other way (manage_history undo)
             state = "" if not e["gone"] else "gone"
-        if state != "removed":
+        if state not in ("removed", "removing"):
             if e["gone"]:
                 state = "gone"
             elif table and has_hist and _changed_since(conn, table, e["id"], ended, own):
@@ -179,7 +265,7 @@ def count_line(entries: list) -> str:
     c = counts(entries)
     if set(c) <= {""}:   # nothing decided yet: the plain heading
         return ""
-    order = ("kept", "removed", "", "changed", "gone")
+    order = ("kept", "removed", "removing", "", "changed", "gone")
     bits = [f"{c[s]} {STATE_WORDS[s]}" for s in order if c.get(s)]
     return ("records: " + ", ".join(bits)) if bits else ""
 
@@ -202,16 +288,22 @@ def note_for(db_path, item: dict) -> str:
 
 
 # ---------------------------------------------------------------- deciding (the user's side)
-def _write(db_path, item_id: int, k: str, value: Optional[dict]) -> None:
-    """Set (or clear, value None) one record's decision in the item's payload, while it waits."""
+def _write(db_path, item_id: int, k: str, value: Optional[dict], held: bool = False) -> None:
+    """Set (or clear, value None) one record's decision in the item's payload, while it waits.
+    `held`: this record's "removing" marker is ours, so the summary was kept waiting for it
+    (review._claim); write the outcome whatever the status says by now."""
     conn = _connect(db_path)
     try:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute("SELECT payload, status FROM review_items WHERE id = ?",
                            (item_id,)).fetchone()
-        if row is None or row["status"] != "pending":
+        if row is None or (row["status"] != "pending" and not held):
             conn.rollback()
             raise RecordError("already_decided", f"Review item #{item_id} is already decided.")
+        if not held and busy(_payload({"payload": row["payload"]})):
+            conn.rollback()
+            raise RecordError("busy", "Another record of this summary is being removed right "
+                                      "now; try again in a moment.")
         p = _payload({"payload": row["payload"]})
         rd = p.get("record_decisions") if isinstance(p.get("record_decisions"), dict) else {}
         if value is None:
@@ -252,6 +344,11 @@ def _why_not(e: dict, action: str) -> str:
     if e["state"] == "removed":
         return f"{name} is already removed." + (" Bring back restores it." if "restore" in
                                                 e["actions"] else "")
+    if e["state"] == "removing":
+        return f"{name} is being removed right now."
+    if action == "remove" and e.get("others_below"):
+        return (f"Another app added to {name} after this session, and Remove would take that "
+                f"with it, so it can only be kept here.")
     if action == "remove" and not e.get("removable"):
         return (f"{name} wasn't created by this session (or is a kind Remove doesn't take back), "
                 f"so it can only be kept here.")
@@ -293,14 +390,21 @@ def decide(db_path, item_id: int, record, action: str, client: str,
             _write(db_path, item["id"], k, {"d": "kept", **base, "edits": edits})
             out.update(now="kept", message=f'Kept {e["kind_label"]} #{rid}.')
         elif action == "remove":
+            # the marker first, checked and written in one transaction: from here on Keep all
+            # and Don't keep wait (review._claim), in this process or any other
+            _write(db_path, item["id"], k, {"d": "removing", **base, "edits": edits})
             try:
                 copy = safety.copy_before(Path(db_path))   # no copy, no removal
                 done = deletes._carry_out(Path(db_path), item["project_id"], rtype, rid, client)
             except (deletes.DeleteError, safety.SafetyError) as err:
+                _write(db_path, item["id"], k, prior or None, held=True)
                 raise RecordError(err.payload.get("error", "not_removed"),
                                   err.payload.get("message", str(err))) from err
+            except BaseException:
+                _write(db_path, item["id"], k, prior or None, held=True)
+                raise
             _write(db_path, item["id"], k, {"d": "removed", **base, "edit": done["edit_id"],
-                                            "edits": edits + [done["edit_id"]]})
+                                            "edits": edits + [done["edit_id"]]}, held=True)
             gone = done["deleted"].get("with") or {}
             extra = (" with " + ", ".join(f"{n} {w}" for w, n in gone.items())) if gone else ""
             out.update(now="removed", safety_copy=copy.name, undo=done["undo"],
@@ -308,12 +412,16 @@ def decide(db_path, item_id: int, record, action: str, client: str,
                                f'Bring back, or {done["undo"]}, restores it.')
         else:
             pname = item.get("project") or ""
+            _write(db_path, item["id"], k, {**prior, "d": "removing", "at": base["at"]})
             try:
                 res = history.undo(Path(db_path), item["project_id"], rtype, rid, client)
-            except history.HistoryError as err:
-                raise RecordError(err.payload["error"], err.payload["message"]) from err
+            except BaseException as err:
+                _write(db_path, item["id"], k, prior or None, held=True)
+                if isinstance(err, history.HistoryError):
+                    raise RecordError(err.payload["error"], err.payload["message"]) from err
+                raise
             _write(db_path, item["id"], k, {"d": "", **base,
-                                            "edits": edits + [res.get("undo_edit_id")]})
+                                            "edits": edits + [res.get("undo_edit_id")]}, held=True)
             out.update(now="", message=f'Brought back {e["kind_label"]} #{rid}' +
                        (f" in {pname}" if pname else "") + "; it is undecided again.")
         word = {"keep": "kept", "remove": "removed", "restore": "brought back"}[action]
@@ -325,16 +433,17 @@ def decide(db_path, item_id: int, record, action: str, client: str,
         return out
 
 
-def keep_rest(db_path, item: dict, client: str) -> int:
+def keep_rest(db_path, item: dict, client: str, path: Optional[str] = None) -> int:
     """Keep all (review.approve of a session summary, after it is claimed): every record still
     undecided that can be kept is marked kept. Returns how many. Written straight into the
-    payload (the item is no longer pending)."""
+    payload (the item is no longer pending). `path` is how it was decided (card, agent, ...),
+    else worked out from `client` (review page, phone, terminal)."""
     from . import approvals, session_contents
     c = session_contents.for_item(db_path, {**item, "status": "pending"})
     todo = [e for e in (c or {}).get("entries", []) if "keep" in e.get("actions", [])]
     if not todo:
         return 0
-    base = {"d": "kept", "at": _now(), "via": approvals.path_of(client),
+    base = {"d": "kept", "at": _now(), "via": path or approvals.path_of(client),
             "by": (client or "")[:80], "keep_all": True}
     conn = _connect(db_path)
     try:

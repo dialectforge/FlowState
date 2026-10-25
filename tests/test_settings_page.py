@@ -66,10 +66,15 @@ def post(c, path, csrf, **data):
     return c.post(path, data={"csrf": csrf, **data}, headers=ORIGIN)
 
 
-def flash(r) -> str:
+FLASH = re.compile(r"<p class='ok'>(.*?)</p>", re.S)
+
+
+def flash(c, r) -> str:
+    """The page's answer to a post: kept on the server and shown once on the next page."""
     assert r.status_code == 303, r.text
-    from urllib.parse import parse_qs, urlparse
-    return parse_qs(urlparse(r.headers["location"]).query).get("flash", [""])[0]
+    import html as _h
+    m = FLASH.search(c.get(r.headers["location"]).text)
+    return _h.unescape(m.group(1)) if m else ""
 
 
 def log(db, scope=None):
@@ -119,29 +124,29 @@ def test_each_change_works_and_is_logged_as_review_page(page, with_relay, cfg):
     csrf, _ = login(p, c)
     activity.record(db, "Cursor", "start_here", None, 1, False, True)
     # approvals on (no confirm), install-wide and per project
-    assert flash(post(c, "/settings/approvals", csrf, scope="", state="on")) \
+    assert flash(c, post(c, "/settings/approvals", csrf, scope="", state="on")) \
         == "Approvals are now on for the whole install."
     assert approvals.is_on(db) and approvals.is_on(db, 1)
     assert_logged(log(db, "approvals")[-1], "on")
-    assert "Alpha" in flash(post(c, "/settings/approvals", csrf, scope="1", state="on"))
+    assert "Alpha" in flash(c, post(c, "/settings/approvals", csrf, scope="1", state="on"))
     assert_logged(log(db, "approvals:project:1")[-1], "on")
     # relay chat approvals off (no confirm)
-    assert "now off" in flash(post(c, "/settings/relay-chat", csrf, state="off"))
+    assert "now off" in flash(c, post(c, "/settings/relay-chat", csrf, state="off"))
     assert_logged(log(db, approvals.RELAY_CHAT_KEY)[-1], "off")
     # phone links
-    assert flash(post(c, "/settings/phone", csrf, state="off")) == "Phone approval links are off."
+    assert flash(c, post(c, "/settings/phone", csrf, state="off")) == "Phone approval links are off."
     assert approvals.phone_on(db) is False
     assert_logged(log(db, "phone_approvals")[-1], "off")
     # popup list: add, remove, and claude.ai stays refused
-    assert flash(post(c, "/settings/popup", csrf, op="add", name="My Editor")) == "Added my editor."
+    assert flash(c, post(c, "/settings/popup", csrf, op="add", name="My Editor")) == "Added my editor."
     assert "my editor" in approvals.popup_clients(db)
     assert_logged(log(db, "popup_clients")[-1], "added my editor")
     post(c, "/settings/popup", csrf, op="remove", name="cursor")
     assert "cursor" not in approvals.popup_clients(db)
-    msg = flash(post(c, "/settings/popup", csrf, op="add", name="claude-ai"))
+    msg = flash(c, post(c, "/settings/popup", csrf, op="add", name="claude-ai"))
     assert "never get a popup" in msg and not approvals.popup_allowed(db, "claude-ai", True)
     # self_update (config.json)
-    assert "by hand" in flash(post(c, "/settings/self-update", csrf, state="off"))
+    assert "by hand" in flash(c, post(c, "/settings/self-update", csrf, state="off"))
     assert updates.self_update_allowed() is False and '"self_update": false' in cfg.read_text()
     assert_logged(log(db, "config:self_update")[-1], "by hand")
     post(c, "/settings/self-update", csrf, state="on")
@@ -174,11 +179,11 @@ def test_bad_values_change_nothing(page, with_relay):
     p, c, db = page
     csrf, _ = login(p, c)
     before = log(db)
-    assert "Could not do that" in flash(post(c, "/settings/approvals", csrf, scope="", state="maybe"))
-    assert "Could not do that" in flash(post(c, "/settings/approvals", csrf, scope="999", state="on"))
-    assert "Could not do that" in flash(post(c, "/settings/approvals", csrf, scope="", state="clear"))
-    assert "Could not do that" in flash(post(c, "/settings/self-update", csrf, state="yes"))
-    assert "client name" in flash(post(c, "/settings/popup", csrf, op="add", name="  "))
+    assert "Could not do that" in flash(c, post(c, "/settings/approvals", csrf, scope="", state="maybe"))
+    assert "Could not do that" in flash(c, post(c, "/settings/approvals", csrf, scope="999", state="on"))
+    assert "Could not do that" in flash(c, post(c, "/settings/approvals", csrf, scope="", state="clear"))
+    assert "Could not do that" in flash(c, post(c, "/settings/self-update", csrf, state="yes"))
+    assert "client name" in flash(c, post(c, "/settings/popup", csrf, op="add", name="  "))
     assert log(db) == before and not approvals.is_on(db)
 
 
@@ -227,13 +232,13 @@ def test_approvals_off_needs_the_confirm_page(page):
     assert "Turn approvals off for the whole install?" in html and "Only do this if" in html
     assert approvals.is_on(db)                                  # nothing yet
     r = post(c, "/settings/confirm", csrf, token=tok, setting="approvals", scope="", state="off")
-    assert flash(r) == "Approvals are now off for the whole install."
+    assert flash(c, r) == "Approvals are now off for the whole install."
     assert not approvals.is_on(db)
     assert_logged(log(db, "approvals")[-1], "off")
     # replay: the token was used up
     approvals.set_on(db, True)
     r = post(c, "/settings/confirm", csrf, token=tok, setting="approvals", scope="", state="off")
-    assert "no longer valid" in flash(r) and approvals.is_on(db)
+    assert "no longer valid" in flash(c, r) and approvals.is_on(db)
 
 
 def test_project_off_and_clear_need_it_too(page):
@@ -247,7 +252,7 @@ def test_project_off_and_clear_need_it_too(page):
     assert log(db, "approvals:project:1")[-1][2] is None
     # clearing a project's own "off" while it's off: no confirm needed (as the command line)
     approvals.set_on(db, False, 2)
-    assert "now off" in flash(post(c, "/settings/approvals", csrf, scope="2", state="clear"))
+    assert "now off" in flash(c, post(c, "/settings/approvals", csrf, scope="2", state="clear"))
 
 
 def test_relay_chat_on_needs_the_confirm_page(page, with_relay):
@@ -257,11 +262,11 @@ def test_relay_chat_on_needs_the_confirm_page(page, with_relay):
     assert "This lets an AI connected through the FlowState relay approve" in html
     assert approvals.relay_chat_on(db) is False
     r = post(c, "/settings/confirm", csrf, token=tok, setting="relay_chat", scope="", state="on")
-    assert "now on" in flash(r) and approvals.relay_chat_on(db)
+    assert "now on" in flash(c, r) and approvals.relay_chat_on(db)
     assert_logged(log(db, approvals.RELAY_CHAT_KEY)[-1], "on")
     # already on: turning it "on" again asks nothing; off never asks
-    assert "now on" in flash(post(c, "/settings/relay-chat", csrf, state="on"))
-    assert "now off" in flash(post(c, "/settings/relay-chat", csrf, state="off"))
+    assert "now on" in flash(c, post(c, "/settings/relay-chat", csrf, state="on"))
+    assert "now off" in flash(c, post(c, "/settings/relay-chat", csrf, state="off"))
 
 
 def test_expired_confirm_changes_nothing(page, monkeypatch):
@@ -273,7 +278,7 @@ def test_expired_confirm_changes_nothing(page, monkeypatch):
     tok, _ = ask(c, csrf, scope="", state="off")
     now[0] += review_page.CONFIRM_SECONDS + 1
     r = post(c, "/settings/confirm", csrf, token=tok, setting="approvals", scope="", state="off")
-    assert "no longer valid" in flash(r) and approvals.is_on(db)
+    assert "no longer valid" in flash(c, r) and approvals.is_on(db)
 
 
 def test_wrong_session_confirm_changes_nothing(page):
@@ -288,10 +293,10 @@ def test_wrong_session_confirm_changes_nothing(page):
     r = c2.post("/settings/confirm", data={"csrf": p.sessions[sess2], "token": tok,
                                            "setting": "approvals", "scope": "", "state": "off"},
                 headers=ORIGIN)
-    assert "no longer valid" in flash(r) and approvals.is_on(db)
+    assert "no longer valid" in flash(c2, r) and approvals.is_on(db)
     # ... and the try used it up for the first session as well
     r = post(c, "/settings/confirm", csrf, token=tok, setting="approvals", scope="", state="off")
-    assert "no longer valid" in flash(r) and approvals.is_on(db)
+    assert "no longer valid" in flash(c, r) and approvals.is_on(db)
 
 
 def test_wrong_change_confirm_changes_nothing(page, with_relay):
@@ -303,11 +308,11 @@ def test_wrong_change_confirm_changes_nothing(page, with_relay):
     for wrong in ({"setting": "approvals", "scope": "", "state": "off"},    # whole install
                   {"setting": "relay_chat", "scope": "", "state": "on"}):   # another setting
         r = post(c, "/settings/confirm", csrf, token=tok, **wrong)
-        assert "no longer valid" in flash(r)
+        assert "no longer valid" in flash(c, r)
         tok, _ = ask(c, csrf, scope="1", state="off")
     assert approvals.is_on(db) and approvals.is_on(db, 1) and not approvals.relay_chat_on(db)
     r = post(c, "/settings/confirm", csrf, token="made-up", setting="approvals", scope="1", state="off")
-    assert "no longer valid" in flash(r) and approvals.is_on(db, 1)
+    assert "no longer valid" in flash(c, r) and approvals.is_on(db, 1)
 
 
 def test_cancel_drops_the_token(page):
@@ -316,9 +321,9 @@ def test_cancel_drops_the_token(page):
     approvals.set_on(db, True)
     tok, html = ask(c, csrf, scope="", state="off")
     assert "No, keep it as it is" in html
-    assert flash(post(c, "/settings/cancel", csrf, token=tok)) == "Cancelled; nothing changed."
+    assert flash(c, post(c, "/settings/cancel", csrf, token=tok)) == "Cancelled; nothing changed."
     r = post(c, "/settings/confirm", csrf, token=tok, setting="approvals", scope="", state="off")
-    assert "no longer valid" in flash(r) and approvals.is_on(db)
+    assert "no longer valid" in flash(c, r) and approvals.is_on(db)
 
 
 # ---------------------------------------------------------------- without the relay
@@ -332,12 +337,12 @@ def test_relay_rows_greyed_out_and_posts_ignored_without_the_relay(page, without
         assert "Only used with the FlowState relay (not set up here)." in block
         assert block.count(" disabled>") == 2
     before = log(db)
-    assert flash(post(c, "/settings/relay-chat", csrf, state="on")) == review_page.NO_RELAY
-    assert flash(post(c, "/settings/phone", csrf, state="off")) == review_page.NO_RELAY
+    assert flash(c, post(c, "/settings/relay-chat", csrf, state="on")) == review_page.NO_RELAY
+    assert flash(c, post(c, "/settings/phone", csrf, state="off")) == review_page.NO_RELAY
     assert log(db) == before and not approvals.relay_chat_on(db) and approvals.phone_on(db)
     # everything else works the same
-    assert "now on" in flash(post(c, "/settings/approvals", csrf, scope="", state="on"))
-    assert "Added" in flash(post(c, "/settings/popup", csrf, op="add", name="my-editor"))
+    assert "now on" in flash(c, post(c, "/settings/approvals", csrf, scope="", state="on"))
+    assert "Added" in flash(c, post(c, "/settings/popup", csrf, op="add", name="my-editor"))
 
 
 def test_relay_rows_enabled_with_the_relay(page, with_relay):
@@ -362,7 +367,7 @@ def test_relay_disappearing_before_the_confirm_changes_nothing(page, monkeypatch
     tok, _ = ask(c, csrf, "/settings/relay-chat", state="on")
     monkeypatch.setattr(approvals, "relay_set_up", lambda: False)
     r = post(c, "/settings/confirm", csrf, token=tok, setting="relay_chat", scope="", state="on")
-    assert flash(r) == review_page.NO_RELAY and not approvals.relay_chat_on(db)
+    assert flash(c, r) == review_page.NO_RELAY and not approvals.relay_chat_on(db)
 
 
 # ---------------------------------------------------------------- open-link page: read-only
@@ -382,7 +387,7 @@ def test_open_link_page_shows_settings_read_only(backend, seeded_db, cfg, with_r
     for name, data in ROUTES.items():
         r = post(c, f"/settings/{name}", csrf, **data)
         if name != "cancel":
-            assert flash(r) == review_page.READ_ONLY, name
+            assert flash(c, r) == review_page.READ_ONLY, name
     assert log(db) == before and not approvals.is_on(db) and updates.self_update_allowed()
     assert approvals.phone_on(db) and "x-app" not in approvals.popup_clients(db)
     # review mode and app pauses still work there, as before

@@ -31,12 +31,18 @@ def _new_key() -> str:
 def add(store: "RA.AuthStore", name: str, read_only: bool = False,
         workspace: Optional[str] = None) -> tuple[str, str]:
     """(key id, key). The key is returned once; only its hash is kept."""
-    name = " ".join((name or "").split())[:MAX_NAME]
-    if not name:
+    if not " ".join((name or "").split()):
         raise ValueError("give the app a name, e.g. --name \"Cursor on the laptop\"")
+    name = store.check_name(name)
     workspace = " ".join((workspace or "").split())[:MAX_NAME] or None
     kid, key = "key_" + secrets.token_hex(6), _new_key()
     with store._conn() as c:
+        fold = name.casefold()   # one key per name, ever: who wrote what is matched by it
+        other = next((r["id"] for r in c.execute("SELECT id, name FROM app_keys")
+                      if (r["name"] or "").casefold() == fold), None)
+        if other:
+            raise ValueError(f"the key name {name!r} is taken (by {other}, now or before it was "
+                             f"revoked); pick another, one per app")
         c.execute("INSERT INTO app_keys (id, name, hash, read_only, workspace, created_at) "
                   "VALUES (?, ?, ?, ?, ?, ?)",
                   (kid, name, RA._h(key), int(bool(read_only)), workspace, time.time()))

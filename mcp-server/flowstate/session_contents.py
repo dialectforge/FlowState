@@ -41,7 +41,8 @@ _VERBS = {("problem", "solve"): "solved", ("todo", "update"): "updated",
           ("todo", "handoff"): "handed off", ("attempt", "outcome"): "result recorded",
           ("rules", "remove"): "removed", ("link", "remove"): "removed",
           ("update_project", None): "updated", ("update_component", None): "updated",
-          ("verify", "mark"): "checked", ("verify", "source"): "source changed"}
+          ("verify", "mark"): "checked", ("verify", "source"): "source changed",
+          ("delete_request", None): "deleted"}
 # Record types shown, in plain words. Links and components only when the write was about them
 # (a decision's "about" link and an auto-made component are part of that decision / change).
 KIND_WORDS = {"change": "change", "decision": "decision", "problem": "problem",

@@ -223,8 +223,9 @@ def _view(conn, card, project: str, item_id, url: str) -> dict:
     for mark, typ, rid, app, at in (
             ("A", card["a_type"], card["a_id"], card["a_app"], card["a_at"]),
             ("B", card["b_type"], card["b_id"], card["b_app"], card["b_at"])):
-        when = _pretty(at) or _pretty(_created(conn, typ, rid))
-        sides.append({"mark": mark, "who": app or "an earlier entry", "when": when,
+        raw = str(at or _created(conn, typ, rid) or "")[:19]
+        sides.append({"mark": mark, "who": app or "an earlier entry", "when": _pretty(raw),
+                      "when_utc": raw,   # the card shows it in the reader's own time zone
                       "claim": links.label(conn, typ, rid) or f"{typ} #{rid}",
                       "evidence": _evidence(conn, typ, rid)})
     open_ = card["status"] == "open"
@@ -564,11 +565,24 @@ def decision_path(client: str) -> str:
     return "chat" if approvals.path_of(client) == "chat" else "review page"
 
 
+# How a card tap is recorded (the decision's user_request; approval_log path "card"): a tap
+# on the card in that app, with its one-use code checked. FlowState can't prove a person made
+# it (the card host could be lying), so the record never says "the user".
+CARD_WORDS = "{button} tapped on the {card} card in {app} (its one-use card code checked)."
+
+
 def resolve_card(db_path: Path, args: dict, client: str) -> dict:
+    from . import card_taps
+    return card_taps.again(_resolve(db_path, args, client), args, "conflict", client)
+
+
+def _resolve(db_path: Path, args: dict, client: str) -> dict:
     """The in-chat card's button. Not a chat sentence: user_request, message, text and reason
     are refused, and so is a client that can't show MCP Apps (no card there to tap). Through
     the relay with chat approvals off (the default) it is phone only, like manage_review.
-    Otherwise the user's own words aren't needed; the path is recorded as card."""
+    The tap must carry the card's one-use code (card_taps.py), and the app that queued the
+    disagreement can't decide it on its own card. Otherwise the user's own words aren't
+    needed; the path is recorded as card."""
     for key in ("user_request", "message", "text", "reason"):
         if args.get(key) not in (None, ""):
             return {"error": "not_a_card_tap", "message": "A disagreement card is resolved by "
@@ -585,18 +599,26 @@ def resolve_card(db_path: Path, args: dict, client: str) -> dict:
     no = waiting.phone_only(db_path, args["item_id"])   # relay: the same phone-only rule
     if no:
         return no
-    item = review.get_item(db_path, int(args["item_id"]))
+    try:
+        item_id = int(args["item_id"])
+    except (TypeError, ValueError):
+        return {"error": "bad_request", "message": "item_id must be a number."}
+    item = review.get_item(db_path, item_id)
     if not item or item.get("kind") != "disagreement":
         return {"error": "record_not_found", "message": "No disagreement card with that id."}
     if item["status"] != "pending":
         return {"error": "already_resolved", "message": "This disagreement is already decided."}
+    no = own_refusal(item, item_id) or tap_refusal(args, item_id, "conflict", client)
+    if no:
+        return no
 
     def apply(it, _edits):
         return apply_keep(db_path, it, args["keep"], client, path="card")
 
     try:
-        out = review.approve(db_path, int(args["item_id"]),
-                             "The user tapped a button on the conflict card.", client,
+        out = review.approve(db_path, item_id, CARD_WORDS.format(button="Keep " + args["keep"],
+                                                                 card="disagreement", app=client),
+                             client,
                              lambda it, payload: ("conflict_cards", None),
                              others={"disagreement": apply})
     except review.ReviewError as e:
@@ -895,6 +917,7 @@ def app_tool():
             "keep": {"type": "string", "enum": ["a", "b", "both"],
                      "description": "a keeps the older entry, b the newer, both keeps both."},
             "project": {"type": "string", "description": "The project name the card is showing."},
+            "tap": {"type": "string", "description": "The card's one-use code for this tap."},
         }, "required": ["item_id", "keep", "project"]})
     return tool.model_copy(update={"meta": {"ui": {"resourceUri": UI_URI, "visibility": ["app"]}}})
 
@@ -971,19 +994,54 @@ def show(db_path: Path, args: dict, pid: Optional[int]) -> dict:
                    "Show the user this text; they decide on the review page or their phone."
                    if open_ else "Already decided.")
     out["_ui"] = {"structured": {"cards": [c["structured"] for c in packed],
-                                 "more": out.get("more", 0)}}
+                                 "more": out.get("more", 0)},
+                  "taps": taps_for([c["structured"] for c in packed], "conflict",
+                                   lambda v: not v["resolved"])}
     return out
 
 
 def client_has_ui() -> bool:
+    """Does this connection get the cards? It says it shows MCP Apps, and its name is on the
+    user's card list (approvals.card_clients): the flag alone is the app's own claim."""
     try:
-        from .server import server
+        from .server import _client_name, backend, server
         caps = server.request_context.session.client_params.capabilities
     except Exception:  # noqa: BLE001 - no session, or a client that sent no extensions
         return False
     extra = getattr(caps, "model_extra", None) or {}
     ext = extra.get("extensions") or {}
-    return isinstance(ext, dict) and UI_EXT in ext
+    if not (isinstance(ext, dict) and UI_EXT in ext):
+        return False
+    from . import approvals
+    try:
+        return approvals.card_allowed(backend.db_path, _client_name())
+    except Exception:  # noqa: BLE001 - no list readable: no cards
+        return False
+
+
+def tap_refusal(args: dict, item_id: int, card: str, client: str) -> Optional[dict]:
+    """None when the tap carries a live one-use code made for this card (card_taps.py), else
+    the refusal. The code also stops the model calling the hidden tool itself."""
+    from . import card_taps
+    if card_taps.redeem(args.get("tap"), item_id, card, client):
+        return None
+    return {"error": "not_a_card_tap", "message": card_taps.REFUSED}
+
+
+def own_refusal(item: dict, item_id: int) -> Optional[dict]:
+    """The app that queued an item doesn't decide it on its own card either (as in the chat,
+    review.own_item_refusal). Session summaries are queued by FlowState itself when a session
+    closes, not by the app, so their cards keep their buttons."""
+    if item.get("kind") == "session_summary":
+        return None
+    if review.own_item_refusal(item, identity.current(), "") is None:
+        return None
+    return {"error": "own_item", "message": OWN_CARD.format(id=item_id)}
+
+
+OWN_CARD = ("This app queued review item #{id} itself, so it isn't decided on this app's card. "
+            "Nothing was decided. Decide it on the review page, your phone, or with "
+            "`flowstate approve {id}` in a terminal.")
 
 
 def with_app_tool(tools: list) -> list:
@@ -997,7 +1055,22 @@ def with_app_tool(tools: list) -> list:
 
 def paint(result, ui):
     """The card's data for the view: structuredContent, which the host passes to the card in
-    ui/notifications/tool-result. Only the card's own tools return it."""
-    if not isinstance(ui, dict) or ui.get("structured") is None:
+    ui/notifications/tool-result, and the cards' one-use tap codes in `_meta` (card_taps.py),
+    which the host gives the card but not the model (a refused tap's answer may carry only a
+    fresh code). Only the card's own tools return it."""
+    if not isinstance(ui, dict) or (ui.get("structured") is None and not ui.get("taps")):
         return result
-    return result.model_copy(update={"structuredContent": ui["structured"]})
+    update = {"structuredContent": ui["structured"]} if ui.get("structured") is not None else {}
+    if ui.get("taps"):
+        from .card_taps import META_KEY
+        update["meta"] = {META_KEY: ui["taps"]}
+    return result.model_copy(update=update)
+
+
+def taps_for(views: list, card: str, buttons) -> dict:
+    """The tap codes for the views that have buttons (`buttons(view)`), on card hosts only."""
+    if not client_has_ui():
+        return {}
+    from . import card_taps
+    from .server import _client_name
+    return card_taps.for_cards([v["item_id"] for v in views if buttons(v)], card, _client_name())

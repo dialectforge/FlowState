@@ -74,7 +74,7 @@ def test_rename_refusals_say_why(store):
                           ("Cursor", "  ", "the new name is empty"),
                           ("Cursor", "phone", "the name 'phone' is taken (by " + b),
                           ("Cursor", "Cursor", "already named 'Cursor'"),
-                          ("Cursor", "x" * 81, "longer than 80"),
+                          ("Cursor", "x" * 51, "longer than 50"),
                           ("", "X", "say which app")]:
         with pytest.raises(ValueError, match=None) as e:
             store.rename_client(old, new)
@@ -96,8 +96,11 @@ def test_rename_refuses_a_secret_looking_name(store):
 
 
 def test_two_apps_of_one_name_are_renamed_by_id(store):
+    """(only an older install can have two: new names are unique, test_names_are_never_reused)"""
     a, _ = store.add_token_client("Laptop", list(RA.SCOPES))
-    b, _ = store.add_token_client("Laptop", list(RA.SCOPES))
+    b, _ = store.add_token_client("Laptop 2", list(RA.SCOPES))
+    with store._conn() as c:
+        c.execute("UPDATE clients SET name = 'Laptop' WHERE id = ?", (b,))
     with pytest.raises(ValueError) as e:
         store.rename_client("Laptop", "Laptop A")
     assert a in str(e.value) and b in str(e.value) and "by its id" in str(e.value)
@@ -304,3 +307,89 @@ def test_who_did_what_app_filter_finds_the_key_name_too(backend, lan_key):
     assert by_key and all(r["via"] == "Desk key" for r in by_key)
     assert who.recent(db, app="grok")["rows"]
     assert not who.recent(db, app="desk-ws")["rows"]          # the workspace isn't a name
+
+
+# ---------------------------------------------------------------- audit 46: M12, L20, L21, M4
+def test_names_are_never_reused_for_a_new_token_key_or_rename(store):
+    """M12: "the same app" is matched by the sign-in's name, so a new token, key or rename may
+    not take a name in use, a revoked one, or one another app had before a rename."""
+    a, _ = store.add_token_client("Cursor", list(RA.SCOPES))
+    for name in ("Cursor", "cursor", "  CURSOR "):
+        with pytest.raises(ValueError, match="taken"):
+            store.add_token_client(name, list(RA.SCOPES))
+    b, _ = store.add_token_client("Phone", list(RA.SCOPES))
+    store.revoke_client(b)
+    with pytest.raises(ValueError, match="taken"):
+        store.add_token_client("Phone", list(RA.SCOPES))          # a revoked token's name
+    with pytest.raises(ValueError, match="taken"):
+        store.rename_client("Cursor", "phone")                     # rename into a revoked name
+    store.rename_client("Cursor", "Work laptop")
+    with pytest.raises(ValueError, match="taken"):
+        store.add_token_client("Cursor", list(RA.SCOPES))          # a former name
+    k, _ = app_keys.add(store, "Desk key")
+    with pytest.raises(ValueError, match="taken"):
+        app_keys.add(store, "desk KEY")
+    app_keys.revoke(store, key_id=k)
+    with pytest.raises(ValueError, match="taken"):
+        app_keys.add(store, "Desk key")
+    app_keys.add(store, "Cursor")      # a key and a token are different sign-ins (as before)
+
+
+def test_an_oauth_app_signing_up_again_under_a_taken_name_gets_a_number(store):
+    from mcp.shared.auth import OAuthClientInformationFull
+    ids = []
+    for i in range(3):
+        info = OAuthClientInformationFull(client_id=f"oauth-{i}", client_name="Claude",
+                                          redirect_uris=["https://claude.ai/api/mcp/auth_callback"])
+        store.save_oauth_client(info)
+        ids.append(store.client_row(f"oauth-{i}")["name"])
+    assert ids == ["Claude", "Claude (2)", "Claude (3)"]
+
+
+def test_names_are_short_enough_to_be_recorded_whole(store):
+    """L21: a 70-character key name was cut in "(signed in as ...)", so the key stopped
+    recognising its own records. New names are at most 50 characters."""
+    with pytest.raises(ValueError, match="longer than 50"):
+        app_keys.add(store, "k" * 51)
+    with pytest.raises(ValueError, match="longer than 50"):
+        store.add_token_client("t" * 51, list(RA.SCOPES))
+    name = "n" * 50
+    kid, key = app_keys.add(store, name, workspace="w" * 80)
+    ident = identity.resolve("Grok Bot", True, app_keys.check(store, key), {}, listener="lan")
+    assert identity.via(ident.machine, ident.identity_source) == name
+    assert identity.same_sign_in("Grok Bot", ident.machine, "app_key", ident)
+
+
+def test_an_app_cant_send_a_name_that_imitates_a_sign_in(store):
+    """L20: "Grok Bot (via Laptop key)" on the shared token looked like a real key-signed app."""
+    for sent in ("Grok Bot (via Laptop key)", "Grok Bot (signed in as Laptop key)",
+                 "Grok Bot (VIA Laptop key"):
+        assert identity.resolve(sent, False).app == "Grok Bot"
+        assert identity.resolve(sent, True, None, {}, listener="lan").app == "Grok Bot"
+    assert identity.resolve("(via x)", False).app == "unknown"
+
+
+def test_pausing_an_app_pauses_the_key_it_uses(backend, lan_key, capsys):
+    """M4: "Grok Bot" paused on the page or with `apps pause`, then the same key sending
+    "Grok Bot 2": its writes were not blocked."""
+    from flowstate import cli
+    db = backend.backend.db_path
+    http_calls(db, lan_key[1], [suggest("First write")], "Grok Bot", relay=False)
+    assert cli.main(["apps", "pause", "--app", "Grok Bot", "--db", str(db)]) == 0
+    assert "Desk key" in capsys.readouterr().out
+    out = http_calls(db, lan_key[1], [suggest("Renamed write")], "Grok Bot 2", relay=False)
+    assert out[0]["error"] == "paused_by_user"
+    assert cli.main(["apps", "list", "--db", str(db)]) == 0
+    listed = capsys.readouterr().out
+    assert "Grok Bot (via Desk key): PAUSED" in listed
+    assert cli.main(["apps", "resume", "--app", "Grok Bot", "--db", str(db)]) == 0
+    out = http_calls(db, lan_key[1], [suggest("Back again")], "Grok Bot 2", relay=False)
+    assert "error" not in out[0]
+
+
+def test_the_page_pause_button_pauses_the_key_too(backend, lan_key):
+    from flowstate.review_page import Page
+    db = backend.backend.db_path
+    http_calls(db, lan_key[1], [suggest("A write")], "Grok Bot", relay=False)
+    msg = Page(db, 8770).set_app({"app": "Grok Bot", "paused": "1"})
+    assert "Desk key" in msg and activity.is_paused(db, "Desk key")

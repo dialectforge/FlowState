@@ -56,6 +56,23 @@ BRIDGE_TOP = r"""(function () {
   var cards = [];      // the views on screen, by position
   var lastSize = "";
 
+  var taps = {};       // item id -> its one-use tap code (card_taps.py), from the result's _meta
+  function takeTaps(result) {
+    var m = result && result._meta && result._meta["flowstate/taps"];
+    if (m && typeof m === "object") {
+      for (var k in m) { if (typeof m[k] === "string") { taps[k] = m[k]; } }
+    }
+  }
+  function tapFor(id) {           // a code works once: the answer to a tap brings the next one
+    var code = taps[String(id)] || "";
+    delete taps[String(id)];
+    return code;
+  }
+  function localDate(utc) {        // "Oct 24, 2026" in the reader's own time zone
+    var d = utc ? new Date(String(utc).replace(" ", "T") + "Z") : null;
+    if (!d || isNaN(d.getTime())) { return ""; }
+    return d.toLocaleDateString([], {dateStyle: "medium"});
+  }
   function el(tag, cls, text) {
     var n = document.createElement(tag);
     if (cls) { n.className = cls; }
@@ -116,6 +133,7 @@ BRIDGE_BOTTOM = r"""
         if (p.isError) {
           render({note: (p.content && p.content[0] && p.content[0].text) || "FlowState could not load the card."});
         } else {
+          takeTaps(p);
           render(p.structuredContent);
         }
       } else if (msg.method === "ui/notifications/tool-cancelled") {
@@ -165,7 +183,8 @@ CONFLICT_JS = r"""  // ---- drawing
     (view.sides || []).forEach(function (s) {
       var side = el("div", "side");
       side.appendChild(el("p", "mark", "Claim " + (s.mark || "")));
-      side.appendChild(el("p", "who", (s.who || "Unknown") + (s.when ? ", " + s.when : "")));
+      var when = localDate(s.when_utc) || s.when;
+      side.appendChild(el("p", "who", (s.who || "Unknown") + (when ? ", " + when : "")));
       side.appendChild(el("p", "claim", s.claim || ""));
       (s.evidence || []).forEach(function (ev) { side.appendChild(evidenceLine(ev)); });
       if (!(s.evidence || []).length) { side.appendChild(el("p", "ev", "Evidence: none attached")); }
@@ -217,8 +236,9 @@ CONFLICT_JS = r"""  // ---- drawing
     setButtons(box, false);
     request("tools/call", {
       name: "resolve_conflict_card",
-      arguments: {item_id: view.item_id, keep: keep, project: view.project || ""}
+      arguments: {item_id: view.item_id, keep: keep, project: view.project || "", tap: tapFor(view.item_id)}
     }, function (error, result) {
+      takeTaps(result);
       if (error) { showError(box, error.message || "Not saved."); return; }
       if (!result || result.isError) {
         var text = result && result.content && result.content[0] && result.content[0].text;

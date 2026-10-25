@@ -33,7 +33,8 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from . import approvals, identity, review
-from .conflict_cards import _connect, _pretty, client_has_ui
+from .conflict_cards import (CARD_WORDS, _connect, _pretty, client_has_ui, own_refusal, taps_for,
+                             tap_refusal)
 
 SHOW_MAX = 5
 REASON_MAX = 300
@@ -161,7 +162,8 @@ def view(db_path: Path, it: dict, project: str) -> dict:
     out = {"item_id": it["id"], "project": project, "kind": it["kind"],
            "text": _cut(strip_tag(it.get("summary")), 500),
            "details": _cut(it.get("details"), DETAILS_MAX), "who": _who(it),
-           "when": _pretty(it.get("created_at")), "resolved": it["status"] != "pending",
+           "when": _pretty(it.get("created_at")), "when_utc": str(it.get("created_at") or "")[:19],
+           "resolved": it["status"] != "pending",
            "decide_here": False, "link": "", "locked_note": "", "detail": "", **words}
     if it["kind"] == "session_summary":   # what the session saved, not just its counts
         from . import session_contents
@@ -309,6 +311,12 @@ def show(db_path: Path, args: dict, pid: Optional[int]) -> dict:
     finally:
         conn.close()
     views = [view(db_path, it, it["project"]) for it in rows]
+    for it, v in zip(rows, views):   # the app that queued it doesn't decide it on its card
+        if v["decide_here"] and own_refusal(it, it["id"]):
+            link, _note = _where(db_path, it)
+            v.update(decide_here=False, link=link, locked_note=OWN_NOTE)
+            for e in (v.get("contents") or {}).get("entries", []):
+                e["actions"] = []
     out: dict = {"shown": len(views)}
     if views:
         out["review_cards"] = [{"review_item_id": v["item_id"], "text": plain(v)} for v in views]
@@ -334,13 +342,26 @@ def show(db_path: Path, args: dict, pid: Optional[int]) -> dict:
         out["note"] = "Already decided."
     if dis_ids:
         out["note"] += f" A disagreement waits too: call {out['disagreements']['show_card']}."
-    out["_ui"] = {"structured": structured}
+    out["_ui"] = {"structured": structured, "taps": taps_for(views, "review", _has_buttons)}
     return out
+
+
+OWN_NOTE = "This app queued it itself, so it isn't decided on this app's card. Decide it here:"
+
+
+def _has_buttons(v: dict) -> bool:
+    return bool(v.get("decide_here")) and not v.get("resolved")
 
 
 # ---------------------------------------------------------------- resolve_review_card (the buttons)
 def resolve_card(db_path: Path, args: dict, pid: Optional[int], client: str,
                  decide: Callable[[dict, str, str], dict]) -> dict:
+    from . import card_taps
+    return card_taps.again(_resolve(db_path, args, pid, client, decide), args, "review", client)
+
+
+def _resolve(db_path: Path, args: dict, pid: Optional[int], client: str,
+             decide: Callable[[dict, str, str], dict]) -> dict:
     """A tap on Approve or Reject. `decide(item, decision, reason)` runs the same approve /
     reject as manage_review (review_apply.for_card). Not a chat sentence, not
     for clients without MCP Apps, phone only through the relay unless chat approvals are on,
@@ -387,6 +408,9 @@ def resolve_card(db_path: Path, args: dict, pid: Optional[int], client: str,
         link, note = _where(db_path, it)
         return {"error": "user_only", "message": f"Nothing was decided on review item #{item_id}. "
                 + note + (f" {link}" if link else ""), **({"link": link} if link else {})}
+    no = own_refusal(it, item_id) or tap_refusal(args, item_id, "review", client)
+    if no:
+        return no
     if decision in RECORD_DECISIONS:
         return _record_tap(db_path, it, args["record"], decision, client)
     out = decide(it, decision, why or DEFAULT_REASON)
@@ -409,8 +433,15 @@ RECORD_DECISIONS = ("keep_record", "remove_record", "restore_record")
 
 def _record_tap(db_path: Path, it: dict, record: str, decision: str, client: str) -> dict:
     """A tap on one record's Keep / Remove / Bring back (session_records.py), after the same
-    checks as Approve / Reject. Recorded as the user on the card ("card (<app>)"), path card."""
+    checks as Approve / Reject. Remove and Bring back follow the delete rules: not for callers
+    that may not delete (remote tokens, LAN keys, OAuth apps, the relay), and with approvals on
+    only on the review page or the phone. Recorded as a tap on the card ("card (<app>)"),
+    path card."""
     from . import session_records
+    if decision != "keep_record":
+        no = record_delete_refusal(db_path, it)
+        if no:
+            return no
     tok = identity.set_current(None)
     try:
         res = session_records.decide(db_path, it["id"], record, decision.split("_")[0],
@@ -426,8 +457,25 @@ def _record_tap(db_path: Path, it: dict, record: str, decision: str, client: str
     return {"record_decided": res["record"], "now": res["now"] or "undecided",
             "note": res["message"], "text": text,
             "review_cards": [{"review_item_id": it["id"], "text": text}],
-            "_ui": {"structured": {"cards": [v]}},
+            "_ui": {"structured": {"cards": [v]}, "taps": taps_for([v], "review", _has_buttons)},
             **{k: res[k] for k in ("safety_copy", "undo") if k in res}}
+
+
+def record_delete_refusal(db_path: Path, it: dict) -> Optional[dict]:
+    """A record's Remove / Bring back from the chat card deletes (or restores) for the user,
+    so it keeps the delete rules (remote_auth.may_delete; approvals.is_on). None = allowed."""
+    from .remote_auth import DELETE_REFUSAL, may_delete
+    from .server import _caller
+    if not may_delete(_caller()[1]) or getattr(identity.current(), "credential", None):
+        return {"error": DELETE_REFUSAL[0], "message": "Remove and Bring back on a card delete "
+                "or restore records, which only an app on the FlowState computer may do. "
+                "Nothing changed. Decide them on the review page or your phone."}
+    if approvals.is_on(db_path, it.get("project_id")):
+        link, _note = _where(db_path, {**it, "kind": "delete"})
+        return {"error": "user_only", "message": "Approvals are on, so Remove and Bring back are "
+                "decided only on the review page or your phone, not in the chat. Nothing changed."
+                + (f" {link}" if link else ""), **({"link": link} if link else {})}
+    return None
 
 
 # ---------------------------------------------------------------- tool definitions
@@ -450,6 +498,7 @@ def app_tool():
             "project": {"type": "string", "description": "The project name the card is showing."},
             "reject_reason": {"type": "string", "maxLength": REASON_MAX,
                               "description": "Reject only: the reason typed in the card."},
+            "tap": {"type": "string", "description": "The card's one-use code for this tap."},
         }, "required": ["item_id", "decision", "project"]})
     return tool.model_copy(update={"meta": {"ui": {"resourceUri": UI_URI, "visibility": ["app"]}}})
 

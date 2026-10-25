@@ -55,6 +55,10 @@ from . import dbconn
 # lower case). `flowstate approvals popup add|remove NAME` changes this per install.
 POPUP_CLIENTS = ("claude-code", "cursor", "cursor-vscode", "visual studio code",
                  "visual studio code - insiders", "vscode")
+# Apps known to draw the in-chat cards (MCP Apps) in a frame the model can't read or click,
+# and to keep app-only tools from the model. `flowstate approvals cards add|remove NAME`
+# changes this per install. claude-ai is Claude Desktop and claude.ai.
+CARD_CLIENTS = ("claude-ai",)
 # Never a popup for these, whatever they declare: claude.ai, Claude Desktop / mobile and the
 # Anthropic connector proxy don't show one (and the proxy drops the connection).
 CONNECTOR_MARKS = ("claude-ai", "claude.ai", "claudeai", "anthropic")
@@ -239,6 +243,33 @@ def set_relay_chat(db_path: Path, on: bool, who: str = "command-line",
     return {"old": old or "off", "now": "on" if relay_chat_on(db_path) else "off"}
 
 
+def log_setting(db_path: Optional[Path], scope: str, old: Optional[str], new: Optional[str],
+                who: str = "command-line", how: Optional[str] = None) -> None:
+    """One review_mode_log row ("Recent changes" on the review page, manage_history) for a
+    setting the user changed, the same way from the terminal and the page: `who` changed it,
+    `how` (TERMINAL_WORDS by default). Nothing when the database or the table isn't there."""
+    if db_path is None or not Path(db_path).is_file():
+        return
+    import time
+    from . import identity, review_mode
+    conn = dbconn.connect(str(db_path), timeout=5.0)
+    try:
+        conn.execute("PRAGMA busy_timeout = 5000")
+        if review_mode.available(conn):
+            identity.insert(conn, "review_mode_log", {
+                "scope": scope, "old_mode": old, "new_mode": new, "client": who[:80],
+                "caller": who[:80], "user_request": how or TERMINAL_WORDS,
+                "changed_at": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())}, who)
+            conn.commit()
+    finally:
+        conn.close()
+
+
+def clean_client_name(name) -> str:
+    """An app's MCP client name as the popup and card lists keep it: spaces tidied, lower case."""
+    return " ".join(str(name or "").split())[:80].lower()
+
+
 def set_value(db_path: Path, key: str, value: Optional[str], who: str = "command-line") -> None:
     conn = _conn(db_path)
     try:
@@ -248,16 +279,16 @@ def set_value(db_path: Path, key: str, value: Optional[str], who: str = "command
         conn.close()
 
 
-def popup_clients(db_path: Optional[Path]) -> set:
-    names = set(POPUP_CLIENTS)
+def _listed(db_path: Optional[Path], base: tuple, key: str) -> set:
+    names = set(base)
     if db_path is None:
         return names
     conn = _conn(db_path)
     try:
         if not available(conn):
             return names
-        add = json.loads(_get(conn, "popup_clients_add") or "[]")
-        drop = json.loads(_get(conn, "popup_clients_remove") or "[]")
+        add = json.loads(_get(conn, f"{key}_add") or "[]")
+        drop = json.loads(_get(conn, f"{key}_remove") or "[]")
     except (ValueError, sqlite3.Error):
         return names
     finally:
@@ -265,22 +296,45 @@ def popup_clients(db_path: Optional[Path]) -> set:
     return (names | {str(n).lower() for n in add}) - {str(n).lower() for n in drop}
 
 
-def change_popup_clients(db_path: Path, name: str, add: bool, who: str = "command-line") -> set:
-    name = (name or "").strip().lower()
+def _change_list(db_path: Path, base: tuple, key: str, name: str, add: bool, who: str) -> set:
+    name = clean_client_name(name)
     if not name:
         raise ApprovalError("name_required", "Give the app's name as it connects (clientInfo name).")
     conn = _conn(db_path)
     try:
-        lists = {k: set(json.loads(_get(conn, k) or "[]"))
-                 for k in ("popup_clients_add", "popup_clients_remove")}
-        (lists["popup_clients_add"] if add else lists["popup_clients_remove"]).add(name)
-        (lists["popup_clients_remove"] if add else lists["popup_clients_add"]).discard(name)
+        lists = {k: set(json.loads(_get(conn, k) or "[]")) for k in (f"{key}_add", f"{key}_remove")}
+        (lists[f"{key}_add"] if add else lists[f"{key}_remove"]).add(name)
+        (lists[f"{key}_remove"] if add else lists[f"{key}_add"]).discard(name)
         for k, v in lists.items():
             _put(conn, k, json.dumps(sorted(v)) if v else None, who)
         conn.commit()
     finally:
         conn.close()
-    return popup_clients(db_path)
+    return _listed(db_path, base, key)
+
+
+def popup_clients(db_path: Optional[Path]) -> set:
+    return _listed(db_path, POPUP_CLIENTS, "popup_clients")
+
+
+def change_popup_clients(db_path: Path, name: str, add: bool, who: str = "command-line") -> set:
+    return _change_list(db_path, POPUP_CLIENTS, "popup_clients", name, add, who)
+
+
+def card_clients(db_path: Optional[Path]) -> set:
+    """Apps whose in-chat card taps count as the user's (conflict_cards.client_has_ui)."""
+    return _listed(db_path, CARD_CLIENTS, "card_clients")
+
+
+def change_card_clients(db_path: Path, name: str, add: bool, who: str = "command-line") -> set:
+    return _change_list(db_path, CARD_CLIENTS, "card_clients", name, add, who)
+
+
+def card_allowed(db_path: Optional[Path], client_name: str) -> bool:
+    """May this connection get the in-chat cards (and their app-only tap tools)? Only apps on
+    the card list: the MCP Apps flag an app sends is its own claim, like a popup's."""
+    name = clean_client_name(client_name)
+    return bool(name) and name in card_clients(db_path)
 
 
 def popup_allowed(db_path: Optional[Path], client_name: str, declared: bool) -> bool:

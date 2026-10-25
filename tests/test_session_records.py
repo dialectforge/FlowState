@@ -42,9 +42,9 @@ def _csrf(html):
     return CSRF.search(html).group(1)
 
 
-def _flash(r):
-    from urllib.parse import parse_qs, urlparse
-    return parse_qs(urlparse(r.headers["location"]).query).get("flash", [""])[0]
+def _flash(c, r):
+    from test_settings_page import flash
+    return flash(c, r)
 
 
 # ---------------------------------------------------------------- the core
@@ -128,7 +128,7 @@ def test_remove_then_keep_all_leaves_it_removed_and_edit_before_keep_still_works
     assert "Keep all (with any edits)" in html and session_records.EXPLAIN[:40] in html
     r = c.post("/record", data={"csrf": _csrf(html), "item_id": str(item), "record": f"change:{cid}",
                                 "action": "remove"}, headers=ORIGIN)
-    assert r.status_code == 303 and "Removed change" in _flash(r)
+    assert r.status_code == 303 and "Removed change" in _flash(c, r)
     html = c.get("/").text
     assert "removed by you" in html and ">Bring back</button>" in html
     sid = review.get_item(db, item)["session_id"]
@@ -248,9 +248,12 @@ def ui(monkeypatch):
 
 
 def _tap(S, item, decision, record, app="Cursor"):
+    from flowstate import card_taps
     from test_review_card import call as card_call
     return card_call(S, "resolve_review_card", {"item_id": item, "decision": decision,
-                                                "record": record, "project": "Alpha"}, app=app)[1]
+                                                "record": record, "project": "Alpha",
+                                                "tap": card_taps.mint(item, "review", app)},
+                     app=app)[1]
 
 
 def test_card_record_tap_needs_a_card_host(backend):
@@ -336,9 +339,9 @@ def test_local_page_record_forms_need_csrf_and_origin(backend):
                   headers={"origin": "https://evil.example"}).status_code == 403
     assert _q(db, "SELECT id FROM changes WHERE id = ?", cid) == [(cid,)]
     r = c.post("/record", data={**form, "csrf": _csrf(html), "action": "explode"}, headers=ORIGIN)
-    assert "keep, remove or restore" in _flash(r)
+    assert "keep, remove or restore" in _flash(c, r)
     r = c.post("/record", data={**form, "csrf": _csrf(html), "action": "keep"}, headers=ORIGIN)
-    assert f"Kept change #{cid}" in _flash(r)
+    assert f"Kept change #{cid}" in _flash(c, r)
     html = c.get("/").text
     assert "records: 1 kept, 1 not decided yet" in html and "<script" not in html
 

@@ -191,9 +191,9 @@ def _error(code: str, message: str, **extra) -> types.CallToolResult:
 def _ok(result: Any) -> types.CallToolResult:
     ui = result.pop("_ui", None) if isinstance(result, dict) else None
     if isinstance(result, dict) and "error" in result and len(result) <= 3:
-        return types.CallToolResult(
+        return conflict_cards.paint(types.CallToolResult(
             content=[TextContent(type="text", text=json.dumps(result, indent=2, default=str))],
-            isError=True)
+            isError=True), ui)
     text = result if isinstance(result, str) else json.dumps(priority.show(result), indent=2, default=str)
     out = types.CallToolResult(content=[TextContent(type="text", text=text)], isError=False)
     return conflict_cards.paint(out, ui)
@@ -965,7 +965,10 @@ def _claim_after(pid: Optional[int], args: dict, result: Any, client: str) -> An
     return {**result, "claim_warning": warn} if warn else result
 
 
-_SCAN_PER_ITEM = {"import_memory": ("text",)}
+# keys not scanned for secrets: import checks each memory itself; a card tap's `tap` is the
+# card's own one-use code (card_taps.py), never stored
+_SCAN_PER_ITEM = {"import_memory": ("text",), "resolve_review_card": ("tap",),
+                  "resolve_conflict_card": ("tap",)}
 MAX_IMPORT = 200_000
 
 

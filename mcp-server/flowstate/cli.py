@@ -137,16 +137,22 @@ def cmd_offsite(a) -> int:
         except OffsiteError as e:
             say(f"Not set up: {e}")
             return 1
-        cfg = paths.load_config()
-        cfg["offsite"] = {"repo": repo, "branch": a.branch or "flowstate-backup"}
-        p = paths.save_config(cfg)
+        branch = a.branch or "flowstate-backup"
+        try:
+            p = paths.update_config(lambda cfg: cfg.__setitem__(
+                "offsite", {"repo": repo, "branch": branch}))
+        except (paths.ConfigUnreadable, TimeoutError) as e:
+            say(f"Not set up: {e}")
+            return 1
         say(f"Off-site backups will go to github.com/{repo} (private), branch "
-            f"{cfg['offsite']['branch']}. Saved in {p}. Push now with: flowstate backup --offsite")
+            f"{branch}. Saved in {p}. Push now with: flowstate backup --offsite")
         return 0
     if a.action == "disable":
-        cfg = paths.load_config()
-        cfg.pop("offsite", None)
-        paths.save_config(cfg)
+        try:
+            paths.update_config(lambda cfg: cfg.pop("offsite", None))
+        except (paths.ConfigUnreadable, TimeoutError) as e:
+            say(f"Not changed: {e}")
+            return 1
         say("Off-site backups turned off (nothing on GitHub was deleted).")
         return 0
     if a.action == "status":
@@ -281,13 +287,16 @@ def cmd_remote(a) -> int:
                 "(one token per app)")
             return 1
         scopes = [RA.SCOPE_READ] if a.read_only else list(RA.SCOPES)
-        cid, token = store.add_token_client(a.name, scopes, a.days)
-        if a.to_file:
-            p = Path(a.to_file).expanduser()
-            if paths.inside_git_worktree(p.parent):
-                store.revoke_client(cid)
-                say(f"Refused: {p.parent} is inside a git folder. Nothing was created.")
-                return 1
+        p = Path(a.to_file).expanduser() if a.to_file else None
+        if p is not None and paths.inside_git_worktree(p.parent):   # before anything is made
+            say(f"Refused: {p.parent} is inside a git folder. Nothing was created.")
+            return 1
+        try:
+            cid, token = store.add_token_client(a.name, scopes, a.days)
+        except ValueError as e:
+            say(f"Not added: {e}")
+            return 1
+        if p is not None:
             p.write_text(token + "\n", encoding="utf-8")
             say(f"App '{a.name}' added as {cid} ({' '.join(scopes)}). Token written to {p}; "
                 f"paste it into the app, then delete the file.")
@@ -342,11 +351,15 @@ def cmd_remote(a) -> int:
         if not host or "/" in host or ":" in host:
             say("Give a bare host name, e.g. flowstate remote allow-redirect --name grok.com")
             return 1
-        cfg = paths.load_config()
-        hosts = cfg.setdefault("remote", {}).setdefault("redirect_hosts", [])
-        if host not in hosts:
-            hosts.append(host)
-            paths.save_config(cfg)
+        def change(cfg: dict) -> None:
+            hosts = cfg.setdefault("remote", {}).setdefault("redirect_hosts", [])
+            if host not in hosts:
+                hosts.append(host)
+        try:
+            paths.update_config(change)
+        except (paths.ConfigUnreadable, TimeoutError) as e:
+            say(f"Not changed: {e}")
+            return 1
         say(f"OAuth apps may now return to https://{host}/...")
         return 0
     return 1

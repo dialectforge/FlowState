@@ -66,7 +66,8 @@ def approve(db_path: Path, item: dict, args: dict, user_request: str, client: st
                           others={"cleanup": apply_cleanup, "edit": apply_edit,
                                   "delete": apply_delete, "conflict": apply_conflict,
                                   "setting": apply_setting, "disagreement": apply_disagreement,
-                                  "source": lambda it, _e: provenance.confirm(db_path, it)})
+                                  "source": lambda it, _e: provenance.confirm(db_path, it)},
+                          path=path or _path_of(client))
 
 
 def reject(db_path: Path, item: dict, reason: str, user_request: str, client: str) -> dict:
@@ -82,6 +83,13 @@ def reject(db_path: Path, item: dict, reason: str, user_request: str, client: st
     return out
 
 
+def _path_of(client: str) -> str:
+    """How a decision without a named path was made: an AI in the chat ("agent"), else the
+    user's surface named by `client` (review page, phone, terminal...)."""
+    from . import approvals, identity
+    return "agent" if identity.current() is not None else approvals.path_of(client)
+
+
 def for_card(db_path: Path, client: str):
     """The review card's decide(item, decision, reason) (review_cards.resolve_card): the same
     approve / reject as manage_review, with the tap as the recorded request. Errors come back
@@ -89,7 +97,9 @@ def for_card(db_path: Path, client: str):
     from . import deletes, safety
 
     def decide(item: dict, decision: str, reason: str) -> dict:
-        words = f"The user tapped {'Approve' if decision == 'approve' else 'Reject'} on the review card."
+        from .conflict_cards import CARD_WORDS
+        words = CARD_WORDS.format(button="Approve" if decision == "approve" else "Reject",
+                                  card="review", app=client)
         try:
             if decision == "reject":
                 return reject(db_path, item, reason, words, client)

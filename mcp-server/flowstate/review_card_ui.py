@@ -92,7 +92,8 @@ REVIEW_JS = r"""  // ---- drawing
     item.appendChild(el("p", "text", view.text || ""));
     if (view.details) { item.appendChild(el("p", "details", view.details)); }
     if (view.contents) { drawSaved(item, view.contents, view.resolved || !view.decide_here ? undefined : index); }
-    item.appendChild(el("p", "who", "From " + (view.who || "an app") + (view.when ? ", " + view.when : "")));
+    var when = localDate(view.when_utc) || view.when;
+    item.appendChild(el("p", "who", "From " + (view.who || "an app") + (when ? ", " + when : "")));
     box.appendChild(item);
     if (view.does) { box.appendChild(el("p", "does", view.does)); }
     if (view.resolved) {
@@ -180,8 +181,9 @@ REVIEW_JS = r"""  // ---- drawing
     var box = item.parentNode;
     setButtons(box, false);
     var args = {item_id: view.item_id, decision: action + "_record", record: record,
-                project: view.project || ""};
+                project: view.project || "", tap: tapFor(view.item_id)};
     request("tools/call", {name: "resolve_review_card", arguments: args}, function (error, result) {
+      takeTaps(result);
       if (error) { showError(box, error.message || "Not saved."); return; }
       var sc = (result && result.structuredContent) || {};
       var fresh = sc.cards && sc.cards[0];
@@ -204,10 +206,12 @@ REVIEW_JS = r"""  // ---- drawing
     var view = cards[index];
     if (!view) { return; }
     setButtons(box, false);
-    var args = {item_id: view.item_id, decision: decision, project: view.project || ""};
+    var args = {item_id: view.item_id, decision: decision, project: view.project || "",
+                tap: tapFor(view.item_id)};
     why = (why || "").replace(/\s+/g, " ").trim();
     if (decision === "reject" && why) { args.reject_reason = why.slice(0, 300); }
     request("tools/call", {name: "resolve_review_card", arguments: args}, function (error, result) {
+      takeTaps(result);
       if (error) { showError(box, error.message || "Not saved."); return; }
       if (!result || result.isError) {
         var text = result && result.content && result.content[0] && result.content[0].text;

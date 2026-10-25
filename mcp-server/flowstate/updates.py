@@ -62,17 +62,16 @@ def is_on() -> bool:
 
 
 def set_on(on: bool) -> Path:
-    cfg = paths.load_config()
-    cfg["update_check"] = bool(on)
-    return paths.save_config(cfg)
+    return paths.update_config(lambda cfg: cfg.__setitem__("update_check", bool(on)))
 
 
 def self_update_allowed() -> bool:
-    """config.json "self_update": false opts this computer out of `flowstate update`."""
+    """config.json "self_update": false opts this computer out of `flowstate update`. A
+    config.json that exists but can't be read counts as opted out (it may say false)."""
     try:
-        return paths.load_config().get("self_update") is not False
+        return paths.load_config(strict=True).get("self_update") is not False
     except Exception:  # noqa: BLE001
-        return True
+        return False
 
 
 SELF_UPDATE_SCOPE = "config:self_update"
@@ -85,27 +84,16 @@ def set_self_update(allowed: bool, db_path: Optional[Path] = None, who: str = "c
     it and `how`. Only the user's terminal (`flowstate update self-update on|off`, cli_self_update
     below) and the local review page (review_page.py) call this; no MCP tool reads or writes it."""
     old = "allowed" if self_update_allowed() else "by hand"
-    cfg = paths.load_config()
-    if allowed:
-        cfg.pop("self_update", None)
-    else:
-        cfg["self_update"] = False
-    path = paths.save_config(cfg)
+
+    def change(cfg: dict) -> None:
+        if allowed:
+            cfg.pop("self_update", None)
+        else:
+            cfg["self_update"] = False
+    path = paths.update_config(change)
     new = "allowed" if self_update_allowed() else "by hand"
-    if db_path is not None and Path(db_path).is_file():
-        from . import approvals, dbconn, identity, review_mode
-        conn = dbconn.connect(str(db_path), timeout=5.0)
-        try:
-            conn.execute("PRAGMA busy_timeout = 5000")
-            if review_mode.available(conn):
-                identity.insert(conn, "review_mode_log", {
-                    "scope": SELF_UPDATE_SCOPE, "old_mode": old, "new_mode": new,
-                    "client": who[:80], "caller": who[:80],
-                    "user_request": how or approvals.TERMINAL_WORDS,
-                    "changed_at": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())}, who)
-                conn.commit()
-        finally:
-            conn.close()
+    from . import approvals
+    approvals.log_setting(db_path, SELF_UPDATE_SCOPE, old, new, who, how)
     return {"old": old, "now": new, "path": path}
 
 
@@ -409,9 +397,15 @@ def brief_lines(running_version: str) -> Optional[str]:
 
 
 # ---------------------------------------------------------------- `flowstate update check`
-def cli_check(sub: Optional[str], say=print) -> int:
+CHECK_SCOPE = "config:update_check"
+
+
+def cli_check(sub: Optional[str], say=print, db_path: Optional[Path] = None) -> int:
     if sub in ("on", "off"):
+        old = "on" if is_on() else "off"
         p = set_on(sub == "on")
+        from . import approvals
+        approvals.log_setting(db_path, CHECK_SCOPE, old, "on" if is_on() else "off")
         say(f"Update check is {sub} (saved in {p})."
             + ("" if sub == "on" else " FlowState makes no request to GitHub now."))
         if sub == "on" and not is_on():

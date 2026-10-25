@@ -382,8 +382,7 @@ def test_review_page_undo_link_is_protected_and_uses_history(page, backend):
     assert 'action="/undo"' in c.get("/?view=who&app=review-page").text
     bad = c.post("/undo", data={"record_type": "nonsense", "record_id": "1", "project_id": "1",
                                 "csrf": csrf})
-    assert "Unknown+record+type" in bad.headers["location"] or \
-        "Unknown%20record%20type" in bad.headers["location"]
+    assert "Unknown record type" in c.get(bad.headers["location"]).text
 
 
 def test_who_paging(backend, seeded_db):

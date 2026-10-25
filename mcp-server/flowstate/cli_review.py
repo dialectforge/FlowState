@@ -6,7 +6,7 @@
     flowstate approve  ID [ID ...] [--db FILE]               asks you to confirm, then approves
     flowstate reject   ID [ID ...] [--reason TEXT] [--db FILE]  asks you to confirm, then rejects
     flowstate approvals [status|on|off] [--project P] [--clear]   user-only approvals (approvals.py)
-    flowstate approvals phone on|off / popup add|remove NAME        phone link, popup apps
+    flowstate approvals phone on|off / popup|cards add|remove NAME  phone link, popup / card apps
 
 With approvals on, an agent can't approve its own delete requests or turn review off; it asks
 you to run one of these (or to use the popup or the phone link). approve / reject and
@@ -297,15 +297,41 @@ def cmd_approvals(a) -> int:
         if arg not in ("on", "off"):
             say("Use: flowstate approvals phone on|off")
             return 2
+        old = "on" if approvals.phone_on(db) else "off"
         approvals.set_value(db, "phone_approvals", arg)
+        approvals.log_setting(db, "phone_approvals", old, arg)
         say(f"Phone approval links are {arg}.")
         return 0
-    if what == "popup":
+    if what in ("popup", "cards"):
+        popup = what == "popup"
         if arg not in ("add", "remove") or not a.name:
-            say("Use: flowstate approvals popup add|remove NAME (the app's MCP client name)")
+            say(f"Use: flowstate approvals {what} add|remove NAME (the app's MCP client name)")
             return 2
-        names = approvals.change_popup_clients(db, a.name, arg == "add")
-        say("Popup apps: " + ", ".join(sorted(names)))
+        name = approvals.clean_client_name(a.name)
+        if arg == "add":   # its answers then count as yours: your own y, as for approvals off
+            tty = open_terminal()
+            if tty is None:
+                say(f"Refused: adding an app asks you to confirm in a terminal, and there is "
+                    f"none here (piped input doesn't count). Run it yourself in a terminal window.")
+                return 2
+            try:
+                does = ("its approval popups count as your own answer" if popup else
+                        "taps on its in-chat cards count as your own decisions")
+                if tty.ask(f"Add {name}? Then {does}. Type y to confirm: ").lower() not in ("y", "yes"):
+                    say("Not confirmed; nothing changed.")
+                    return 1
+            finally:
+                tty.close()
+        lister = approvals.popup_clients if popup else approvals.card_clients
+        before = lister(db)
+        if popup:
+            names = approvals.change_popup_clients(db, name, arg == "add")
+        else:
+            names = approvals.change_card_clients(db, name, arg == "add")
+        approvals.log_setting(db, "popup_clients" if popup else "card_clients",
+                              ", ".join(sorted(before)),
+                              f"{'added' if arg == 'add' else 'removed'} {name}")
+        say(("Popup apps: " if popup else "Card apps: ") + (", ".join(sorted(names)) or "none"))
         return 0
     if what == "off" or (a.clear and pid is not None and approvals.is_on(db, pid)):
         tty = open_terminal()
@@ -337,6 +363,8 @@ def cmd_approvals(a) -> int:
             + ("" if approvals.relay_handle() else " (no relay set up)")
             + ("" if approvals.keys_ready() else "; not available in this release yet") + ".")
         say("Popup apps: " + ", ".join(sorted(approvals.popup_clients(db))))
+        say("Card apps (their in-chat card taps count as yours): "
+            + (", ".join(sorted(approvals.card_clients(db))) or "none"))
         say("Chat approvals through the relay: "
             + ("on (AIs on the relay may approve / reject items that aren't yours alone)"
                if approvals.relay_chat_on(db) else "off (phone only)")
@@ -369,9 +397,9 @@ def register(sub) -> None:
     p.add_argument("--db")
     p.set_defaults(fn=cmd_reject)
     p = sub.add_parser("approvals", help="user-only approvals: status, on, off (off asks you to confirm)")
-    p.add_argument("what", nargs="?", default="status", choices=["status", "on", "off", "phone", "popup"])
-    p.add_argument("arg", nargs="?", help="phone: on|off; popup: add|remove")
-    p.add_argument("name", nargs="?", help="popup: the app's MCP client name")
+    p.add_argument("what", nargs="?", default="status", choices=["status", "on", "off", "phone", "popup", "cards"])
+    p.add_argument("arg", nargs="?", help="phone: on|off; popup / cards: add|remove")
+    p.add_argument("name", nargs="?", help="popup / cards: the app's MCP client name")
     p.add_argument("--project", help="one project's own setting (name or id)")
     p.add_argument("--clear", action="store_true", help="drop the project's own setting")
     p.add_argument("--db")

@@ -88,7 +88,7 @@ def test_settings_row_edit_and_log(page):
     assert "Name of this FlowState" in sec and "<b>Main FlowState</b> (the default)." in sec
     assert "action='/settings/name'" in sec and "Back to" not in sec
     assert "FlowState review <span class='inst'>· Main FlowState</span>" in html
-    assert flash(post(c, "/settings/name", csrf, name="  Office laptop ")) \
+    assert flash(c, post(c, "/settings/name", csrf, name="  Office laptop ")) \
         == 'This FlowState is now called "Office laptop".'
     assert install_name.get() == "Office laptop"
     row = log(db, install_name.SCOPE)[-1]
@@ -101,10 +101,10 @@ def test_settings_row_edit_and_log(page):
     assert "Name of this FlowState" in recent and "Office laptop" in recent
     # bad names change nothing
     for bad in ("", "x" * 41, "a\nb"):
-        assert flash(post(c, "/settings/name", csrf, name=bad)).startswith("Not changed: ")
+        assert flash(c, post(c, "/settings/name", csrf, name=bad)).startswith("Not changed: ")
     assert install_name.get() == "Office laptop"
     # reset
-    assert "Main FlowState" in flash(post(c, "/settings/name", csrf, op="reset", name=""))
+    assert "Main FlowState" in flash(c, post(c, "/settings/name", csrf, op="reset", name=""))
     assert install_name.is_default() and len(log(db, install_name.SCOPE)) == 2
 
 
@@ -125,7 +125,7 @@ def test_open_link_page_shows_it_read_only(backend, seeded_db, cfg):
     assert "<b>Office laptop</b>." in sec and "/settings/name" not in sec
     csrf = CSRF.search(html).group(1)
     before = log(seeded_db)
-    assert flash(post(c, "/settings/name", csrf, name="Hijacked")) == review_page.READ_ONLY
+    assert flash(c, post(c, "/settings/name", csrf, name="Hijacked")) == review_page.READ_ONLY
     assert install_name.get() == "Office laptop" and log(seeded_db) == before
 
 

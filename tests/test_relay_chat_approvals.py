@@ -301,6 +301,7 @@ def test_only_the_terminal_and_the_local_page_write_the_other_settings():
     assert _callers(r"approvals\.set_on\(|\bset_on\(db", "approvals.py") == \
         ["cli_review.py", "review_page.py"]
     assert _callers(r"change_popup_clients\(", "approvals.py") == ["cli_review.py", "review_page.py"]
+    assert _callers(r"change_card_clients\(", "approvals.py") == ["cli_review.py", "review_page.py"]
     assert _callers(r"set_self_update\(", "updates.py") == ["review_page.py"]
     # (task 41) the terminal's `flowstate update self-update on|off` reaches it in updates.py
     assert _callers(r"cli_self_update\(", "updates.py") == ["cli_more.py"]
