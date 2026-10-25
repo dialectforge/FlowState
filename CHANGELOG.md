@@ -2,6 +2,39 @@
 
 ## 2.4.4 - 2026-10-24
 
+### Upgrading to 2.4.4
+
+Most setups need nothing. Check these after updating:
+
+- **Approve / Reject popups now go only to apps on this computer.** An app this computer starts
+  itself (the usual Claude Code, Cursor or VS Code setup) keeps its popups; nothing to do.
+  - Claude Code or Cursor on this computer that connects to FlowState's LAN listener with its own
+    key: run `flowstate approvals popup add --sign-in "<key name>"` once (the name
+    `flowstate keys list` shows; it asks for your `y`), or tick the sign-in on the review page's
+    Popup row. The name the app gives itself no longer counts.
+  - Claude Code or Cursor on **another computer** on your home network no longer gets popups,
+    even with `--sign-in`. Decide its items on the review page, your phone, or with
+    `flowstate approve <id>` on the computer where FlowState runs. The shared LAN token never
+    gets popups either.
+- **In-chat cards for claude.ai through your tunnel or the relay** (or any app that signs in
+  over the network): run `flowstate approvals cards add --sign-in "<name>"`, with the OAuth
+  app's or token's own name (`flowstate remote clients` lists them). The built-in `claude-ai`
+  entry covers Claude Desktop on this computer only. Through the relay, a card tap also needs
+  `flowstate relay chat-approvals on` (off by default: phone only).
+- **Data-git: update every computer to 2.4.4 first**, then run `flowstate data-git migrate` once
+  on each. A computer still on 2.4.3 that pulls a migrated repository can lose its database.
+  From 2.4.4 data-git shares the markdown exports, not the database, and when two computers
+  wrote the same export file, this computer's own copy wins at its sync.
+- **"Did you say this?" checks** (an app asking to mark a record as something you said) are
+  decided only on the review page, your phone or with `flowstate approve <id>`, never in a
+  popup, a review-walk box or an in-chat card.
+- **Erase and review items:** `flowstate erase` removes every quote of the erased record from
+  review items about it (made from it, naming it, or its disagreement card). Other review items
+  lose only a whole sentence quoted from it (5 words and 30 characters or more), never a short
+  shared phrase such as a component's name.
+
+### Changes
+
 - No new dependencies. One small migration (024: an empty column on hard rules saying how the
   user set each one; existing data is not changed). `flowstate update` from 2.4.0 to 2.4.3
   needs no new `.venv`. The off-site encryption uses the `cryptography` package that already

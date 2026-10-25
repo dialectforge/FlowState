@@ -752,8 +752,8 @@ you have already deleted for good: their copies in the edit history (so undo sto
 them), every earlier version edits overwrote (a renamed record's first title too), the keyword
 and meaning search indexes, notes that name them, their decision evidence, a todo's claim
 history and the topic of a disagreement card about them, the text of review items they came
-from or that are about them (another item only loses a whole sentence quoted from them, never
-a short shared phrase), matching events in the automatic session log, and attached files
+from, every quote of them in review items about them (another item only loses a whole sentence
+quoted from them, 5 words and 30 characters or more, never a short shared phrase), matching events in the automatic session log, and attached files
 FlowState copied in. Records an AI took back with undo count as deleted, and so does a record
 deleted along with its project or component (the project's own delete can still be undone).
 A hard rule you removed can be erased too (`flowstate erase rule:ID`): it stays listed as
