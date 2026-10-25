@@ -272,14 +272,28 @@ def meaning_hits(conn, emb, recs: list[dict], query: str, limit: int) -> list[tu
 
 
 _DECISION_ID = re.compile(r"^(?:d|decision\s*#?)\s*(\d+)$", re.I)
+FULL_MAX = 20000   # "D12": the decision in full, up to this many characters each of title and details
+CUT_MARK = "…"
+
+
+def _asked_id(query: str) -> Optional[int]:
+    m = _DECISION_ID.match(query)
+    return int(m.group(1)) if m else None
 
 
 def _by_id(recs: list, query: str) -> Optional[dict]:
-    m = _DECISION_ID.match(query)
-    if not m:
+    rid = _asked_id(query)
+    if rid is None:
         return None
-    rid = int(m.group(1))
     return next((r for r in recs if r["type"] == "decision" and r["id"] == rid), None)
+
+
+def _full(text: str) -> tuple:
+    """(text, cut): in full up to FULL_MAX characters, else cut with a visible mark."""
+    text = text or ""
+    if len(text) <= FULL_MAX:
+        return text, False
+    return text[:FULL_MAX] + CUT_MARK, True
 
 
 def search(db_path: Path, query: str, project_id: Optional[int] = None, kinds=None,
@@ -294,13 +308,21 @@ def search(db_path: Path, query: str, project_id: Optional[int] = None, kinds=No
         names = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM projects")}
         recs = records(conn, project_id, kinds)
         exact = _by_id(recs, query)
-        if exact:   # "D12" / "decision 12": that decision itself (the brief points here for one in dispute)
+        if exact:   # "D12" / "decision 12": that decision itself, in full (the brief points here)
             r = exact
-            return {"query": query, "mode": "id", "count": 1, "results": [
+            title, cut_t = _full(r["title"])
+            body, cut_b = _full(r["body"])
+            out = {"query": query, "mode": "id", "count": 1, "results": [
                 {"content_type": r["type"], "content_id": r["id"], "project_id": r["project_id"],
-                 "project": names.get(r["project_id"]), "title": r["title"][:1000],
-                 "snippet": r["body"][:1000], **({"status": r["status"]} if r.get("status") else {}),
+                 "project": names.get(r["project_id"]), "title": title,
+                 "snippet": body, **({"status": r["status"]} if r.get("status") else {}),
                  "matched_by": "id"}]}
+            if cut_t or cut_b:
+                out["note"] = (f"D{r['id']} is longer than {FULL_MAX:,} characters (an older "
+                               f"record: new details are at most 10,000), so search shows the "
+                               f"first {FULL_MAX:,}; the cut is marked {CUT_MARK}.")
+            return out
+        asked = _asked_id(query)
         kw = keyword_hits(recs, query, limit * 3) if mode != "meaning" else []
         emb = embedder() if mode != "keyword" else None
         note = None
@@ -336,6 +358,11 @@ def search(db_path: Path, query: str, project_id: Optional[int] = None, kinds=No
                             **({"status": r["status"]} if r.get("status") else {}),
                             "matched_by": "+".join(e["by"])})
         out = {"query": query, "mode": used, "results": results, "count": len(results)}
+        if asked is not None and "decision" in kinds:   # "D12", but there is no such decision
+            where = f" in {names.get(project_id) or 'this project'}" if project_id is not None else ""
+            note = (f"No decision D{asked}{where}. " + ("These are keyword matches for "
+                    f"{query!r} instead." if results else "No keyword matches either.")
+                    + (f" {note}" if note else ""))
         if note:
             out["note"] = note
         return out

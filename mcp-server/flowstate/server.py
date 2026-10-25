@@ -806,7 +806,10 @@ def _review_mode(args: dict, client: str) -> Any:
     if args.get("action") == "set":
         who, _scopes = _caller()
         try:
-            if approvals.is_on(backend.db_path, pid):   # turning review off waits for the user
+            # turning review off waits for the user where approvals are on for any project it
+            # affects (install-wide off reaches every project without its own mode)
+            if review_mode.off_needs_user(backend.db_path, args.get("mode"), pid,
+                                          bool(args.get("clear"))):
                 item = review_mode.queue_if_off(backend.db_path, args.get("mode"), args.get("kinds"),
                                                 pid, args.get("user_request") or "", client,
                                                 bool(args.get("clear")))

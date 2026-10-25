@@ -11,8 +11,9 @@ setting changes. Everything done here counts as the user acting (it is logged as
 "review-page"; setting changes in review_mode_log).
 
 Settings (Page.settings): "edit" only on the page `flowstate review-page` opens (a launch-key
-session); "read" on the open-link page below (review mode and app pauses still work there,
-the rest is shown read-only and its POSTs change nothing); "off" on the tunnel page, which
+session); "read" on the open-link page below (review mode and pausing an app still work there,
+except turning review off where approvals are on, and resuming an app; the rest is shown
+read-only and its POSTs change nothing); "off" on the tunnel page, which
 renders only its old Review mode and Apps blocks and has no /settings/... routes. Turning
 approvals off or relay chat approvals on answers with a confirm page whose form carries a
 single-use token bound to the session and the exact change, valid CONFIRM_SECONDS; it stands
@@ -110,8 +111,14 @@ def _e(v) -> str:
     return html.escape("" if v is None else str(v), quote=True)
 
 
-MAX_SESSIONS = 20   # the least recently used browser session goes first
+MAX_SESSIONS = 50   # the least recently used browser session goes first
 NEW_PER_MINUTE = 10   # open-link mode: new browser sessions a minute (more: wait a moment)
+# Open-link mode: a session used in the last PROTECT_SECONDS is never pushed out by a new
+# visit without a cookie (anything on this computer can make those); a new visit that would
+# need to is refused instead.
+PROTECT_SECONDS = 30 * 60
+LINK_BUSY = ("Too many new visits to this page just now; try again in a minute, or run "
+             "`flowstate review-page` (its own one-time link isn't affected).")
 LINK_ONLY = ("Only you decide this one, and this page can be opened by any program on this "
              "computer, so it isn't decided here. Nothing changed. Use the page "
              "`flowstate review-page` opens, or `flowstate approve {id}` in your terminal.")
@@ -121,6 +128,10 @@ LINK_REVIEW_OFF = ("Approvals are on, so turning review off isn't done on this p
 LINK_RECORD = ("Approvals are on, so Remove and Bring back aren't done on this page (any program "
                "on this computer can open it). Nothing changed. Use the page "
                "`flowstate review-page` opens.")
+LINK_RESUME = ("Resuming an app isn't done on this page (any program on this computer can open "
+               "it, including the app you paused). Nothing changed. Use the page "
+               "`flowstate review-page` opens, or `flowstate apps resume --app \"{app}\"` in "
+               "your terminal.")
 CONFIRM_SECONDS = 5 * 60   # a settings confirm page must be answered within this
 MAX_CONFIRMS = 50
 SETTING_WORDS = "set on the FlowState review page"
@@ -185,6 +196,7 @@ class Page:
         self.stylesheet, self.sign_out = stylesheet, sign_out
         self.launch_key: Optional[str] = None if open_link else secrets.token_urlsafe(32)
         self.sessions: dict[str, str] = {}   # cookie value -> csrf token
+        self.seen: dict[str, float] = {}     # cookie value -> when it was last used
         # The Settings section: "edit" on the page `flowstate review-page` opens (a launch-key
         # session), "read" on the open-link page (anything on this computer can get a session
         # there without a key), "off" anywhere else (the tunnel page: not rendered, no routes)
@@ -212,25 +224,34 @@ class Page:
         return f"http://{HOST}:{self.port}{self.base}/?{urlencode({'key': self.launch_key})}"
 
     def new_session(self) -> Optional[str]:
-        """A fresh browser session; None in open-link mode when too many were made just now
-        (a program visiting over and over can't push the user's own session out)."""
+        """A fresh browser session. Open-link mode (anything on this computer can visit without
+        a key): None when too many were made just now, or when making room would push out a
+        session used in the last PROTECT_SECONDS, so a program visiting over and over can't
+        sign the user out. The launch-key page (one session per one-time key) never refuses."""
+        now = _clock()
         if self.open_link:
-            now = _clock()
             self._new = [t for t in self._new if now - t < 60]
             if len(self._new) >= NEW_PER_MINUTE:
                 return None
+            if len(self.sessions) >= MAX_SESSIONS:
+                idle = next(iter(self.sessions))   # the least recently used
+                if now - self.seen.get(idle, 0) < PROTECT_SECONDS:
+                    return None
             self._new.append(now)
         sess = secrets.token_urlsafe(32)
         self.sessions[sess] = secrets.token_urlsafe(24)
+        self.seen[sess] = now
         while len(self.sessions) > MAX_SESSIONS:
             old = next(iter(self.sessions))
             self.sessions.pop(old)
+            self.seen.pop(old, None)
             self.flashes.pop(old, None)
         return sess
 
     def used(self, sess: str) -> None:
         """Mark a session as just used: the least recently used one goes first."""
         self.sessions[sess] = self.sessions.pop(sess)
+        self.seen[sess] = _clock()
 
     # ------------------------------------------------------------ data
     def _conn(self):
@@ -298,8 +319,9 @@ class Page:
 
     def set_mode(self, form: dict) -> str:
         pid = int(form["project_id"]) if form.get("project_id") else None
-        if self.open_link and form.get("mode") == "off" and approvals.is_on(self.db_path, pid):
-            return LINK_REVIEW_OFF
+        if self.open_link and review_mode.off_needs_user(self.db_path, form.get("mode"), pid,
+                                                         bool(form.get("clear"))):
+            return LINK_REVIEW_OFF   # the same "turns review off" rule as the MCP tool
         try:
             r = review_mode.set_mode(self.db_path, form.get("mode"),
                                      [k for k in review_mode.KINDS if form.get(f"kind_{k}")], pid,
@@ -312,6 +334,8 @@ class Page:
     def set_app(self, form: dict) -> str:
         app = form.get("app", "")
         paused = form.get("paused") == "1"
+        if self.open_link and not paused:   # a paused app (or anything here) could resume itself
+            return LINK_RESUME.format(app=app.strip()[:80])
         held = {} if paused else activity.still_paused_by(self.db_path, app)
         names = activity.pause_names(self.db_path, app, paused)
         for n in names:
@@ -833,10 +857,16 @@ class Page:
             f"<b>{_e(m['mode'])}</b> for the whole install, {_e(review_mode.describe(m))}."
             + (f"<ul>{per}</ul>" if per else " No project has its own setting."), form))
         apps = activity.apps(db)
+
+        def act(a) -> str:
+            if a["paused"] and self.open_link:   # resuming is not done on the link page
+                return (f"<span class='note'>Resume: <code>flowstate apps resume --app "
+                        f"&quot;{_e(a['app'])}&quot;</code></span>")
+            return (f"""<form method="post" action="{self.base}/app">{hidden}<input type="hidden" name="app" value="{_e(a['app'])}">
+<input type="hidden" name="paused" value="{'0' if a['paused'] else '1'}"><button>{'Resume' if a['paused'] else 'Pause writes'}</button></form>""")
         rows = "".join(
             f"""<tr><td>{_e(activity.app_label(a))}{' <b>(paused)</b>' if a['paused'] else ''}</td><td>{_e(a['last_seen'] or '-')}</td>
-<td>{a['calls']}</td><td>{a['writes'] or 0}</td><td><form method="post" action="{self.base}/app">{hidden}<input type="hidden" name="app" value="{_e(a['app'])}">
-<input type="hidden" name="paused" value="{'0' if a['paused'] else '1'}"><button>{'Resume' if a['paused'] else 'Pause writes'}</button></form></td></tr>"""
+<td>{a['calls']}</td><td>{a['writes'] or 0}</td><td>{act(a)}</td></tr>"""
             for a in apps)
         paused = [a["app"] for a in apps if a["paused"]]
         out.append(self._row(
@@ -1021,6 +1051,18 @@ class Page:
                 f"<button>No, keep it as it is</button></form></div></body></html>")
 
 
+def _cookie_values(header: str, name: str) -> list:
+    """All values of cookie `name` in a Cookie header, in the order sent (a browser sends one
+    per path; the most specific path first). Empty and oversized values are skipped."""
+    out = []
+    for part in (header or "").split(";")[:100]:
+        k, sep, v = part.strip().partition("=")
+        v = v.strip().strip('"')
+        if sep and k.strip() == name and 0 < len(v) <= 200:
+            out.append(v)
+    return out
+
+
 def create_app(page: Page):
     from starlette.applications import Starlette
     from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
@@ -1039,11 +1081,14 @@ def create_app(page: Page):
         return PlainTextResponse(text, status_code=code, headers=headers)
 
     def session_of(request) -> Optional[str]:
-        tok = request.cookies.get(page.cookie, "")
-        for s in page.sessions:
-            if tok and hmac.compare_digest(tok, s):
-                page.used(s)
-                return s
+        # Every value the browser sent under this cookie's name: a stale one (a 2.4.3 page, or
+        # any other web server on 127.0.0.1 can set one for path /) comes along with ours, and
+        # is ignored rather than shutting the user out
+        for tok in _cookie_values(request.headers.get("cookie", ""), page.cookie):
+            for s in page.sessions:
+                if hmac.compare_digest(tok, s):
+                    page.used(s)
+                    return s
         return None
 
     def set_cookie(resp, sess: str):
@@ -1089,7 +1134,7 @@ def create_app(page: Page):
             # wouldn't survive a redirect): the page and its cookie come in this one answer.
             sess = page.new_session()
             if sess is None:
-                return deny(429, "Too many new visits to this page just now; try again in a minute.")
+                return deny(429, LINK_BUSY)
             return set_cookie(page_html(request, sess), sess)
         if not sess:
             return deny(403, "Open the page with the link from `flowstate review-page`.")
@@ -1172,14 +1217,19 @@ def serve(db_path: Path, port: int = DEFAULT_PORT, open_browser: bool = True,
     page = Page(db_path, port, settings="edit", secret_path=True)
     app = create_app(page)
     url = page.launch_url()
-    print(f"FlowState review page on http://{HOST}:{port}/ (this computer only). Ctrl+C stops it.",
+    # Not the address itself: the page lives under a secret path (http://127.0.0.1:<port>/
+    # answers 404), and only the one-time link below opens it
+    print(f"FlowState review page on {HOST}, port {port} (this computer only). Ctrl+C stops it.",
           flush=True)
-    if print_url:   # on the user's terminal only, so an agent reading our output can't use it
+    if print_url or not open_browser:
+        # --no-browser: the one-time link is the only way in, so it is shown, on the user's
+        # terminal only, so an agent reading our output can't use it
         from .cli_review import open_terminal
         tty = open_terminal()
         if tty is None:
-            raise SystemExit("--print-url shows the one-time link on your terminal, and there is "
-                             "none here. Run it in a terminal window, or leave it out to open the browser.")
+            raise SystemExit(f"{'--print-url' if print_url else '--no-browser'} shows the one-time "
+                             "link on your terminal, and there is none here. Run it in a terminal "
+                             "window, or leave it out to open the browser.")
         tty.tell(f"One-time link: {url}")
         tty.close()
     if open_browser:

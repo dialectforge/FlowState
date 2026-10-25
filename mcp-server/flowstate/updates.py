@@ -51,14 +51,16 @@ _worker: Optional[threading.Thread] = None
 
 # ---------------------------------------------------------------- settings
 def is_on() -> bool:
-    """The check is on unless FLOWSTATE_UPDATE_CHECK=0 or config.json says "update_check": false."""
+    """The check is on unless FLOWSTATE_UPDATE_CHECK=0 or config.json says "update_check": false.
+    A config.json that exists but can't be read counts as off (it may say false): a privacy
+    setting fails closed."""
     env = (os.environ.get("FLOWSTATE_UPDATE_CHECK") or "").strip().lower()
     if env in ("0", "false", "off", "no"):
         return False
     try:
-        return paths.load_config().get("update_check") is not False
+        return paths.load_config(strict=True).get("update_check") is not False
     except Exception:  # noqa: BLE001
-        return True
+        return False
 
 
 def set_on(on: bool) -> Path:
@@ -464,7 +466,12 @@ def cli_self_update(sub: Optional[str], db_path: Optional[Path], say=print) -> i
 
 def _show(st: dict, say) -> None:
     from . import __version__
-    say(f"Update check: {'on' if is_on() else 'off'} (once a day, from GitHub; "
+    try:
+        paths.load_config(strict=True)
+        why = ""
+    except paths.ConfigUnreadable:
+        why = ", because FlowState's settings file can't be read"
+    say(f"Update check: {'on' if is_on() else 'off' + why} (once a day, from GitHub; "
         f"flowstate update check on|off|now).")
     say(f"This computer runs FlowState {__version__}.")
     say(f"Last check: {local_time(st.get('checked_at'))}"

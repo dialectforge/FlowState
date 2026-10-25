@@ -534,7 +534,18 @@ def cmd_remote(a) -> int:
                           "allowing remote tokens on the LAN")
             if rc:
                 return rc
-        paths.update_config(lambda cfg: cfg.__setitem__("lan_remote_tokens", want == "on"))
+        try:
+            paths.update_config(lambda cfg: cfg.__setitem__("lan_remote_tokens", want == "on"))
+        except (paths.ConfigUnreadable, TimeoutError) as e:
+            say(f"Not changed: {e}")
+            return 1
+        from . import approvals   # logged like the other settings (Recent changes, who did what)
+        try:
+            approvals.log_setting(_db(a), "config:lan_remote_tokens",
+                                  "allowed" if now else "refused",
+                                  "allowed" if RA.lan_remote_tokens_allowed() else "refused")
+        except sqlite3.Error:
+            pass   # the setting is saved; a busy or missing database only loses the log line
         say(f"Remote-access tokens on the LAN listener: {'allowed' if want == 'on' else 'refused'}.")
         return 0
     if a.action == "allow-redirect":
@@ -633,7 +644,8 @@ def build_parser() -> argparse.ArgumentParser:
                                       "revoke", "allow-redirect", "lan-tokens", "keep-token"])
     p.add_argument("names", nargs="*", metavar="NAME",
                    help="rename: the app's current name (or id), then its new name")
-    p.add_argument("--db", help="rename: the database whose pause switch to carry over")
+    p.add_argument("--db", help="rename: the database whose pause switch to carry over; "
+                                "lan-tokens: the database that logs the change")
     p.add_argument("--name", help="add-client: app name; allow-redirect: host")
     p.add_argument("--read-only", action="store_true", help="add-client: read-only access")
     p.add_argument("--days", type=int, help="add-client: token expires after N days")

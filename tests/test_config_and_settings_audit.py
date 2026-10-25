@@ -123,10 +123,10 @@ def test_a_lock_left_by_a_writer_that_died_is_taken_over(cfg, monkeypatch):
     import time
     cfg.parent.mkdir(parents=True, exist_ok=True)
     lock = cfg.with_name("config.json.lock")
-    lock.write_text("")
-    old = time.time() - paths.LOCK_STALE - 5
-    os.utime(lock, (old, old))
+    lock.write_text("")   # left by a writer that died (any age: the OS lock went with it)
+    t0 = time.monotonic()
     paths.update_config(lambda c: c.__setitem__("a", 1))
+    assert time.monotonic() - t0 < 1
     assert json.loads(cfg.read_text()) == {"a": 1} and not lock.exists()
 
 

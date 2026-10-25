@@ -12,6 +12,7 @@ None of these is inside the (possibly git-synced) data folder unless the user sa
 import json
 import os
 import platform
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -138,12 +139,58 @@ def save_config(data: dict) -> Path:
 
 
 LOCK_WAIT = 5.0      # seconds a settings writer waits for another one
-LOCK_STALE = 30.0    # a lock file older than this was left by a writer that died
+
+
+def _try_lock(fd: int) -> bool:
+    """An OS lock on the open lock file, without waiting: True if we have it, False if another
+    process (or thread) holds it. The OS drops it when the holder exits, so a writer that
+    crashed never blocks the next one. A filesystem without locks counts as "have it"."""
+    import errno
+    try:
+        if os.name == "nt":
+            import msvcrt
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError as e:
+        if e.errno in (errno.EAGAIN, errno.EACCES, errno.EWOULDBLOCK, errno.EDEADLK):
+            return False
+        return True   # e.g. ENOLCK / ENOTSUP on an odd filesystem: go ahead as before 2.4.4
+
+
+def _unlock(fd: int) -> None:
+    try:
+        if os.name == "nt":
+            import msvcrt
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError:
+        pass
+
+
+_thread_lock = threading.Lock()   # threads of one process take turns too (and wait less)
+
+
+def _quiet_unlink(f: Path) -> None:
+    try:
+        f.unlink()
+    except OSError:
+        pass
 
 
 def _lock(p: Path):
-    """A lock file next to config.json (O_EXCL, any OS) held while one writer reads, changes
-    and writes the settings, so two writers at once can't lose each other's change."""
+    """An OS file lock (flock / msvcrt) on a lock file next to config.json, held while one
+    writer reads, changes and writes the settings, so two writers at once can't lose each
+    other's change. Nothing to go stale: the OS releases it when its holder exits (audit
+    N-F23: a lock left by a crashed writer no longer blocks for 30 s, and two waiting
+    writers can't both "break" one). After locking, the file must still be the one at the
+    path (the last holder removes it when done), else it starts over."""
     import contextlib
     import time
 
@@ -151,29 +198,42 @@ def _lock(p: Path):
     def held():
         lock = p.with_name(p.name + ".lock")
         deadline = time.monotonic() + LOCK_WAIT
-        while True:
-            try:
-                fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                break
-            except FileExistsError:
-                try:
-                    if time.time() - lock.stat().st_mtime > LOCK_STALE:
-                        lock.unlink()
-                        continue
-                except FileNotFoundError:
-                    continue
-                if time.monotonic() > deadline:
-                    raise TimeoutError(f"Another FlowState command is changing {p}; try again "
-                                       f"in a moment.") from None
-                time.sleep(0.02)
+
+        def busy():
+            raise TimeoutError(f"Another FlowState command is changing {p}; try again "
+                               f"in a moment.") from None
+        if not _thread_lock.acquire(timeout=LOCK_WAIT):
+            busy()
         try:
-            os.close(fd)
-            yield
-        finally:
+            while True:
+                fd = os.open(str(lock), os.O_CREAT | os.O_RDWR, 0o600)
+                if _try_lock(fd):
+                    try:
+                        same = os.path.samestat(os.fstat(fd), os.stat(str(lock)))
+                    except FileNotFoundError:
+                        same = False
+                    if same:
+                        break
+                    _unlock(fd)   # its holder removed it as we opened it: take the new one
+                os.close(fd)
+                if time.monotonic() > deadline:
+                    busy()
+                time.sleep(0.02)
             try:
-                lock.unlink()
-            except FileNotFoundError:
-                pass
+                yield
+            finally:
+                # POSIX: remove it while still holding it, so whoever has it open next sees a
+                # file that is no longer at the path and starts over. Windows can't remove an
+                # open file: unlock and close first; if another writer opened it meanwhile, the
+                # removal is refused and that writer keeps the same file.
+                if os.name != "nt":
+                    _quiet_unlink(lock)
+                _unlock(fd)
+                os.close(fd)
+                if os.name == "nt":
+                    _quiet_unlink(lock)
+        finally:
+            _thread_lock.release()
     return held()
 
 

@@ -242,7 +242,8 @@ def register(sub) -> None:
 
     p = sub.add_parser("review-page", help="open the review page (this computer only)")
     p.add_argument("--port", type=int, default=8770, help="default 8770 (8766/8767 are the servers)")
-    p.add_argument("--no-browser", action="store_true")
+    p.add_argument("--no-browser", action="store_true",
+                   help="don't open the browser; shows the one-time link on your terminal")
     p.add_argument("--print-url", action="store_true", help="also show the one-time link (on your terminal)")
     p.add_argument("--db")
     p.set_defaults(fn=cmd_review_page)

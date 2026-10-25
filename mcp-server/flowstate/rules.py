@@ -17,6 +17,7 @@ Removing one follows the same rule (task 54; re-audit N-F4): manage_rules remove
 and whatever words it passes as user_request, only queues a "rule" item with action "remove"
 for the user's own click or key; `flowstate rules remove <id>` in the user's own terminal
 (typing y) removes it at once. manage_memory delete refuses record_type rule and points here.
+`flowstate rules confirm <id>` makes a rule an older version let an app add the user's own.
 """
 
 from pathlib import Path
@@ -27,6 +28,11 @@ from . import identity, links
 MAX_RULE = 300
 MAX_TOTAL = 2000
 MAX_RULES = 25
+# Rules waiting for the user's OK (not shown in briefs yet) don't use the limits above (an app
+# could fill them with junk and keep the user's own rules out); they have their own: at most
+# MAX_PENDING per project, and MAX_PENDING_PER_APP of those from one app (re-audit N-F24).
+MAX_PENDING = 10
+MAX_PENDING_PER_APP = 3
 
 
 class RuleError(links.LinkError):
@@ -97,23 +103,36 @@ def _pending(conn, pid: int, text: str):
 
 
 def _waiting(conn, pid: int) -> list:
-    """Rule texts waiting for the user's OK: they count toward the limits already."""
+    """(app, rule text) of each rule waiting for the user's OK in this project."""
     if not conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'review_items'").fetchone():
         return []
-    return [r[0] or "" for r in conn.execute(
-        "SELECT json_extract(payload, '$.rule') FROM review_items WHERE project_id = ? AND "
-        f"kind = 'rule' AND status = 'pending' AND {_ADD}", (pid,))]
+    return [(r[0] or "", r[1] or "") for r in conn.execute(
+        "SELECT source, json_extract(payload, '$.rule') FROM review_items WHERE project_id = ? "
+        f"AND kind = 'rule' AND status = 'pending' AND {_ADD}", (pid,))]
 
 
-def _check(conn, pid: int, text: str, queued: bool = False):
-    """The rule's text is fine and fits (counting rules waiting for the user, except this
-    one); returns an existing rule with the same text, or None."""
+def _check_queue(conn, pid: int, client: str) -> None:
+    """Room in the queue of rules waiting for the user (MAX_PENDING, MAX_PENDING_PER_APP)."""
+    waiting = _waiting(conn, pid)
+    if len(waiting) >= MAX_PENDING:
+        raise RuleError("rules_queue_full", f"{MAX_PENDING} hard rules already wait for the "
+                        "user's OK in this project. Ask the user to decide those first "
+                        "(`flowstate review`).")
+    who = (client or "unknown")[:80].casefold()
+    if sum(1 for a, _ in waiting if a[:80].casefold() == who) >= MAX_PENDING_PER_APP:
+        raise RuleError("rules_queue_full", f"This app already has {MAX_PENDING_PER_APP} hard "
+                        "rules waiting for the user's OK in this project. Ask the user to "
+                        "decide those first.")
+
+
+def _check(conn, pid: int, text: str):
+    """The rule's text is fine and fits next to the active rules (rules waiting for the user
+    don't count: they have their own limit, _check_queue); returns an existing rule with the
+    same text, or None."""
     rules = active(conn, pid)
     for r in rules:
         if r["rule"].lower() == text.lower():
             return r
-    waiting = [w for w in _waiting(conn, pid) if w.lower() != text.lower()] if queued else []
-    rules = rules + [{"rule": w} for w in waiting]
     used = sum(len(r["rule"]) for r in rules)
     if len(rules) >= MAX_RULES:
         raise RuleError("rules_full", f"This project already has {MAX_RULES} rules (the most "
@@ -143,11 +162,12 @@ def add(db_path: Path, pid: int, rule: str, client: str) -> dict:
     conn = links.connect(db_path)
     try:
         _need(conn)
-        same = _check(conn, pid, text, queued=True)
+        same = _check(conn, pid, text)
         if same is not None:
             return {"rule": same, "note": "This rule already exists.", "project_id": pid}
         item = _pending(conn, pid, text)
         if item is None:
+            _check_queue(conn, pid, client)
             item = review.add_item(
                 None, pid, "rule", f'Add this hard rule? "{text}"',
                 "An AI app asked to add this rule. Every AI working on this project is told to "
@@ -322,14 +342,44 @@ def list_rules(db_path: Path, pid: int, include_removed: bool = False) -> dict:
     conn = links.connect(db_path)
     try:
         _need(conn)
-        sql = ("SELECT id, rule, created_at, created_by, removed_at, removed_by FROM project_rules "
-               "WHERE project_id = ?" + ("" if include_removed else " AND removed_at IS NULL")
-               + " ORDER BY id")
+        extra = (", set_by_user" if _confirmed_col(conn) else "") + \
+            (", app" if identity.has_column(conn, "project_rules", "app") else "")
+        sql = (f"SELECT id, rule, created_at, created_by, removed_at, removed_by{extra} FROM "
+               "project_rules WHERE project_id = ?"
+               + ("" if include_removed else " AND removed_at IS NULL") + " ORDER BY id")
         rows = [{k: v for k, v in dict(r).items() if v is not None}
                 for r in conn.execute(sql, (pid,))]
+        for r in rows:   # the same label as the brief (who_set)
+            r["set_by"] = who_set(r)
         used = sum(len(r["rule"]) for r in rows if not r.get("removed_at"))
         return {"project": links.project_name(conn, pid), "rules": rows, "count": len(rows),
                 "characters_used": used, "characters_max": MAX_TOTAL}
+    finally:
+        conn.close()
+
+
+def confirm_by_user(db_path: Path, rule_id, how: str = "terminal") -> dict:
+    """`flowstate rules confirm ID` in the user's own terminal (after their y): an active rule
+    an older version let an app add on its own becomes the user's ("set by the user")."""
+    conn = links.connect(db_path)
+    try:
+        _need(conn)
+        if not _confirmed_col(conn):
+            raise RuleError("rules_unavailable", "This database can't label rules yet "
+                            "(migration 024 has not run). Restart FlowState.")
+        row = _row(conn, None, rule_id)
+        rid = row["id"]
+        if row["removed_at"]:
+            raise RuleError("rule_removed", f"R{rid} was removed; add it again with "
+                            "`flowstate rules add`.")
+        if conn.execute("SELECT set_by_user FROM project_rules WHERE id = ?",
+                        (rid,)).fetchone()[0]:
+            return {"confirmed": rid, "rule": row["rule"], "note": f"R{rid} is already yours."}
+        conn.execute("UPDATE project_rules SET set_by_user = ? WHERE id = ?",
+                     (f"confirmed ({how})", rid))
+        conn.commit()
+        return {"confirmed": rid, "rule": row["rule"], "project_id": row["project_id"],
+                "note": f"R{rid} is now confirmed by you (the brief says \"set by the user\")."}
     finally:
         conn.close()
 

@@ -231,6 +231,8 @@ def cmd_rules(a) -> int:
     S.backend.tracker = None
     if a.action == "remove":
         return _rule_remove(db, a.text)
+    if a.action == "confirm":
+        return _rule_confirm(db, a.text)
     pid = _project_id(db, a.project) if a.project else None
     if pid is None:
         say("Name the project: --project P")
@@ -291,6 +293,46 @@ def _rule_remove(db: Path, rule_id) -> int:
     return 0
 
 
+def _rule_confirm(db: Path, rule_id) -> int:
+    """`flowstate rules confirm ID`: a rule an older version let an app add on its own ("not
+    confirmed by the user" in the brief) becomes yours, after your y in this terminal."""
+    import sqlite3
+    from . import dbconn, rules
+    if not rule_id or not str(rule_id).strip().lstrip("Rr").isdigit():
+        say("Use: flowstate rules confirm ID   (R<id> in the brief; `flowstate rules list --project P`)")
+        return 2
+    rid = int(str(rule_id).strip().lstrip("Rr"))
+    conn = dbconn.connect(str(db), timeout=5.0)
+    try:
+        row = conn.execute("SELECT r.rule, r.removed_at, r.set_by_user, p.name FROM project_rules r "
+                           "JOIN projects p ON p.id = r.project_id WHERE r.id = ?", (rid,)).fetchone()
+    except sqlite3.Error:
+        row = None
+    finally:
+        conn.close()
+    if row is None:
+        say(f"No hard rule R{rid}.")
+        return 1
+    if row[1]:
+        say(f"R{rid} was removed; add it again with `flowstate rules add`.")
+        return 1
+    if row[2]:
+        say(f"R{rid} is already yours.")
+        return 0
+    rc = _confirm(f'Confirm the hard rule R{rid} "{row[0]}" in {row[3]} as your own? An app added '
+                  f'it; every AI working on this project is told never to break it.',
+                  "confirming a hard rule")
+    if rc:
+        return rc
+    try:
+        r = rules.confirm_by_user(db, rid)
+    except rules.RuleError as e:
+        say(f"Not confirmed: {e.payload['message'] if hasattr(e, 'payload') else e}")
+        return 1
+    say(r.get("note") or "Confirmed.")
+    return 0
+
+
 def register(sub) -> None:
     p = sub.add_parser("data-git", help="git for FlowState's data folder (the markdown export "
                                         "and attachments only); remote / sync / clone / migrate: "
@@ -313,9 +355,10 @@ def register(sub) -> None:
     p.add_argument("--db")
     p.set_defaults(fn=cmd_erase)
 
-    p = sub.add_parser("rules", help="a project's hard rules: list, or add or remove one yourself")
-    p.add_argument("action", choices=["list", "add", "remove"])
-    p.add_argument("text", nargs="?", help="add: the rule; remove: its id (R<id>)")
+    p = sub.add_parser("rules", help="a project's hard rules: list, or add, remove or confirm "
+                                     "one yourself")
+    p.add_argument("action", choices=["list", "add", "remove", "confirm"])
+    p.add_argument("text", nargs="?", help="add: the rule; remove / confirm: its id (R<id>)")
     p.add_argument("--project", help="list / add: the project")
     p.add_argument("--db")
     p.set_defaults(fn=cmd_rules)

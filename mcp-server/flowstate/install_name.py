@@ -60,26 +60,33 @@ def valid(raw) -> Optional[str]:
         return None
 
 
+def _own(raw) -> Optional[str]:
+    """A name the user set: valid, and not the default under another spelling (a hand-edited
+    "display_name": " main flowstate " counts as no name set, so it is never sent)."""
+    name = valid(raw)
+    return None if name is None or name.casefold() == DEFAULT.casefold() else name
+
+
 def get() -> str:
     """The display name; the default when none is set or the stored one isn't valid."""
     try:
-        return valid(paths.load_config().get(KEY)) or DEFAULT
+        return _own(paths.load_config().get(KEY)) or DEFAULT
     except Exception:  # noqa: BLE001 - a broken config file must not break a page
         return DEFAULT
 
 
 def is_default() -> bool:
     try:
-        return valid(paths.load_config().get(KEY)) is None
+        return _own(paths.load_config().get(KEY)) is None
     except Exception:  # noqa: BLE001
         return True
 
 
 def shared() -> Optional[str]:
     """The name to send to the relay: the one the user set, else None (the default
-    "Main FlowState" is never sent). Raises if config.json can't be read (the caller then
-    leaves the relay's copy as it is)."""
-    return valid(paths.load_config(strict=True).get(KEY))
+    "Main FlowState", in any spelling, is never sent). Raises if config.json can't be read
+    (the caller then leaves the relay's copy as it is)."""
+    return _own(paths.load_config(strict=True).get(KEY))
 
 
 def set_name(raw: Optional[str], db_path: Optional[Path] = None, who: str = "command-line",
@@ -91,7 +98,7 @@ def set_name(raw: Optional[str], db_path: Optional[Path] = None, who: str = "com
     old = get()
 
     def change(cfg: dict) -> None:
-        if name is None or name == DEFAULT:
+        if name is None or name.casefold() == DEFAULT.casefold():
             cfg.pop(KEY, None)
         else:
             cfg[KEY] = name
