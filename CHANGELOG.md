@@ -572,6 +572,8 @@ Your terminal
 - Nothing an app wrote (a hard rule, a review item, a project, app or key name) can send escape
   codes to your terminal any more: control and invisible characters show as visible escapes
   (`\x1b`), so you type `y` to exactly what is stored. A new hard rule can't contain them.
+  Joined emoji (a family, a rainbow flag) and Persian or Hindi words print as they are, and a
+  rule may hold them.
 - The per-app limit on waiting hard rules counts the app's sign-in, not the name it sends.
 
 Erase

@@ -14,8 +14,11 @@ import unicodedata
 
 # C0 and C1 controls and DEL; plus the invisible formatting characters (bidi overrides and
 # isolates, zero-width marks, the BOM) that change how a line reads without showing.
-_BAD = re.compile("[\x00-\x1f\x7f-\x9f؜​-‏ -‮⁠-⁯﻿￹-￻]")
-_BAD_KEEP_NL = re.compile("[\x00-\x09\x0b-\x1f\x7f-\x9f؜​-‏ -‮⁠-⁯﻿￹-￻]")
+# Not ZWNJ / ZWJ (U+200C, U+200D): they join emoji (family, rainbow flag) and shape Persian or
+# Hindi words, and can't move the cursor or hide text (task 60, L-1 / L-2).
+_INVISIBLE = "\u061c\u200b\u200e\u200f\u2028-\u202e\u2060-\u206f\ufeff\ufff9-\ufffb"
+_BAD = re.compile("[\x00-\x1f\x7f-\x9f" + _INVISIBLE + "]")
+_BAD_KEEP_NL = re.compile("[\x00-\x09\x0b-\x1f\x7f-\x9f" + _INVISIBLE + "]")
 
 
 def _show(m: re.Match) -> str:
