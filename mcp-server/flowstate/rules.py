@@ -4,8 +4,7 @@ migration 009).
 Rules are shown first in every start_here brief and are never truncated: the brief makes
 room for them and everything else gives way. To keep the brief bounded, a rule is at most
 MAX_RULE characters, a project has at most MAX_RULES active rules, and at most MAX_TOTAL
-characters of them together. Removing a
-rule needs the user's words (user_request); it is a soft delete, so it stays on record.
+characters of them together. Removing a rule is a soft delete, so it stays on record.
 
 Since 2.4.4 (data security audit D2) a rule is only ever set by the user: one an app asks for
 (manage_rules add, from any app: local, LAN, tunnel or relay) waits in the review queue as an
@@ -13,9 +12,15 @@ item of kind "rule", which only the user's own click or key decides (approvals.u
 review page, the phone page or `flowstate approve`). `flowstate rules add` in the user's own
 terminal sets one at once. The brief says who set each rule; a rule an older version let an
 app add on its own is labelled as such.
+
+Removing one follows the same rule (task 54; re-audit N-F4): manage_rules remove, from any app
+and whatever words it passes as user_request, only queues a "rule" item with action "remove"
+for the user's own click or key; `flowstate rules remove <id>` in the user's own terminal
+(typing y) removes it at once. manage_memory delete refuses record_type rule and points here.
 """
 
 from pathlib import Path
+from typing import Optional
 
 from . import identity, links
 
@@ -58,11 +63,36 @@ QUEUED = ("Not added yet: only the user sets hard rules. Review item #{item} wai
           "{item}` in their terminal. Tell the user; you can't approve it.")
 
 
+REMOVE_QUEUED = ("Not removed yet: only the user removes hard rules. Review item #{item} waits "
+                 "for them: the review page (`flowstate review-page`), the phone link, or "
+                 "`flowstate approve {item}` in their terminal (or `flowstate rules remove "
+                 "{rule}` there). Until then the rule still holds. Tell the user; you can't "
+                 "approve it.")
+
+# manage_memory delete record_type=rule (server._delete_request)
+DELETE_REFUSAL = ("Hard rules are removed only by the user. manage_rules(action=\"remove\", "
+                  "rule_id=..., user_request=<their words>) puts it in the review queue for "
+                  "them, or they run `flowstate rules remove <id>` in their terminal. Nothing "
+                  "changed.")
+
+# a queued add (older items have no action) / a queued removal
+_ADD = "COALESCE(json_extract(payload, '$.action'), 'add') = 'add'"
+_REMOVE = "json_extract(payload, '$.action') = 'remove'"
+
+
+def is_removal(item: dict) -> bool:
+    import json
+    try:
+        return json.loads(item.get("payload") or "{}").get("action") == "remove"
+    except (ValueError, AttributeError):
+        return False
+
+
 def _pending(conn, pid: int, text: str):
     row = conn.execute(
         "SELECT id FROM review_items WHERE project_id = ? AND kind = 'rule' AND status = "
-        "'pending' AND lower(json_extract(payload, '$.rule')) = lower(?) ORDER BY id LIMIT 1",
-        (pid, text)).fetchone()
+        f"'pending' AND {_ADD} AND lower(json_extract(payload, '$.rule')) = lower(?) "
+        "ORDER BY id LIMIT 1", (pid, text)).fetchone()
     return row[0] if row else None
 
 
@@ -72,7 +102,7 @@ def _waiting(conn, pid: int) -> list:
         return []
     return [r[0] or "" for r in conn.execute(
         "SELECT json_extract(payload, '$.rule') FROM review_items WHERE project_id = ? AND "
-        "kind = 'rule' AND status = 'pending'", (pid,))]
+        f"kind = 'rule' AND status = 'pending' AND {_ADD}", (pid,))]
 
 
 def _check(conn, pid: int, text: str, queued: bool = False):
@@ -161,6 +191,9 @@ def confirm(db_path: Path, item: dict, how: str) -> tuple:
     the app that asked for it and how the user approved it. Returns (table, id)."""
     import json
     p = json.loads(item.get("payload") or "{}")
+    if p.get("action") == "remove":
+        return "project_rules", _remove_now(db_path, int(item["project_id"]), p.get("rule_id"),
+                                            f"approved by the user ({how})", f"user ({how})")["removed"]
     text = _text(p.get("rule"))
     conn = links.connect(db_path)
     try:
@@ -179,35 +212,108 @@ def confirm(db_path: Path, item: dict, how: str) -> tuple:
 
 
 def agent_refusal(item: dict) -> dict:
+    if is_removal(item):
+        return {"error": "user_only", "message": "Only the user removes hard rules; no app can "
+                "pass their OK along. " + REMOVE_QUEUED.format(
+                    item=item["id"], rule=_payload(item).get("rule_id"))}
     return {"error": "user_only", "message": "Only the user sets hard rules; no app can pass "
             "their OK along. " + QUEUED.format(item=item["id"])}
 
 
+def _payload(item: dict) -> dict:
+    import json
+    try:
+        return json.loads(item.get("payload") or "{}")
+    except ValueError:
+        return {}
+
+
+def _row(conn, pid: Optional[int], rule_id):
+    if rule_id is None:
+        raise RuleError("rule_id_required", "Give rule_id (rules list shows them).")
+    try:
+        rid = int(str(rule_id).strip().lstrip("Rr"))
+    except ValueError:
+        raise RuleError("rule_id_required", "Give rule_id as a number (R<id> in the brief).")
+    row = conn.execute("SELECT id, project_id, rule, removed_at FROM project_rules WHERE id = ?",
+                       (rid,)).fetchone()
+    if row is None:
+        raise RuleError("record_not_found", f"No rule with id {rid}.")
+    if pid is not None and row["project_id"] != pid:
+        raise RuleError("project_mismatch", f"Rule #{rid} belongs to project "
+                        f"'{links.project_name(conn, row['project_id'])}'.")
+    return row
+
+
 def remove(db_path: Path, pid: int, rule_id, user_request: str, client: str) -> dict:
+    """manage_rules remove (any app): queue the removal for the user (kind "rule", action
+    "remove"); the rule holds until the user approves it. The app's user_request is kept with
+    the item as what it said the user asked; it removes nothing by itself."""
+    from . import review
     if not (user_request or "").strip():
         raise RuleError("user_request_required", "Only the user can remove a hard rule. Ask "
                         "them; pass their words as user_request.")
-    if rule_id is None:
-        raise RuleError("rule_id_required", "Give rule_id (rules list shows them).")
     conn = links.connect(db_path)
     try:
         _need(conn)
-        row = conn.execute("SELECT project_id, rule, removed_at FROM project_rules WHERE id = ?",
-                           (int(rule_id),)).fetchone()
-        if row is None:
-            raise RuleError("record_not_found", f"No rule with id {rule_id}.")
-        if row["project_id"] != pid:
-            raise RuleError("project_mismatch", f"Rule #{rule_id} belongs to project "
-                            f"'{links.project_name(conn, row['project_id'])}'.")
+        row = _row(conn, pid, rule_id)
+        rid = row["id"]
         if row["removed_at"]:
-            return {"removed": int(rule_id), "note": "It was already removed."}
-        sets, who = identity.set_sql(conn, "project_rules", client, prefix="removed_")
+            return {"removed": rid, "note": "It was already removed."}
+        old = conn.execute(
+            "SELECT id FROM review_items WHERE project_id = ? AND kind = 'rule' AND status = "
+            f"'pending' AND {_REMOVE} AND json_extract(payload, '$.rule_id') = ? ORDER BY id "
+            "LIMIT 1", (pid, rid)).fetchone()
+        item = old[0] if old else None
+        if item is None:
+            item = review.add_item(
+                None, pid, "rule", f'Remove hard rule R{rid}? "{row["rule"]}"',
+                "An AI app asked to remove this rule"
+                + f' (it says you asked: "{" ".join(user_request.split())[:300]}")'
+                + ". Hard rules are yours alone, so only you remove them. Approve to remove it "
+                "(it stays on record as removed); reject to keep it.",
+                {"action": "remove", "rule_id": rid, "rule": row["rule"],
+                 "user_request": user_request.strip()[:500], "user_only": True},
+                (client or "unknown")[:80], conn=conn)
+            conn.commit()
+        return {"queued_for_review": item, "project_id": pid, "rule_id": rid,
+                "message": REMOVE_QUEUED.format(item=item, rule=rid)}
+    finally:
+        conn.close()
+
+
+def remove_by_user(db_path: Path, rule_id, how: str = "terminal") -> dict:
+    """`flowstate rules remove <id>` in the user's own terminal (after their y): at once. A
+    removal an app asked for that still waits is settled with it (rejected: done already)."""
+    from . import review
+    out = _remove_now(db_path, None, rule_id, f"removed by the user ({how})", f"user ({how})")
+    conn = links.connect(db_path)
+    try:
+        waiting = [r[0] for r in conn.execute(
+            "SELECT id FROM review_items WHERE kind = 'rule' AND status = 'pending' AND "
+            f"{_REMOVE} AND json_extract(payload, '$.rule_id') = ?", (out["removed"],))]
+    finally:
+        conn.close()
+    for item in waiting:
+        review.reject(db_path, item, "The user removed this rule in their terminal.",
+                      "flowstate rules remove", "command-line")
+    return out
+
+
+def _remove_now(db_path: Path, pid: Optional[int], rule_id, request: str, who_: str) -> dict:
+    conn = links.connect(db_path)
+    try:
+        _need(conn)
+        row = _row(conn, pid, rule_id)
+        rid = row["id"]
+        if row["removed_at"]:
+            return {"removed": rid, "rule": row["rule"], "note": "It was already removed."}
+        sets, who = identity.set_sql(conn, "project_rules", who_, prefix="removed_")
         conn.execute(f"UPDATE project_rules SET removed_at = ?, removed_by = ?, removed_request = ?"
-                     f"{sets} WHERE id = ?",
-                     (links.now(), client, user_request.strip()[:500], *who, int(rule_id)))
+                     f"{sets} WHERE id = ?", (links.now(), who_, request[:500], *who, rid))
         conn.commit()
-        return {"removed": int(rule_id), "rule": row["rule"],
-                "note": "Removed (kept on record with the user's words)."}
+        return {"removed": rid, "rule": row["rule"], "project_id": row["project_id"],
+                "note": "Removed (kept on record as removed)."}
     finally:
         conn.close()
 

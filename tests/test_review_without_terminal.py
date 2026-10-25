@@ -831,17 +831,18 @@ def test_lan_from_another_computer_gets_no_local_link(backend, relay_dir, no_pag
 
 
 @pytest.mark.parametrize("peer", ["127.0.0.1", "192.0.2.51"])
-def test_relay_gets_the_phone_link_never_the_local_one(backend, relay, no_page, peer):
-    """The relay agent connects from loopback, but the app is on another computer."""
+def test_relay_gets_neither_the_phone_link_nor_the_local_one(backend, relay, no_page, peer):
+    """The relay agent connects from loopback, but the app is on another computer. Since task
+    54 (D19) it gets a plain sentence instead of the phone link with the relay handle."""
     db = backend.backend.db_path
     pile(db, 2)
     brief, walk, listing = http_calls(db, peer, CALLS, relay=True, headers=SPOOF)
     for answer in (brief, walk, listing):
-        assert "127.0.0.1" not in json.dumps(answer)
-    assert "on their phone: https://flowstatemcp.com/review/testbox, in this chat" in brief
+        assert "127.0.0.1" not in json.dumps(answer) and "testbox" not in json.dumps(answer)
+    assert "on their phone, from the FlowState review link they saved, in this chat" in brief
     assert waiting.ELSEWHERE in brief and "?n=" not in brief
-    assert walk["phone"] == "https://flowstatemcp.com/review/testbox" and "review_page" not in walk
-    assert "relay" in walk["how_to_decide"] and walk["phone"] in walk["how_to_decide"]
+    assert walk["phone"] == approvals.PHONE_ELSEWHERE and "review_page" not in walk
+    assert "relay" in walk["how_to_decide"] and "link they saved" in walk["how_to_decide"]
     assert no_page == [] and log(db) == []
     assert _q(db, "SELECT COUNT(*) FROM review_open_nonces") == [(0,)]
 

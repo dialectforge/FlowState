@@ -66,6 +66,9 @@ READ_ACTIONS = {
 }
 
 
+# what apps elsewhere get instead of the phone link (approvals.PHONE_ELSEWHERE, task 54)
+PHONE_ELSEWHERE = ("Open the review list on your phone from the FlowState link you saved, or run `flowstate review-page` on your computer.")
+
 def utc(dt=None):
     return (dt or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -646,7 +649,15 @@ def s2_day(W):
     R.check(2, "manage_rules remove without the user's words is refused", err(r), r)
     r = cursor.call("manage_rules", action="remove", project=P, rule_id=rid,
                     user_request="drop the rule about asking before changing prices")
-    R.check(2, "manage_rules remove with the user's words (kept as removed)", not err(r) and "receipt" in r, r)
+    item = r.get("queued_for_review")
+    R.check(2, "manage_rules remove with the user's words only queues it for the user (task 54)",
+            not err(r) and item and "changing prices" in cc1.call("start_here", project=P), r)
+    r = cursor.call("manage_review", action="approve", project=P, item_id=item,
+                    user_request="The user said: yes, remove that rule")
+    R.check(2, "no app can approve a hard rule's removal (task 54)", r.get("error") == "user_only", r)
+    rc, out = W.cli_in_terminal(["rules", "remove", str(rid)], ["y"])   # the user's own terminal
+    R.check(2, "flowstate rules remove in the user's terminal removes it (kept as removed)",
+            rc == 0 and "changing prices" not in cc1.call("start_here", project=P), short(out, 300))
     r = cc1.call("manage_rules", action="list", project=P, include_removed=True)
     R.check(2, "removed rule still listed with include_removed", "changing prices" in json.dumps(r), r)
     W.mid_brief = cc1.call("start_here", project=P, size="deep")
@@ -2087,13 +2098,14 @@ def s15_without_terminal(W):
                     "nothing logged, the honest plain list with the links",
                 rc.server_requests == [] and "walked" not in r and r.get("items")
                 and r.get("note") == "No boxes were shown here; nothing was decided."
-                and "relay" in r.get("how_to_decide", "") and r.get("phone") == (pm.group(1) if pm else "?")
+                and "relay" in r.get("how_to_decide", "") and r.get("phone") == PHONE_ELSEWHERE
                 and W.count("approval_log") == rows, (rc.server_requests, r))
         R.check(15, "through the relay (the agent connects from 127.0.0.1): no 127.0.0.1 link in the brief or "
-                    "the walk, the bare phone link instead",
+                    "the walk, and no phone link with the handle either (task 54), a plain sentence",
                 pm and "127.0.0.1" not in rb and "127.0.0.1" not in json.dumps(r) and "review_page" not in r
-                and f"on their phone: {pm.group(1)}," in rline and "?n=" not in rline
-                and pm.group(1) in r.get("how_to_decide", ""), (rline, r))
+                and "e2e-bakery" not in rb and "e2e-bakery" not in json.dumps(r)
+                and "from the FlowState review link they saved" in rline and "?n=" not in rline
+                and "link they saved" in r.get("how_to_decide", ""), (rline, r))
         R.word(f"Brief line through the relay: {rline}")
         R.word(f"Walk through the relay: {r.get('how_to_decide')}")
         ls, lbase, llog = _test_listener(W, penv, "lan-remote", "s15-lan-remote-phone")
@@ -2102,9 +2114,11 @@ def s15_without_terminal(W):
             lline, lb, lr, _ = _from_elsewhere(W, lbase, Q)
         finally:
             _stop(ls, llog)
-        R.check(15, "an app on another computer on the LAN, relay set up: the bare phone link, no 127.0.0.1",
+        R.check(15, "an app on another computer on the LAN, relay set up: no phone link with the handle "
+                    "(task 54), no 127.0.0.1",
                 pm and "127.0.0.1" not in lb and "127.0.0.1" not in json.dumps(lr)
-                and f"on their phone: {pm.group(1)}," in lline and lr.get("phone") == pm.group(1)
+                and "e2e-bakery" not in lb and "e2e-bakery" not in json.dumps(lr)
+                and "from the FlowState review link they saved" in lline and lr.get("phone") == PHONE_ELSEWHERE
                 and "review_page" not in lr and lr.get("items") and "walked" not in lr, (lline, lr))
         with httpx.Client(timeout=30) as hc:
             # the bookmark link: the site (signed-in owner) sends the browser to /review/start with

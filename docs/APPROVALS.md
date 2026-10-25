@@ -88,11 +88,15 @@ Whatever the approvals setting, the user can see and decide the whole review que
   `X-FlowState-*` change nothing). The relay listener (its agent connects from loopback), the
   public listener, a LAN peer elsewhere and unmarked requests are not this computer: no
   127.0.0.1 URL anywhere in the brief or the walk, and the page isn't started for them. They
-  get the phone link when the relay is set up, and the text "on the computer where FlowState
+  get no phone link either (2.4.4, task 54: it contains the relay handle), but
+  `approvals.PHONE_ELSEWHERE` ("Open the review list on your phone from the FlowState link you
+  saved, or run `flowstate review-page` on your computer.") as `phone` when the relay is set
+  up, "on their phone, from the FlowState review link they saved" in the wording, and the text
+  "on the computer where FlowState
   runs (the FlowState review shortcut, or `flowstate review-page`), or on its tunnel review
   page if it has one" in the brief's line and the walk's `how_to_decide`.
-- **Phone list (relay users):** the bookmarkable `https://flowstatemcp.com/review/<handle>`;
-  section 5.
+- **Phone list (relay users):** the bookmarkable `https://flowstatemcp.com/review/<handle>`,
+  given only to apps on this computer (like the 127.0.0.1 link); section 5.
 - **Desktop shortcut:** `setup_flowstate.py` puts "FlowState review" on the desktop (Windows
   `FlowState review.cmd`, macOS `FlowState review.command`, Linux `flowstate-review.desktop`).
   It runs `flowstate review-page`; when a FlowState on the computer already serves this
@@ -126,8 +130,8 @@ chat by default. What the code enforces (`waiting.phone_only`, called first in
   is pending, the call is refused whatever `user_request` says (also with none). The answer:
   `error` `phone_only`, `message` ("Nothing was decided: review item #N still waits for the
   user. ..."), `item_id`, `kind`, `status` "waiting for the user", `next` (the one line to pass
-  on, with the item's phone link), `phone` (the item's own `/approve/<handle>/<id>?n=...` link
-  when phone links are available, else the review list's, else no link), `how_to_decide` (the
+  on), `phone` (since 2.4.4 never a link here: `approvals.PHONE_ELSEWHERE` when phone links
+  are available, else absent; a relay caller is never on this computer), `how_to_decide` (the
   walk's wording) and `dont_approve`. Nothing is changed or logged as a decision. A missing or
   already decided item gets the usual answer.
 - The setting: `approval_settings` key `relay_chat_approvals` (`approvals.relay_chat_on`),
@@ -231,8 +235,11 @@ quoting the user); FlowState stores and shows which app did it, and can't check 
 `https://flowstatemcp.com/approve/<handle>/<item>?n=<nonce>`
 
 - `handle`: this device's relay handle (`relay.json`); only shown when the relay agent is
-  enrolled and on and phone links are on (`flowstate approvals phone on|off`). This release
-  pins the site's published keys (section 3), so that condition is met.
+  enrolled and on and phone links are on (`flowstate approvals phone on|off`), and only to
+  apps on this computer (`popup.on_this_computer`; 2.4.4, task 54). Apps elsewhere (relay,
+  public listener, LAN from another computer) get `approvals.PHONE_ELSEWHERE` instead, so the
+  handle stays out of cloud chat logs. This release pins the site's published keys (section
+  3), so the key condition is met.
 - `item`: the review item id (integer).
 - `nonce`: 43 url-safe characters (`secrets.token_urlsafe(32)`), made on this computer, one
   per item, bound to the item, the action `approve_review` and an expiry (7 days; a fresh one
@@ -386,7 +393,7 @@ What FlowState does (`review_phone.py`):
 - `POST /review/decide` `{"token", "item_id", "decision": "approve" | "reject",
   "confirm_name"?, "reason"?}` (JSON, same origin): the cookie and the page token must match a
   live session. Approve or Reject goes through the same user-only path as the approve page
-  (`popup.as_user`, label `phone (<handle>)`) and is logged (`approval_log`, path `phone`).
+  (`popup.as_user`, label `phone`, never the handle) and is logged (`approval_log`, path `phone`).
   Answers with the updated list and total.
 
 Errors are JSON `{"error", "message"}` with status 403 (`phone_approvals_unavailable`,

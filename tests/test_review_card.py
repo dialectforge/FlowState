@@ -293,7 +293,8 @@ def test_relay_taps_are_phone_only_unless_chat_approvals_are_on(backend, seeded_
     _r, body = tap(S, item, "approve")
     assert body["error"] == "phone_only"
     blob = json.dumps(body)
-    assert f"https://flowstatemcp.com/approve/testbox/{item}?n=" in blob and "127.0.0.1" not in blob
+    # no phone link with the relay handle to an app elsewhere (task 54, D19)
+    assert "testbox" not in blob and approvals.PHONE_ELSEWHERE in blob and "127.0.0.1" not in blob
     assert status(seeded_db, item) == "pending"
     approvals.set_relay_chat(seeded_db, True)
     assert ok(tap(S, item, "approve"))["resolved"] == item
@@ -322,15 +323,15 @@ def test_user_only_items_are_read_only_with_a_link_and_refused_on_resolve(backen
     assert rows(db, "SELECT COUNT(*) FROM approval_log WHERE path = 'card'")[0][0] == 0
 
 
-def test_user_only_card_through_the_relay_gives_the_phone_link(backend, seeded_db, relay, ui):
+def test_user_only_card_through_the_relay_says_where_without_the_phone_link(backend, seeded_db, relay, ui):
     S = backend
     db = seeded_db
     approvals.set_relay_chat(db, True)
     item = review.add_item(db, 1, "source", "Did you say this?", None,
                            {"record_type": "learning", "record_id": 1, "title": "Alpha lesson"}, "Claude")
     card = call(S, "show_review_card", {"item_id": item})[0].structuredContent["cards"][0]
-    assert card["link"].startswith(f"https://flowstatemcp.com/approve/testbox/{item}?n=")
-    assert "127.0.0.1" not in json.dumps(card)
+    assert card["link"] == "" and approvals.PHONE_ELSEWHERE in card["locked_note"]   # task 54
+    assert "127.0.0.1" not in json.dumps(card) and "testbox" not in json.dumps(card)
     assert tap(S, item, "approve")[1]["error"] == "user_only"
 
 

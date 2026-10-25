@@ -44,8 +44,9 @@ run `flowstate update --dry-run` in a terminal on that computer, show them the p
 still runs Y" means: ask the user to restart this app.
 
 When the user states a hard rule for a project ("never push to main"), add it:
-`manage_rules(action="add", project=..., rule="...")`. Remove one only when the user asks, quoting
-them in `user_request`.
+`manage_rules(action="add", project=..., rule="...")`; it waits in the review queue until the
+user approves it themselves. Ask to remove one only when the user asks, quoting them in
+`user_request`; that waits for the user the same way (or they run `flowstate rules remove <id>`).
 
 ## 2. Log to the right project, as you go
 

@@ -262,7 +262,7 @@ def test_approve_deletes_and_undo_restores_exactly(rich, seeded_db):
 
 
 @pytest.mark.parametrize("rtype,rid", [("decision", 1), ("change", 1), ("learning", 1), ("todo", 1),
-                                       ("attempt", 1), ("handoff", 1), ("rule", 1), ("link", 1),
+                                       ("attempt", 1), ("handoff", 1), ("link", 1),
                                        ("variable", 1), ("method", 1)])
 def test_every_record_type_deletes_and_comes_back(rich, seeded_db, rtype, rid):
     S = rich

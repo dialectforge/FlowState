@@ -307,7 +307,7 @@ def test_chat_approvals_off_refuses_and_on_allows_keep(backend, seeded_db, relay
     assert body["error"] == "phone_only"
     blob = json.dumps(body)
     assert "127.0.0.1" not in blob and "review_page" not in body
-    assert f"https://flowstatemcp.com/approve/testbox/{item}?n=" in blob
+    assert "testbox" not in blob and approvals.PHONE_ELSEWHERE in blob   # task 54 (D19)
     assert rows(seeded_db, "SELECT status FROM review_items WHERE id = ?", item)[0][0] == "pending"
     approvals.set_relay_chat(seeded_db, True)
     kept = ok(call(S, "manage_review", {"action": "approve", "project": "Alpha", "item_id": item,
@@ -371,7 +371,7 @@ def test_card_tap_needs_an_mcp_apps_client_and_is_phone_only_through_the_relay(
     monkeypatch.setattr(conflict_cards, "client_has_ui", lambda: True)
     _r, body = call(S, "resolve_conflict_card", tap)   # relay, chat approvals off
     assert body["error"] == "phone_only"
-    assert f"https://flowstatemcp.com/approve/testbox/{item}?n=" in json.dumps(body)
+    assert "testbox" not in json.dumps(body) and approvals.PHONE_ELSEWHERE in json.dumps(body)
     assert rows(seeded_db, "SELECT status FROM review_items WHERE id = ?", item)[0][0] == "pending"
     approvals.set_relay_chat(seeded_db, True)
     assert ok(call(S, "resolve_conflict_card", {**tap, "tap": tap_code(item)},

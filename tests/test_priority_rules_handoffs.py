@@ -150,12 +150,16 @@ def test_rules_add_list_remove_and_shown_first(backend, seeded_db):
     wrong = call(S, "rules", {"action": "remove", "project": "Beta Project", "rule_id": rid,
                               "user_request": "remove it"})
     assert wrong.isError and _j(wrong)["error"] == "project_mismatch"
-    ok = _j(call(S, "rules", {"action": "remove", "project": "Alpha", "rule_id": rid,
-                              "user_request": "drop the main rule please"}))
-    assert ok["removed"] == rid
+    # task 54: an app's remove only queues it for the user, who approves it themselves
+    asked = _j(call(S, "rules", {"action": "remove", "project": "Alpha", "rule_id": rid,
+                                 "user_request": "drop the main rule please"}))
+    assert asked["queued_for_review"] and "Never push" in brief(S)
+    from flowstate import review, review_apply
+    review_apply.approve(seeded_db, review.get_item(seeded_db, asked["queued_for_review"]), {},
+                         "I removed it myself", "command-line", {})
     assert "Never push" not in brief(S)
     assert _q(seeded_db, "SELECT removed_request FROM project_rules WHERE id = ?", rid) == \
-        [("drop the main rule please",)]                         # soft delete, kept on record
+        [("approved by the user (terminal)",)]                   # soft delete, kept on record
     everything = _j(call(S, "rules", {"action": "list", "project": "Alpha", "include_removed": True}))
     assert everything["count"] == 2
 

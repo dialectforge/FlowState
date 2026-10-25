@@ -81,7 +81,7 @@ RULES_DESCRIPTION = (
     "brief and never cut. add: when the user states one (one sentence, max 300 chars; 25 "
     "rules, 2,000 chars in total); it waits in the review queue until the user approves it "
     "themselves (review page, phone or terminal; no app can). list: active rules. remove: ONLY when the user asks in "
-    "this chat; quote them in user_request; the rule is kept as removed. Preferences and "
+    "this chat; quote them in user_request; it waits like add; the rule is kept as removed. Preferences and "
     "lessons go in log_work. Requires project. Returns the rule or {rules}."
 )
 

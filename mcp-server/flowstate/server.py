@@ -293,6 +293,7 @@ async def _call_internal(name: str, arguments: dict, shown: str = "") -> types.C
             return out
         if name not in CARD_TOOLS:   # stored text is data, not instructions (audit D6)
             result = stored.defuse_all(stored.mark(name, result))
+        result = _safe_call(approvals.scrub_handle, result) or result   # 2.4.3 labels (D19)
         out = _ok(result)
         return out
     finally:   # bookkeeping gets what is left of the time; past it, it finishes on its own
@@ -1068,6 +1069,9 @@ def _delete_request(pid: int, name: str, args: dict, client: str) -> Any:
                     "message": f"record_type must be one of: {', '.join(deletes.RECORD_TYPES)}. "
                                f"Projects and components: manage_projects(action=\"delete\" / "
                                f"\"delete_component\")."}
+        if rtype == "rule":   # hard rules: removed by the user only (task 54, re-audit N-F4)
+            from .rules import DELETE_REFUSAL
+            return {"error": "user_only", "message": DELETE_REFUSAL}
     else:
         return {"error": "bad_action", "message": "action must be project, component or record."}
     try:

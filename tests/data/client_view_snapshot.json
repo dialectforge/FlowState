@@ -777,7 +777,7 @@
     "readOnlyHint": false,
     "title": "Hard rules"
    },
-   "description": "A project's hard rules: short never/always rules from the user, shown first in every brief and never cut. add: when the user states one (one sentence, max 300 chars; 25 rules, 2,000 chars in total); it waits in the review queue until the user approves it themselves (review page, phone or terminal; no app can). list: active rules. remove: ONLY when the user asks in this chat; quote them in user_request; the rule is kept as removed. Preferences and lessons go in log_work. Requires project. Returns the rule or {rules}.",
+   "description": "A project's hard rules: short never/always rules from the user, shown first in every brief and never cut. add: when the user states one (one sentence, max 300 chars; 25 rules, 2,000 chars in total); it waits in the review queue until the user approves it themselves (review page, phone or terminal; no app can). list: active rules. remove: ONLY when the user asks in this chat; quote them in user_request; it waits like add; the rule is kept as removed. Preferences and lessons go in log_work. Requires project. Returns the rule or {rules}.",
    "inputSchema": {
     "properties": {
      "action": {

@@ -4,7 +4,8 @@ changes, on the computer where FlowState runs: `flowstate relay chat-approvals o
 (approval_settings key relay_chat_approvals, like `flowstate approvals phone on|off`).
 
 - Off (the default): through the relay, approve and reject are refused (error phone_only) and
-  the answer gives the item's own phone link, how_to_decide and dont_approve.
+  the answer says where the user decides (since task 54 a plain sentence, no phone link with
+  the handle: approvals.PHONE_ELSEWHERE), how_to_decide and dont_approve.
 - On: today's behaviour (quote the user in user_request).
 - User-only items (deletes and turning review off with approvals on, "did you say this?"
   checks) stay the user's own click or key either way.
@@ -44,10 +45,12 @@ def _refused(body, item):
     assert body["error"] == "phone_only" and body["item_id"] == item, body
     assert body["status"] == "waiting for the user"
     assert body["message"].startswith(f"Nothing was decided: review item #{item} still waits")
-    assert body["phone"].startswith(f"{PHONE}{item}?n="), body
-    assert body["phone"] in body["how_to_decide"] and body["phone"] in body["next"]
+    # 2.4.4 (task 54, D19): no phone link with the handle to an app elsewhere, a plain sentence
+    assert body["phone"] == approvals.PHONE_ELSEWHERE and PHONE not in str(body), body
+    assert approvals.PHONE_ELSEWHERE in body["next"]
+    assert "from the FlowState review link they saved" in body["how_to_decide"]
     assert "Don't approve or reject anything for them" in body["how_to_decide"]
-    assert body["dont_approve"] == waiting.DONT_APPROVE
+    assert body["dont_approve"] == waiting.DONT_APPROVE_NO_LINK
     assert "127.0.0.1" not in str(body)
 
 

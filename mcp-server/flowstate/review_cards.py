@@ -135,8 +135,10 @@ def _where(db_path: Path, it: dict) -> tuple:
     if ways.get("review_page"):
         return ways["review_page"], ("Only you decide this one, on the review page on this "
                                      "computer, not in the chat:")
-    if ways.get("phone"):
+    if ways.get("phone", "").startswith("https://"):
         return ways["phone"], "Only you decide this one, on your phone, not in the chat:"
+    if ways.get("phone"):   # an app elsewhere: a sentence, no link with the handle (D19)
+        return "", f"Only you decide this one, not in the chat. {ways['phone']}"
     return "", (f"Only you decide this one, not in the chat: {waiting.ELSEWHERE}, or with "
                 f"`flowstate approve {it['id']}` in a terminal.")
 

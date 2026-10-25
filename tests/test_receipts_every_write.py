@@ -30,7 +30,9 @@ def _calls(tmp_path):
         ("manage_memory", {**A, "action": "mark_checked", "record_type": "learning", "record_id": 1}, "learning #1"),
         ("manage_memory", {**A, "action": "set_source", "record_type": "learning", "record_id": 1,
                            "source": "user_stated"}, "learning #1"),
-        ("manage_rules", {**A, "action": "remove", "rule_id": 1, "user_request": "User: drop that rule"}, "rule #1"),
+        # removing one waits for the user too (task 54)
+        ("manage_rules", {**A, "action": "remove", "rule_id": 1, "user_request": "User: drop that rule"},
+         "review_item #"),
         ("manage_review", {"action": "set_mode", "mode": "everything", "user_request": "User: hold all"},
          "review_mode_change #"),
     ]

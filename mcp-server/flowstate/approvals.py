@@ -423,9 +423,51 @@ def relay_set_up() -> bool:
         return False
 
 
-def phone_link(db_path: Path, item_id: int) -> Optional[str]:
+# For callers elsewhere (relay, tunnel, LAN from another computer), instead of a phone link:
+# the links carry the relay handle, which then lands in cloud chat logs (audit D19, task 54).
+PHONE_ELSEWHERE = ("Open the review list on your phone from the FlowState link you saved, or run "
+                   "`flowstate review-page` on your computer.")
+
+
+def _elsewhere() -> bool:
+    """Is this request from an app that isn't on this computer? (popup.on_this_computer: no
+    request at all, stdio, or the LAN listener with a loopback peer count as here.)"""
+    from .popup import on_this_computer
+    return not on_this_computer()
+
+
+def phone_hidden(db_path: Path) -> bool:
+    """The phone links exist here but this caller is elsewhere, so it gets PHONE_ELSEWHERE."""
+    return _elsewhere() and review_handle(db_path) is not None
+
+
+def scrub_handle(result):
+    """For an app elsewhere: "phone (<this device's handle>)", the label 2.4.3 saved with phone
+    decisions (history, who did what, the brief), becomes "phone" in its answer. Only the exact
+    label with this device's handle: record text is left alone."""
+    if not _elsewhere():
+        return result
     handle = relay_handle()
-    if not handle or not phone_on(db_path) or not keys_ready():
+    if not handle:
+        return result
+    old = f"phone ({handle})"
+
+    def walk(v):
+        if isinstance(v, str):
+            return v.replace(old, "phone") if old in v else v
+        if isinstance(v, dict):
+            return {k: walk(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [walk(x) for x in v]
+        return v
+    return walk(result)
+
+
+def phone_link(db_path: Path, item_id: int) -> Optional[str]:
+    """The item's phone link, only for apps on this computer (never with the handle to an app
+    elsewhere: phone_hidden)."""
+    handle = relay_handle()
+    if not handle or not phone_on(db_path) or not keys_ready() or _elsewhere():
         return None
     nonce = nonce_for(db_path, item_id)
     return f"{SITE}/approve/{handle}/{int(item_id)}?n={nonce}" if nonce else None
@@ -443,8 +485,9 @@ def review_handle(db_path: Path) -> Optional[str]:
 def review_link(db_path: Path) -> Optional[str]:
     """The bookmarkable phone link to the whole waiting list (no code in it, so nothing secret
     lands in chat history): https://flowstatemcp.com/review/<handle>. The site signs the user
-    in and sends the browser to this device's /review/start, which makes a fresh code."""
-    handle = review_handle(db_path)
+    in and sends the browser to this device's /review/start, which makes a fresh code. Only for
+    apps on this computer, like phone_link."""
+    handle = None if _elsewhere() else review_handle(db_path)
     return f"{SITE}/review/{handle}" if handle else None
 
 
@@ -557,6 +600,9 @@ def ask_line(db_path: Path, item_id: int, what: str = "approve it") -> str:
         return (f"Waiting for the user: ask them to {what} on their tunnel review page ({tunnel}) "
                 f"or with the FlowState review shortcut on their desktop (or run "
                 f"`flowstate approve {item_id}` in a terminal).")
+    if phone_hidden(db_path):   # an app elsewhere: no link with the handle in it
+        return (f"Waiting for the user: ask them to {what} themselves. Tell them: "
+                f"\"{PHONE_ELSEWHERE}\" (or `flowstate approve {item_id}` in a terminal).")
     return (f"Waiting for the user: ask them to open the FlowState review shortcut on their "
             f"desktop and {what} there (or run `flowstate approve {item_id}` in a terminal).")
 
@@ -581,6 +627,8 @@ def describe(item: dict, project: str, db_path: Optional[Path] = None) -> str:
     if item["kind"] == "rule":
         rule = " ".join(str(p.get("rule") or "").split())
         rule = rule if len(rule) <= 120 else rule[:117] + "..."
+        if p.get("action") == "remove":
+            return f'remove the hard rule R{p.get("rule_id")} "{rule}" from {project}'
         return f'add the hard rule "{rule}" to {project} (every AI there is told to never break it)'
     if item["kind"] == "delete":
         if db_path is not None:

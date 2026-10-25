@@ -230,7 +230,8 @@ any browser, your phone included:
   treated exactly like one with none. An agent that holds a token for `/mcp` can't approve
   its own work through this page.
 - **Where it exists:** only on the public listener (`--public-url`). The relay has its own
-  signed-in phone list (`https://flowstatemcp.com/review/<handle>`), and on your computer the
+  signed-in phone list (`https://flowstatemcp.com/review/<handle>`; FlowState gives that link
+  only to apps on your computer, so open it from where you saved it), and on your computer the
   "FlowState review" desktop shortcut (made by `setup_flowstate.py`) or `flowstate
   review-page` opens the 127.0.0.1 page. The LAN and relay listeners answer 404 on
   `/review/tunnel`.

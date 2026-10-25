@@ -314,6 +314,15 @@
   --project P "TEXT"` sets one at once. The brief says who set each rule: "(set by the user)",
   or, for one an older version let an app add, "(added by Grok Build, not confirmed by the
   user)". Waiting rules count toward the 25-rule / 2,000-character limits.
+- **Only you remove hard rules too.** Before, an app could remove a rule by passing any words as
+  "the user's request", or with `manage_memory` delete. Now `manage_rules` remove, from any app,
+  only queues a "remove this hard rule?" item for your own click or key (review page, phone or
+  `flowstate approve`), whatever words it passes; the rule keeps holding until you approve.
+  New `flowstate rules remove <id>` (your own terminal, asks for `y`) removes one at once.
+  `manage_memory` delete refuses `record_type=rule`. The chat review walk shows no Approve /
+  Reject box for hard rules (adding or removing): they stay listed with where you decide them.
+  A session summary now says "hard rule request" / "rule removal request" instead of "new
+  rule" / "rule removed" for these.
 - **Private files stay private.** `setup_flowstate.py` now writes app configs (`~/.claude.json`,
   `~/.cursor/mcp.json`, ...) with the file's own permissions (owner-only for a new file); before,
   a 0600 config came out readable by every account. What FlowState creates from now on (data
@@ -347,7 +356,13 @@
 - **Phone review off closes open pages.** Every phone decision re-checks `approvals phone`, so
   turning it off also stops a phone list or approve page that is already open.
 - **Your relay address stays out of AI answers.** Phone decisions are logged as "phone", without
-  the handle. The relay hostname no longer answers `/health` (anyone can list relay addresses
+  the handle. The phone links (the review list's `https://flowstatemcp.com/review/<handle>` and
+  each item's approve link) now go only to apps on the computer where FlowState runs. An app
+  elsewhere (through the relay, your own tunnel, or another computer on your network) gets
+  "Open the review list on your phone from the FlowState link you saved, or run `flowstate
+  review-page` on your computer." instead, in the brief, the review list and walk, answers that
+  queue something, the relay's "phone only" refusal and the review card. Your
+  flowstatemcp.com account page shows the link to bookmark. The relay hostname no longer answers `/health` (anyone can list relay addresses
   from the certificate logs), and the daily crt.sh check sends a plain `flowstate` user agent.
 - **Deleting a project or attachment says the files stay** on disk, and how to erase them.
 - **`export-md` is defused**: images, HTML tags and comments, and `javascript:` in record text

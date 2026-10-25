@@ -19,7 +19,9 @@ Three ways, none of which shows anything unless the user asks (or has approvals 
      other computer 127.0.0.1 is that computer itself, so those apps get the phone link or a
      plain note to ask for the list instead (`flowstate review-page` on this computer).
   3. Relay users: a bookmarkable phone link to the whole list, https://flowstatemcp.com/review/
-     <handle> (approvals.review_link, review_phone.py; no code in the chat).
+     <handle> (approvals.review_link, review_phone.py; no code in the chat). Like the local
+     link, only for apps on this computer (2.4.4, audit D19): an app elsewhere gets a plain
+     sentence instead (approvals.PHONE_ELSEWHERE), so the handle stays out of cloud chat logs.
 
 Plus two the user opens themselves: the "FlowState review" desktop shortcut setup makes
 (`flowstate review-page`), and, for users with their own tunnel, https://<tunnel>/review/tunnel
@@ -179,13 +181,24 @@ def links(db_path: Path, local: Optional[bool] = None) -> dict:
     page = local_link(db_path) if local else None
     if page:
         out["review_page"] = page
-    try:
-        phone = approvals.review_link(db_path)
+    try:   # an app elsewhere gets a plain sentence: the link carries the handle (D19)
+        phone = approvals.review_link(db_path) or \
+            (approvals.PHONE_ELSEWHERE if approvals.phone_hidden(db_path) else None)
     except Exception:  # noqa: BLE001 - no phone link, nothing more
         phone = None
     if phone:
         out["phone"] = phone
     return out
+
+
+def _is_link(v) -> bool:
+    return isinstance(v, str) and v.startswith(("http://", "https://"))
+
+
+def _where(k: str, v: str) -> str:
+    if k == "phone" and not _is_link(v):   # an app elsewhere: no link (approvals.PHONE_ELSEWHERE)
+        return "on their phone, from the FlowState review link they saved"
+    return f"{'on the computer where FlowState runs' if k == 'review_page' else 'on their phone'}: {v}"
 
 
 def where_line(db_path: Path) -> str:
@@ -197,7 +210,7 @@ def where_line(db_path: Path) -> str:
     if ways.get("review_page"):
         parts.append(f"on the computer where FlowState runs at {ways['review_page']}")
     if ways.get("phone"):
-        parts.append(f"on their phone: {ways['phone']}")
+        parts.append(_where("phone", ways["phone"]))
     parts.append('in this chat when they ask (manage_review action="walk")')
     if not local:   # an app on another computer: no 127.0.0.1 link (it would open its own)
         parts.append(ELSEWHERE)
@@ -448,7 +461,11 @@ def prepare(listing: dict, db_path: Path, scopes, project_id: Optional[int] = No
     # A disagreement has four outcomes, so it is not a yes/no box. The card text stays
     # in the answer (walk() puts it back after it drops the item lines).
     cards = [conflict_cards_line(db_path, it) for it in items if it.get("kind") == "disagreement"]
-    out["_walk"] = {"ids": [it["id"] for it in items if it.get("kind") != "disagreement"],
+    # Hard rules (adding or removing one) never get a box: an app that answers its own box
+    # could pass for the user (task 54; re-audit N-F26). They stay listed with where to decide.
+    held = [it for it in items if it.get("kind") == "rule"]
+    out["_walk"] = {"ids": [it["id"] for it in items if it.get("kind") not in ("disagreement", "rule")],
+                    "held": _lines(held, db_path=db_path) if held else [],
                     "cards": [c for c in cards if c], "project_id": project_id,
                     "may_decide": scopes is None or "flowstate:write" in scopes,
                     "links": links(db_path, local), "local": local}
@@ -464,13 +481,14 @@ def conflict_cards_line(db_path: Path, it: dict) -> Optional[str]:
 
 
 NOT_SHOWN = "No boxes were shown here; nothing was decided."
+HELD_NOTE = ("Hard rules get no box here: the user adds or removes one only on the review page, "
+             "their phone or with `flowstate approve <id>` in their terminal.")
 
 
 def how_to_decide(ways: dict, why: str, local: bool = True, show: str = "this list") -> str:
     """The walk's plain guidance (also given with every answer that queues something for the
     user, queue_guidance): why no boxes, where the user decides, and not to decide for them."""
-    where = [f"{'on the computer where FlowState runs' if k == 'review_page' else 'on their phone'}: {v}"
-             for k, v in ways.items()]
+    where = [_where(k, v) for k, v in ways.items()]
     if not local:   # no 127.0.0.1 link for an app on another computer
         where.append(ELSEWHERE)
     return (f"{why} Show the user {show}. They decide each item themselves: "
@@ -542,9 +560,10 @@ def queue_guidance(result, db_path: Optional[Path], client: str):
         for k in ("review_page", "phone"):
             if k in ways and k not in result:
                 result[k] = ways[k]
-        result["how_to_decide"] = how_to_decide(ways, why, local, "the link" if ways else
+        linked = any(_is_link(v) for v in ways.values())
+        result["how_to_decide"] = how_to_decide(ways, why, local, "the link" if linked else
                                                 "where to decide it")
-        result["dont_approve"] = DONT_APPROVE if ways else DONT_APPROVE_NO_LINK
+        result["dont_approve"] = DONT_APPROVE if linked else DONT_APPROVE_NO_LINK
     except Exception as e:  # noqa: BLE001 - guidance is extra; the queued item is saved
         log.warning("review guidance skipped: %s", e)
     return result
@@ -589,9 +608,10 @@ def phone_only(db_path: Optional[Path], item_id) -> Optional[dict]:
     out = {"error": "phone_only", "message": PHONE_ONLY.format(id=iid), "item_id": iid,
            "kind": item.get("kind"), "status": "waiting for the user", "next": nxt}
     out.update(ways)
+    linked = any(_is_link(v) for v in ways.values())
     out["how_to_decide"] = how_to_decide(ways, PHONE_ONLY_WHY, False,
-                                         "the link" if ways else "where to decide it")
-    out["dont_approve"] = DONT_APPROVE if ways else DONT_APPROVE_NO_LINK
+                                         "the link" if linked else "where to decide it")
+    out["dont_approve"] = DONT_APPROVE if linked else DONT_APPROVE_NO_LINK
     return out
 
 
@@ -710,6 +730,9 @@ async def walk(result: dict, session, client: str) -> dict:
         result.update(ways)
     if plan.get("cards"):
         result["conflict_cards"] = plan["cards"]
+    if plan.get("held"):
+        result["hard_rules"] = plan["held"]
+        result["hard_rules_note"] = HELD_NOTE
     result["note"] = _counts(done) + (
         " Then this app answered a box at once, faster than a person could, so FlowState "
         "stopped: that box was not shown and nothing more was decided." if unseen else "")

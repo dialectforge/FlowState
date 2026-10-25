@@ -3,7 +3,7 @@
     flowstate data-git status | init | remote URL [--unchecked] | sync [-m TEXT] | clone URL
     flowstate erase    TYPE:ID [TYPE:ID ...] | --deleted-before DAYS   [--dry-run] [--db FILE]
     flowstate tighten  [--dry-run] [--db FILE]
-    flowstate rules    list --project P | add --project P "TEXT"   (you confirm add)
+    flowstate rules    list --project P | add --project P "TEXT" | remove ID   (you confirm add, remove)
 
 data-git remote / sync / clone send FlowState data off this computer (or pull a repository
 into it), so they are never tools: an AI app gets `user_only` and is told to ask you
@@ -187,7 +187,9 @@ def cmd_rules(a) -> int:
     db = _db(a)
     S.init_backend(db)   # migrations first (024 labels who set a rule)
     S.backend.tracker = None
-    pid = _project_id(db, a.project)
+    if a.action == "remove":
+        return _rule_remove(db, a.text)
+    pid = _project_id(db, a.project) if a.project else None
     if pid is None:
         say("Name the project: --project P")
         return 2
@@ -208,6 +210,42 @@ def cmd_rules(a) -> int:
         say(f"Not added: {e.payload['message'] if hasattr(e, 'payload') else e}")
         return 1
     say(r.get("note") or "Added.")
+    return 0
+
+
+def _rule_remove(db: Path, rule_id) -> int:
+    """`flowstate rules remove ID`: the user's own terminal (their y), so at once (task 54).
+    An app's manage_rules remove only queues it for them."""
+    import sqlite3
+    from . import dbconn, rules
+    if not rule_id or not str(rule_id).strip().lstrip("Rr").isdigit():
+        say("Use: flowstate rules remove ID   (R<id> in the brief; `flowstate rules list --project P`)")
+        return 2
+    rid = int(str(rule_id).strip().lstrip("Rr"))
+    conn = dbconn.connect(str(db), timeout=5.0)
+    try:
+        row = conn.execute("SELECT r.rule, r.removed_at, p.name FROM project_rules r JOIN projects p "
+                           "ON p.id = r.project_id WHERE r.id = ?", (rid,)).fetchone()
+    except sqlite3.Error:
+        row = None
+    finally:
+        conn.close()
+    if row is None:
+        say(f"No hard rule R{rid}.")
+        return 1
+    if row[1]:
+        say(f"R{rid} was already removed.")
+        return 0
+    rc = _confirm(f'Remove the hard rule R{rid} "{row[0]}" from {row[2]}? AIs will no longer be '
+                  f'told to follow it (it stays on record as removed).', "removing a hard rule")
+    if rc:
+        return rc
+    try:
+        r = rules.remove_by_user(db, rid)
+    except rules.RuleError as e:
+        say(f"Not removed: {e.payload['message'] if hasattr(e, 'payload') else e}")
+        return 1
+    say(r.get("note") or "Removed.")
     return 0
 
 
@@ -232,10 +270,10 @@ def register(sub) -> None:
     p.add_argument("--db")
     p.set_defaults(fn=cmd_erase)
 
-    p = sub.add_parser("rules", help="a project's hard rules: list, or add one yourself")
-    p.add_argument("action", choices=["list", "add"])
-    p.add_argument("text", nargs="?", help="add: the rule")
-    p.add_argument("--project", required=True)
+    p = sub.add_parser("rules", help="a project's hard rules: list, or add or remove one yourself")
+    p.add_argument("action", choices=["list", "add", "remove"])
+    p.add_argument("text", nargs="?", help="add: the rule; remove: its id (R<id>)")
+    p.add_argument("--project", help="list / add: the project")
     p.add_argument("--db")
     p.set_defaults(fn=cmd_rules)
 
