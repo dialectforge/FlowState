@@ -57,7 +57,9 @@ POPUP_CLIENTS = ("claude-code", "cursor", "cursor-vscode", "visual studio code",
                  "visual studio code - insiders", "vscode")
 # Apps known to draw the in-chat cards (MCP Apps) in a frame the model can't read or click,
 # and to keep app-only tools from the model. `flowstate approvals cards add|remove NAME`
-# changes this per install. claude-ai is Claude Desktop and claude.ai.
+# changes this per install. claude-ai is Claude Desktop (the MCP client name it sends on
+# stdio). An app on a key, token or OAuth sign-in is matched by that sign-in's own name, and
+# only one the user added (card_allowed_credential, card_trust.py).
 CARD_CLIENTS = ("claude-ai",)
 # Never a popup for these, whatever they declare: claude.ai, Claude Desktop / mobile and the
 # Anthropic connector proxy don't show one (and the proxy drops the connection).
@@ -335,6 +337,26 @@ def card_allowed(db_path: Optional[Path], client_name: str) -> bool:
     the card list: the MCP Apps flag an app sends is its own claim, like a popup's."""
     name = clean_client_name(client_name)
     return bool(name) and name in card_clients(db_path)
+
+
+def card_allowed_credential(db_path: Optional[Path], credential: Optional[str]) -> bool:
+    """The same for an app that signed in over the network (card_trust.py): its key's,
+    token's or OAuth app's own name, and only a name the user added to the card list
+    themselves. The built-in default (claude-ai) is a stdio client name, and an OAuth app
+    picks its own name when it registers."""
+    name = clean_client_name(credential)
+    if not name or db_path is None:
+        return False
+    conn = _conn(db_path)
+    try:
+        if not available(conn):
+            return False
+        added = json.loads(_get(conn, "card_clients_add") or "[]")
+    except (ValueError, sqlite3.Error):
+        return False
+    finally:
+        conn.close()
+    return name in {str(n).lower() for n in added} and name in card_clients(db_path)
 
 
 def popup_allowed(db_path: Optional[Path], client_name: str, declared: bool) -> bool:

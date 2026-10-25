@@ -100,14 +100,16 @@ def for_card(db_path: Path, client: str):
     from . import deletes, safety
 
     def decide(item: dict, decision: str, reason: str) -> dict:
+        from . import card_trust
         from .conflict_cards import CARD_WORDS
         words = CARD_WORDS.format(button="Approve" if decision == "approve" else "Reject",
-                                  card="review", app=client)
+                                  card="review", app=card_trust.shown(client))
+        by = card_trust.label(client)   # "card (<app>)" like a record's own Keep / Remove
         try:
             if decision == "reject":
-                return reject(db_path, item, reason, words, client)
+                return reject(db_path, item, reason, words, by)
             done: dict = {}
-            return {**approve(db_path, item, {}, words, client, done, path="card"), **done}
+            return {**approve(db_path, item, {}, words, by, done, path="card"), **done}
         except (review.ReviewError, deletes.DeleteError, safety.SafetyError) as e:
             return e.payload
     return decide

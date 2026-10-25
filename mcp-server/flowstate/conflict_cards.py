@@ -59,10 +59,20 @@ def _now() -> str:
 
 
 def _pretty(ts: Optional[str]) -> str:
+    """"Oct 24, 2026": the day of a stored UTC time on this computer's clock, as the card
+    shows it in the reader's own time zone (the plain text said the UTC day, L15)."""
+    raw = str(ts or "")[:19].replace("T", " ")
     try:
-        y, m, d = (ts or "")[:10].split("-")
-        return f"{_MONTHS[int(m) - 1]} {int(d)}, {y}"
-    except (ValueError, IndexError):
+        dt = datetime.strptime(raw, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).astimezone()
+        y, m, d = dt.year, dt.month, dt.day
+    except ValueError:
+        try:
+            y, m, d = (int(x) for x in raw[:10].split("-"))
+        except ValueError:
+            return ""
+    try:
+        return f"{_MONTHS[m - 1]} {d}, {y}"
+    except IndexError:
         return ""
 
 
@@ -573,7 +583,7 @@ CARD_WORDS = "{button} tapped on the {card} card in {app} (its one-use card code
 
 def resolve_card(db_path: Path, args: dict, client: str) -> dict:
     from . import card_taps
-    return card_taps.again(_resolve(db_path, args, client), args, "conflict", client)
+    return card_taps.resolve(_resolve, db_path, args, client)
 
 
 def _resolve(db_path: Path, args: dict, client: str) -> dict:
@@ -611,14 +621,17 @@ def _resolve(db_path: Path, args: dict, client: str) -> dict:
     no = own_refusal(item, item_id) or tap_refusal(args, item_id, "conflict", client)
     if no:
         return no
+    from . import card_trust
+    by = card_trust.label(client)   # "card (<app>)", plus the sign-in over the network
 
     def apply(it, _edits):
-        return apply_keep(db_path, it, args["keep"], client, path="card")
+        return apply_keep(db_path, it, args["keep"], by, path="card")
 
     try:
         out = review.approve(db_path, item_id, CARD_WORDS.format(button="Keep " + args["keep"],
-                                                                 card="disagreement", app=client),
-                             client,
+                                                                 card="disagreement",
+                                                                 app=card_trust.shown(client)),
+                             by,
                              lambda it, payload: ("conflict_cards", None),
                              others={"disagreement": apply})
     except review.ReviewError as e:
@@ -1006,10 +1019,13 @@ def show(db_path: Path, args: dict, pid: Optional[int]) -> dict:
 
 
 def client_has_ui() -> bool:
-    """Does this connection get the cards? It says it shows MCP Apps, and its name is on the
-    user's card list (approvals.card_clients): the flag alone is the app's own claim."""
+    """Does this connection get the cards? It says it shows MCP Apps, and it is on the user's
+    card list (approvals.card_clients): the flag alone is the app's own claim. Which name is
+    checked depends on how it connected (card_trust.py): on stdio the client name it sends;
+    over the network its key's / token's / OAuth app's own name, never the name it sends;
+    the shared LAN token never. The tool list and every card call use this same check."""
     try:
-        from .server import _client_name, backend, server
+        from .server import backend, server
         caps = server.request_context.session.client_params.capabilities
     except Exception:  # noqa: BLE001 - no session, or a client that sent no extensions
         return False
@@ -1017,20 +1033,25 @@ def client_has_ui() -> bool:
     ext = extra.get("extensions") or {}
     if not (isinstance(ext, dict) and UI_EXT in ext):
         return False
-    from . import approvals
+    from . import card_trust
     try:
-        return approvals.card_allowed(backend.db_path, _client_name())
+        return card_trust.allowed(backend.db_path, card_trust.caller())
     except Exception:  # noqa: BLE001 - no list readable: no cards
         return False
 
 
 def tap_refusal(args: dict, item_id: int, card: str, client: str) -> Optional[dict]:
-    """None when the tap carries a live one-use code made for this card (card_taps.py), else
-    the refusal. The code also stops the model calling the hidden tool itself."""
-    from . import card_taps
-    if card_taps.redeem(args.get("tap"), item_id, card, client):
+    """None when the tap carries a live one-use code made for this card and this caller
+    (card_taps.py), else the refusal. The code also stops the model calling the hidden tool
+    itself. The code is only reserved here: card_taps.settle uses it up once the tap is saved,
+    and gives it back when the tap fails."""
+    from . import card_taps, card_trust
+    got = card_taps.redeem(args.get("tap"), item_id, card, card_trust.key(client))
+    if got is True:
         return None
-    return {"error": "not_a_card_tap", "message": card_taps.REFUSED}
+    if got == card_taps.BUSY:
+        return {"error": "tap_in_progress", "message": card_taps.IN_PROGRESS}
+    return {"error": "not_a_card_tap", "message": card_taps.REFUSED, "expired": True}
 
 
 def own_refusal(item: dict, item_id: int) -> Optional[dict]:
@@ -1076,6 +1097,7 @@ def taps_for(views: list, card: str, buttons) -> dict:
     """The tap codes for the views that have buttons (`buttons(view)`), on card hosts only."""
     if not client_has_ui():
         return {}
-    from . import card_taps
+    from . import card_taps, card_trust
     from .server import _client_name
-    return card_taps.for_cards([v["item_id"] for v in views if buttons(v)], card, _client_name())
+    return card_taps.for_cards([v["item_id"] for v in views if buttons(v)], card,
+                               card_trust.key(_client_name()))

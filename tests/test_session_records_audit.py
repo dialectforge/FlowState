@@ -148,7 +148,7 @@ def test_keep_all_records_the_real_path(backend):
     item, _pid, cid = _work(S, db)
     review_apply.for_card(db, "claude-ai")(review.get_item(db, item), "approve", "")
     d = _decisions(db, item)[f"change:{cid}"]
-    assert d["via"] == "card" and d["by"] == "claude-ai" and d["keep_all"]
+    assert d["via"] == "card" and d["by"] == "card (claude-ai)" and d["keep_all"]
     item2, _p, cid2 = _work(S, db)
     review_apply.approve(db, review.get_item(db, item2), {}, "keep all", "review-page", {})
     assert _decisions(db, item2)[f"change:{cid2}"]["via"] == "review page"

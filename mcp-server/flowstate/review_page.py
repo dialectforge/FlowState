@@ -925,7 +925,9 @@ class Page:
             "Apps that may show review cards in the chat",
             "These apps get the in-chat cards with Approve, Reject, Keep and Remove buttons. A "
             "tap counts as yours, so only add an app that draws the cards itself (claude-ai is "
-            "Claude Desktop and claude.ai). Other apps get the text and your review page link.",
+            "Claude Desktop on this computer). An app that connects over the network is matched "
+            "by the name of its key, token or OAuth sign-in, never by the name it sends: add "
+            "that name here. Other apps get the text and your review page link.",
             f"<ul>{items}</ul>" if cards else "<b>no apps</b>.", add,
             "Each tap carries a one-use code only the card gets; an app never decides what it "
             "queued itself on its own card."))

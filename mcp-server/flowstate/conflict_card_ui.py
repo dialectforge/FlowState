@@ -63,10 +63,20 @@ BRIDGE_TOP = r"""(function () {
       for (var k in m) { if (typeof m[k] === "string") { taps[k] = m[k]; } }
     }
   }
-  function tapFor(id) {           // a code works once: the answer to a tap brings the next one
-    var code = taps[String(id)] || "";
-    delete taps[String(id)];
-    return code;
+  function tapFor(id) {           // the code is used up only when a tap is saved: a refused
+    return taps[String(id)] || ""; // or failed tap leaves it for the next try
+  }
+  function tapDone(id, result) {  // saved: forget the used code unless the answer brought a new one
+    var m = result && result._meta && result._meta["flowstate/taps"];
+    if (!(m && typeof m[String(id)] === "string")) { delete taps[String(id)]; }
+  }
+  var EXPIRED = "This card has expired. Nothing was decided. Ask the AI to show it again, " +
+                "or decide on the review page or your phone.";
+  function refusal(result) {      // a refused tap's message; an expired card says so plainly
+    var text = result && result.content && result.content[0] && result.content[0].text, body = null;
+    try { body = JSON.parse(text); } catch (e) { body = null; }
+    if (body && body.error === "not_a_card_tap" && body.expired) { return {text: EXPIRED, expired: true}; }
+    return {text: (body && body.message) || text || "Not saved.", expired: false};
   }
   function localDate(utc) {        // "Oct 24, 2026" in the reader's own time zone
     var d = utc ? new Date(String(utc).replace(" ", "T") + "Z") : null;
@@ -223,11 +233,11 @@ CONFLICT_JS = r"""  // ---- drawing
     var buttons = box.querySelectorAll("button");
     for (var i = 0; i < buttons.length; i++) { buttons[i].disabled = !on; }
   }
-  function showError(box, text) {
+  function showError(box, text, expired) {   // an expired card keeps its buttons off
     var old = box.querySelector(".err");
     if (old) { old.parentNode.removeChild(old); }
     box.appendChild(el("p", "err", text || "Not saved."));
-    setButtons(box, true);
+    setButtons(box, !expired);
     reportSize();
   }
   function choose(index, keep, box) {
@@ -241,11 +251,11 @@ CONFLICT_JS = r"""  // ---- drawing
       takeTaps(result);
       if (error) { showError(box, error.message || "Not saved."); return; }
       if (!result || result.isError) {
-        var text = result && result.content && result.content[0] && result.content[0].text;
-        try { text = JSON.parse(text).message || text; } catch (e) { /* plain text */ }
-        showError(box, text || "Not saved.");
+        var no = refusal(result);
+        showError(box, no.text, no.expired);
         return;
       }
+      tapDone(view.item_id, result);
       var sc = result.structuredContent || {};
       var fresh = (sc.cards && sc.cards[0]) || (sc.sides ? sc : null);
       if (fresh) {

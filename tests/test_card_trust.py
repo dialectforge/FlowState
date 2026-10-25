@@ -116,7 +116,7 @@ def test_the_code_works_once_for_its_own_app_and_the_tap_is_logged_honestly(back
     _r, body = call(S, "resolve_review_card", tap)
     assert body["resolved"] == item and status(db, item) == "approved"
     assert _q(db, "SELECT path, client FROM approval_log WHERE item_id = ?", item) == \
-        [("card", "claude-ai")]
+        [("card", "card (claude-ai)")]   # the same label as a record's own Keep (task 55)
     [(words,)] = _q(db, "SELECT user_request FROM review_items WHERE id = ?", item)
     assert words == ("Approve tapped on the review card in claude-ai (its one-use card code "
                      "checked).") and "the user" not in words.lower()
@@ -192,13 +192,17 @@ def test_card_remove_is_refused_for_callers_that_may_not_delete(backend, claims_
     S, db = backend, backend.backend.db_path
     item, _pid, cid = _work(S, db)
     monkeypatch.setattr(server, "_caller", lambda: ("oauth-app", ["flowstate:read", "flowstate:write"]))
-    r, body = _card_record(S, item, "remove_record", f"change:{cid}")
+    r, _ = call(S, "show_review_card", {"project": "Alpha", "item_id": item})
+    code = codes(r)[str(item)]
+    _r, body = call(S, "resolve_review_card", {"item_id": item, "decision": "remove_record",
+                                               "record": f"change:{cid}", "project": "Alpha",
+                                               "tap": code})
     assert body["error"] == "not_allowed_remotely", body
     assert _q(db, "SELECT id FROM changes WHERE id = ?", cid) == [(cid,)]
-    assert str(item) in codes(r)                           # a fresh code: Keep still works
+    # the refused tap gave its code back (task 55, N-F42): Keep still works with it
     _r, body = call(S, "resolve_review_card", {"item_id": item, "decision": "keep_record",
                                                "record": f"change:{cid}", "project": "Alpha",
-                                               "tap": codes(r)[str(item)]})
+                                               "tap": code})
     assert body["now"] == "kept"
 
 

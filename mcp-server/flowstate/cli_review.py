@@ -305,7 +305,9 @@ def cmd_approvals(a) -> int:
     if what in ("popup", "cards"):
         popup = what == "popup"
         if arg not in ("add", "remove") or not a.name:
-            say(f"Use: flowstate approvals {what} add|remove NAME (the app's MCP client name)")
+            say(f"Use: flowstate approvals {what} add|remove NAME (the app's MCP client name"
+                + ("; an app on a key, token or OAuth sign-in: that sign-in's name)" if what == "cards"
+                   else ")"))
             return 2
         name = approvals.clean_client_name(a.name)
         if arg == "add":   # its answers then count as yours: your own y, as for approvals off
@@ -399,7 +401,8 @@ def register(sub) -> None:
     p = sub.add_parser("approvals", help="user-only approvals: status, on, off (off asks you to confirm)")
     p.add_argument("what", nargs="?", default="status", choices=["status", "on", "off", "phone", "popup", "cards"])
     p.add_argument("arg", nargs="?", help="phone: on|off; popup / cards: add|remove")
-    p.add_argument("name", nargs="?", help="popup / cards: the app's MCP client name")
+    p.add_argument("name", nargs="?", help="popup / cards: the app's MCP client name (cards, "
+                   "for an app on a key, token or OAuth sign-in: that sign-in's own name)")
     p.add_argument("--project", help="one project's own setting (name or id)")
     p.add_argument("--clear", action="store_true", help="drop the project's own setting")
     p.add_argument("--db")

@@ -225,7 +225,7 @@ def test_chat_card_and_text_fallback(backend):
     text = review_cards.plain(v)
     assert f'change #{cid} "{CHANGE}" (Auth): The callback dropped' in text
     assert f'problem #{pid} "{PROBLEM}"' in text and f"Solution: {SOLUTION}" in text
-    assert "UTC, by claude-code" in text
+    assert "(this computer's local time), by claude-code" in text   # L15: no UTC times
     from flowstate.review_card_ui import CARD_HTML
     assert "contents" in CARD_HTML and "localTime" in CARD_HTML
     old = review.get_item(db, _old_item(db))

@@ -28,7 +28,7 @@ from . import activity
 from . import approvals
 from . import claims
 from . import cleanup
-from . import conflicts, conflict_cards
+from . import card_trust, conflicts, conflict_cards
 from . import connections
 from . import deletes
 from . import history
@@ -293,8 +293,8 @@ async def _call_internal(name: str, arguments: dict, shown: str = "") -> types.C
         except Exception as e:  # noqa: BLE001
             out = _error("tool_failed", f"{type(e).__name__}: {e}")
             return out
-        if name not in CARD_TOOLS:   # stored text is data, not instructions (audit D6)
-            result = stored.defuse_all(stored.mark(name, result))
+        result = card_trust.defused(result) if name in CARD_TOOLS else \
+            stored.defuse_all(stored.mark(name, result))   # stored text is data (audit D6)
         result = _safe_call(approvals.scrub_handle, result) or result   # 2.4.3 labels (D19)
         out = _ok(result)
         return out
@@ -395,6 +395,7 @@ def handle_call(name: str, args: dict, client: str = "unknown", meta: Optional[d
 
 
 CARD_TOOLS = ("show_conflict_card", "resolve_conflict_card", "show_review_card", "resolve_review_card")
+
 
 
 def _one_commit(name: str, args: dict) -> bool:

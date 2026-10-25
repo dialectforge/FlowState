@@ -366,6 +366,8 @@ HOUSEKEEPING = {
     "history/undo": "undo",
     "review_approve": "review decision",
     "review_reject": "review decision",
+    "resolve_review_card": "review decision",     # a tap on a review card (re-audit N-F15)
+    "resolve_conflict_card": "review decision",   # a tap on a disagreement card
     "handoff/pickup": "handoff picked up",
     "session/start": None,
     "todo/claim": "todo claim",

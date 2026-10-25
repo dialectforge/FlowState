@@ -23,7 +23,8 @@ buttons). The safety rules are the disagreement card's:
     is logged in approval_log with path "card", whatever the kind;
   - a session summary's records each have Keep / Remove / Bring back (session_records.py):
     the same tool with decision keep_record / remove_record / restore_record and `record`,
-    after the same checks, recorded as the user on the card ("card (<app>)").
+    after the same checks, recorded as a tap on the card ("card (<app>)", card_trust.label),
+    as Approve / Reject / Keep all are.
 
 Card taps are not cryptographically proven to be a person, as with the disagreement card.
 """
@@ -172,7 +173,8 @@ def view(db_path: Path, it: dict, project: str) -> dict:
         c = session_contents.for_item(db_path, {**it, "project": project})
         if c is not None:
             out["contents"] = session_contents.public(c)
-            out["contents_text"] = [x for x in [session_contents.when_line(c)] if x] \
+            from .who import local_time   # the plain text in this computer's time, as the card (L15)
+            out["contents_text"] = [x for x in [session_contents.when_line(c, local_time)] if x] \
                 + session_contents.lines(c)
             if c["entries"]:   # each record has its own Keep / Remove; Keep keeps all
                 out.update(approve_label=review.KEEP_ALL, does=review.KEEP_ALL_HOW)
@@ -359,7 +361,7 @@ def _has_buttons(v: dict) -> bool:
 def resolve_card(db_path: Path, args: dict, pid: Optional[int], client: str,
                  decide: Callable[[dict, str, str], dict]) -> dict:
     from . import card_taps
-    return card_taps.again(_resolve(db_path, args, pid, client, decide), args, "review", client)
+    return card_taps.resolve(_resolve, db_path, args, pid, client, decide)
 
 
 def _resolve(db_path: Path, args: dict, pid: Optional[int], client: str,
@@ -418,7 +420,8 @@ def _resolve(db_path: Path, args: dict, pid: Optional[int], client: str,
     out = decide(it, decision, why or DEFAULT_REASON)
     if isinstance(out, dict) and "error" in out:
         return out
-    approvals.log_decision(db_path, it, "card", client,
+    from . import card_trust
+    approvals.log_decision(db_path, it, "card", card_trust.label(client),
                            "approved" if decision == "approve" else "rejected")
     fresh = waiting._item_view(db_path, item_id) or it
     v = view(db_path, fresh, fresh["project"])
@@ -437,9 +440,10 @@ def _record_tap(db_path: Path, it: dict, record: str, decision: str, client: str
     """A tap on one record's Keep / Remove / Bring back (session_records.py), after the same
     checks as Approve / Reject. Remove and Bring back follow the delete rules: not for callers
     that may not delete (remote tokens, LAN keys, OAuth apps, the relay), and with approvals on
-    only on the review page or the phone. Recorded as a tap on the card ("card (<app>)"),
-    path card."""
-    from . import session_records
+    only on the review page or the phone. Recorded as a tap on the card (card_trust.label:
+    "card (<app>)", plus the sign-in over the network), path card."""
+    from . import card_trust, session_records
+    by = card_trust.label(client)   # read before the identity is cleared below
     if decision != "keep_record":
         no = record_delete_refusal(db_path, it)
         if no:
@@ -447,7 +451,7 @@ def _record_tap(db_path: Path, it: dict, record: str, decision: str, client: str
     tok = identity.set_current(None)
     try:
         res = session_records.decide(db_path, it["id"], record, decision.split("_")[0],
-                                     f"card ({client})"[:80], path="card")
+                                     by, path="card")
     except session_records.RecordError as e:
         return e.payload
     finally:

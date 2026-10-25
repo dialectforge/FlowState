@@ -168,11 +168,11 @@ REVIEW_JS = r"""  // ---- drawing
     var controls = box.querySelectorAll("button, input");
     for (var i = 0; i < controls.length; i++) { controls[i].disabled = !on; }
   }
-  function showError(box, text) {
+  function showError(box, text, expired) {   // an expired card keeps its buttons off
     var old = box.querySelector(".err");
     if (old) { old.parentNode.removeChild(old); }
     box.appendChild(el("p", "err", text || "Not saved."));
-    setButtons(box, true);
+    setButtons(box, !expired);
     reportSize();
   }
   function chooseRecord(index, record, action, item) {   // Keep / Remove / Bring back: one record
@@ -188,11 +188,11 @@ REVIEW_JS = r"""  // ---- drawing
       var sc = (result && result.structuredContent) || {};
       var fresh = sc.cards && sc.cards[0];
       if (!result || result.isError || !fresh) {
-        var text = result && result.content && result.content[0] && result.content[0].text;
-        try { text = JSON.parse(text).message || text; } catch (e) { /* plain text */ }
-        showError(box, text || "Not saved.");
+        var no = refusal(result);
+        showError(box, no.text, no.expired);
         return;
       }
+      tapDone(view.item_id, result);
       cards[index] = fresh;
       var drawn = drawCard(fresh, index);
       var said = "";
@@ -214,14 +214,14 @@ REVIEW_JS = r"""  // ---- drawing
       takeTaps(result);
       if (error) { showError(box, error.message || "Not saved."); return; }
       if (!result || result.isError) {
-        var text = result && result.content && result.content[0] && result.content[0].text;
-        try { text = JSON.parse(text).message || text; } catch (e) { /* plain text */ }
-        showError(box, text || "Not saved.");
+        var no = refusal(result);
+        showError(box, no.text, no.expired);
         return;
       }
       var sc = result.structuredContent || {};
       var fresh = sc.cards && sc.cards[0];
       if (fresh) {
+        tapDone(view.item_id, result);
         cards[index] = fresh;
         box.parentNode.replaceChild(drawCard(fresh, index), box);
       } else {                                   // a refusal with more fields (e.g. phone only)
