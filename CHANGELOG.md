@@ -5,7 +5,7 @@
 - No new dependencies. One small migration (024: an empty column on hard rules saying how the
   user set each one; existing data is not changed). `flowstate update` from 2.4.0 to 2.4.3
   needs no new `.venv`. The off-site encryption uses the `cryptography` package that already
-  comes with `mcp`.
+  comes with `mcp`; FlowState now lists it as its `offsite` extra (and in requirements.txt).
 - **A name for this FlowState.** Each install now has a display name, "Main FlowState" until
   you change it, so people see a name instead of the relay handle (the random letters in your
   relay address). Change it with `flowstate name "Office laptop"` (no word shows it,
@@ -374,6 +374,135 @@
   export still sees no edits.
 - **Stronger passphrase hashing.** New and changed owner passphrases use scrypt N=2^17 (was
   2^14); an older hash keeps working and is upgraded at the next successful sign-in.
+
+### Fixes after the re-audit (audit of 2.4.4, part 3)
+
+Review cards
+- An app that connects over the network (a LAN key, a remote token, or an OAuth app through your
+  tunnel or the relay) now gets the in-chat cards only if you added that key's, token's or OAuth
+  app's own name to the card list (`flowstate approvals cards add "<name>"`). The name the app
+  gives itself no longer counts, so an app can't get the cards by calling itself "claude-ai". The
+  built-in `claude-ai` entry covers Claude Desktop on this computer only, and the shared LAN
+  token never gets cards.
+- A card decision is recorded the same way everywhere: "card (claude-ai)", plus "signed in as
+  <key>" for an app that connects over the network.
+- Card answers get the same protection as every other answer, in the text and in the data the
+  card itself shows: stored text can't show live images or links to the AI, and it is marked as
+  data, not instructions.
+- A chat where you only tap cards no longer leaves a new session summary to review.
+- If a card tap fails or times out, the card's buttons keep working. A card left open too long
+  says it has expired and asks you to show it again. An AI showing cards over and over can no
+  longer stop other cards' buttons from working.
+- The cards' plain-text version shows this computer's local date and time instead of UTC.
+
+Erase and session summaries
+- Erasing a record no longer changes other review items. Before, it replaced dates, status words
+  and other short values in unrelated items with "[erased]" and joined their lines. Now it only
+  removes the erased record's own text, and leaves the rest of each item exactly as it was.
+- `flowstate erase` also erases records an AI took back with undo, and removes a deleted
+  decision's text from the session log. Before, it said "no delete of it is on record" for
+  undone records, and decisions stayed in the log.
+- Removing one record of a session summary is saved together with the decision: if saving the
+  decision fails, nothing is removed. A Remove that takes a long time (a big safety copy) keeps
+  the summary on hold until it finishes.
+- Handoff notes and links a session left can be removed from its summary. Before, they showed as
+  "already there".
+- Remove is no longer offered when FlowState can't be sure a record is only that session's work:
+  another app added to it, the check failed, or the session's write log is older than 90 days.
+  Those records can still be kept.
+- A session summary's short line counts only records still there. Before, it said "saved 2
+  learnings" when one had been undone.
+
+Off-site copy, backups and file permissions
+- Backups and new databases work again on USB sticks, exFAT drives and network shares that don't
+  support file permissions (broken since 2.4.3). FlowState says once that files there may be
+  readable by other users of this computer.
+- If the Keychain (or Credential Manager) can't be read, for example because it's locked or you
+  denied the prompt, the off-site push stops with a message. Before, FlowState made a new key
+  over your old one, and the old key is the only way to read your earlier copies. An existing
+  key is never overwritten now.
+- The "save your recovery code" reminder is tied to the key itself. If the key ever changes, the
+  next push says so loudly and the reminder comes back.
+- The off-site staging folder (which could hold an unencrypted copy left by 2.4.3) is deleted on
+  every push attempt, even a failed one, and by `flowstate offsite setup` and `offsite disable`.
+  On Windows its read-only files are deleted too, and FlowState checks the folder is really gone.
+- The small unencrypted note pushed next to the encrypted copy holds only its date, size and
+  checksum. Before, it also listed how many records each table had.
+- Encrypted copies record, in a way that can't be changed, when they were made, and `flowstate
+  restore` shows that time. A copy that has been cut short is refused. A push no longer
+  overwrites a newer copy on GitHub (from another computer, or after a wrong clock) unless you
+  add `--replace-newer`. A damaged off-site key on this computer gives a plain message instead of
+  an error dump.
+- After upgrading from 2.4.3, FlowState makes its database, backups and folders owner-only by
+  itself when it starts and at each backup (macOS and Linux). You no longer need to run
+  `flowstate tighten`, which now also covers restored copies and a backups folder you chose
+  yourself.
+- `flowstate remote add-client --to-file` refuses a symbolic link. Before, it could write the
+  token, readable by everyone, wherever the link pointed.
+- Windows: FlowState's owner-only access lists name your account by its ID, and setup keeps an
+  app config file's own access list when it rewrites the file.
+- FlowState now lists `cryptography`, which off-site encryption needs, as its `offsite` extra
+  and in requirements.txt (it still comes with `mcp`, so updating needs no new `.venv`).
+
+Data-git and stored text
+- Data-git: if you sync from several computers, update every one of them to 2.4.4 before
+  syncing. Then run `flowstate data-git migrate` once on each computer. It takes the database out
+  of git without touching the files on disk, after a safety copy. Until then, `flowstate data-git
+  sync` refuses a repository that still holds the database, because removing it would make git
+  delete the database on a computer still running 2.4.3.
+- Data-git sync checks what the remote would bring in before merging it. It refuses a database,
+  settings or keys, links, and files that would replace files git doesn't track on this
+  computer. It makes a safety copy of the database before it brings in other computers' changes.
+- Data-git never writes through a link someone pushed. The export folder and files are readable
+  by your account only.
+- `flowstate data-git init` keeps an existing README.md and .gitignore. File attachments can't be
+  written outside FlowState's projects folder, whatever the project's name.
+- More HTML and link tricks in stored text are made harmless in answers and in the markdown
+  export, including the export's header and Links section. Text that imitates the brief's
+  "records below" markers can no longer fake the end of them. History answers say records are
+  data. An edited markdown import keeps your original text where you didn't change it.
+- Disagreements an AI flags are marked "unsettled" in the brief, like FlowState's own possible
+  conflicts. The brief's "Two AIs disagree" line names both records and sits inside the records
+  section.
+
+Remote access, names and pausing
+- Wrong passphrases sent all at once no longer get past the 5-try limit: FlowState counts each
+  try before checking it and checks one at a time, so a burst can't use up the computer's memory.
+- Key, token and OAuth app names share one list, and names that only look different (capital
+  letters, invisible characters, Cyrillic or Greek lookalike letters, full-width letters) count
+  as the same name. Names FlowState uses itself, like "unknown", "phone" or "user", can't be
+  taken. Existing duplicates keep working.
+- An app can no longer pretend to be signed in through another key by writing "(via …)" with
+  lookalike brackets or letters, and can't call itself "user" or "phone".
+- If a remote token is sent over the plain-HTTP network listener from another computer,
+  FlowState still refuses it and now warns you, in `flowstate remote clients` and in the brief,
+  that it could have been read; revoke it, or keep it with `flowstate remote keep-token --client
+  <id>`.
+- If two apps share one key and you resume one of them, the key stays paused while the other is
+  still paused, so that app can't get back in by changing its name.
+
+Review pages, settings and rules
+- The review link page can no longer resume a paused app (use `flowstate apps resume` or the page
+  `flowstate review-page` opens). With approvals on, it can't turn review off in any way: not by
+  clearing a project's own setting, and not install-wide when only one project has approvals on.
+  AI apps follow the same rule.
+- A cookie left by an older review page no longer locks you out of Settings. Other programs
+  visiting the link page can no longer sign you out of a tab you used in the last 30 minutes.
+- A damaged settings file keeps the daily update check off instead of turning it on. `flowstate
+  remote lan-tokens on|off` says plainly when the settings file can't be read, and its changes
+  are logged like other settings.
+- A FlowState command that crashed while changing settings no longer blocks the next one for 30
+  seconds.
+- `flowstate rules list` says who set each rule. New `flowstate rules confirm ID` makes a rule an
+  app added in an older version yours. Rules waiting for your OK no longer use up the project's
+  rule space; at most 20 can wait per project, 10 from one app.
+- Searching "D12" shows that decision in full, and says "No decision D12" when there isn't one.
+- `flowstate review-page --no-browser` shows its working one-time link on your terminal.
+- A hand-typed "Main FlowState" (any capitalization) counts as the default name and is never sent
+  to the relay.
+- `flowstate update --rollback` to a version before 2.4.4 reminds you to set your remote-access
+  passphrase again (`flowstate remote passphrase`): 2.4.4 stores it in a stronger form older
+  versions can't check.
 
 ## 2.4.3 - 2026-10-23
 

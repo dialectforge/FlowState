@@ -17,7 +17,7 @@ named here call the writers).
 | Approvals on / off, install or `--project` | `flowstate approvals on\|off [--project P] [--clear]` (off asks for `y`) | Approvals row: Turn on / Turn off / Remove the project's own setting; off (or removing a project's own setting while it is on) asks on a confirm page |
 | Phone approval links | `flowstate approvals phone on\|off` | Phone approval links row (relay only) |
 | Popup apps | `flowstate approvals popup add\|remove NAME` (add asks for `y`) | Popup row: Add / Remove; claude.ai and Anthropic names never get a popup whatever the list says |
-| Review card apps | `flowstate approvals cards add\|remove NAME` (add asks for `y`) | Review card row: Add / Remove; starts with `claude-ai` (Claude Desktop and claude.ai) |
+| Review card apps | `flowstate approvals cards add\|remove NAME` (add asks for `y`) | Review card row: Add / Remove; starts with `claude-ai` (Claude Desktop on this computer); a network app counts by its key's, token's or OAuth app's own name |
 | Chat approvals through the relay | `flowstate relay chat-approvals on\|off` (on asks for `y`) | Chat approvals row (relay only); on asks on a confirm page |
 
 - **The confirm page** replaces the terminal's `y`. The first POST answers with a plain-words
@@ -162,19 +162,26 @@ chat by default. What the code enforces (`waiting.phone_only`, called first in
   pair fits together, is audited as `automatic`.
 - **What makes a card tap the user's** (both cards, since the 2.4.4 audit):
   - only apps on the review card list (table above) get the cards and the app-only tools; the
-    MCP Apps flag an app sends is its own claim, so the list is the user's say;
+    MCP Apps flag an app sends is its own claim, so the list is the user's say. On stdio the
+    list is checked against the client name the app sends; an app that signs in over the
+    network (LAN key, remote token on the LAN, tunnel or relay, OAuth app) is checked by its
+    key's, token's or OAuth app's own name, never the name it sends, and the shared LAN token
+    or an unsigned HTTP caller never gets cards (`card_trust.py`, since task 55). Codes are
+    bound to that sign-in; showing a card again replaces only that card's older codes;
   - every card with buttons gets a one-use code (`card_taps.py`) in the tool result's `_meta`
     (`flowstate/taps`), which MCP Apps hosts pass to the card's page and keep out of the
     model's context. It is never in the text or the card data. The card sends it back with the
     tap; a tap without it, with another card's or app's code, a used one or one older than 15
     minutes is refused (`not_a_card_tap`), so a model that calls the hidden tool by name
-    decides nothing. A tap refused after its code was checked gets a fresh code;
+    decides nothing. A tap only reserves its code: it is used up when the decision is saved and
+    given back when the tap fails or is refused (a second tap meanwhile gets `tap_in_progress`);
   - the app that queued an item doesn't decide it on its own card (`own_item`, and no buttons),
     as in the chat. Session summaries are queued by FlowState itself and keep their buttons;
   - the decision's request reads "Approve tapped on the review card in <app> (its one-use card
-    code checked)": FlowState records what it checked, never "the user".
-  - Honest limit: a program that pretends to be a listed card host (it connects with that name
-    and reads `_meta` itself) gets the codes too, as a program could pretend to be a popup app.
+    code checked)", and every card decision is recorded as "card (<app>)", plus "signed in as
+    <key>" for a network sign-in: FlowState records what it checked, never "the user".
+  - Honest limit: a local stdio program that pretends to be a listed card host (it connects with
+    that name and reads `_meta` itself) gets the codes too, as a program could pretend to be a popup app.
 - Review cards (2.4.4) are the same design for every other kind in the queue (session
   summaries, suggestions, imports, clean-ups, markdown edits, possible conflicts). The AI calls
   `show_review_card` (read-only, listed only to MCP Apps hosts; its definition names

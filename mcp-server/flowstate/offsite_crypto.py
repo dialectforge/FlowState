@@ -1,8 +1,8 @@
 """Encryption for the off-site GitHub copy (2.4.4, data security audit D8).
 
 The nightly copy is encrypted on this computer before it is pushed; GitHub only ever holds the
-encrypted file. AES-256-GCM from the `cryptography` package (a declared FlowState dependency; the
-relay uses it too). Without it the push is
+encrypted file. AES-256-GCM from the `cryptography` package (it comes with `mcp`; FlowState lists it as its
+`offsite` extra and checks for it in tests; the relay uses it too). Without it the push is
 refused: an unencrypted copy is never pushed.
 
 The key: 32 random bytes made on this computer the first time, kept in the OS credential store

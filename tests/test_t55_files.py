@@ -537,6 +537,14 @@ def test_nf30_setup_keeps_a_config_files_own_access_list(monkeypatch, tmp_path):
 
 # ================================================================ N-D5 the dependency
 def test_nd5_cryptography_is_declared():
+    """Listed as the `offsite` extra, not in `dependencies`: a changed dependency list makes
+    `flowstate update` build a new .venv and refuse on Windows. `mcp` must still bring it."""
+    import importlib.metadata
     import tomllib
-    deps = tomllib.loads((REPO / "mcp-server" / "pyproject.toml").read_text())["project"]["dependencies"]
-    assert any(d.replace(" ", "").startswith("cryptography>=") for d in deps)
+    proj = tomllib.loads((REPO / "mcp-server" / "pyproject.toml").read_text())["project"]
+    assert any(d.replace(" ", "").startswith("cryptography>=") for d in proj["optional-dependencies"]["offsite"])
+    assert not any(d.startswith("cryptography") for d in proj["dependencies"])
+    from flowstate.selfupdate import _deps
+    old = (REPO / "mcp-server" / "pyproject.toml").read_text()
+    assert _deps(old) == sorted(["mcp>=1.26,<2", "pydantic>=2.0.0"])   # same list as 2.4.3: no new .venv
+    assert importlib.metadata.version("cryptography")   # installed through mcp

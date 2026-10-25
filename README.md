@@ -46,7 +46,7 @@ dismiss the card. The one you don't keep is marked superseded, not deleted. An a
 with `log_work` (`conflicts_with`, `topic`, `evidence`) or `manage_links(action="flag_conflict")`.
 The review page shows the card (side by side on a wide screen), and the tool reply includes the
 same card as plain text plus the review link. Chat apps that support MCP Apps can show the card
-in the chat (apps on your card list: Claude Desktop and claude.ai to start with); each button
+in the chat (apps on your card list: Claude Desktop to start with; claude.ai or another app that signs in through your tunnel or the relay once you add its sign-in's name with `flowstate approvals cards add`); each button
 press carries a one-use code only the card gets, so the AI can't press them itself. Everything else
 that waits for your OK (session summaries, suggestions, imports, clean-up ideas) gets its own
 in-chat review card in those apps too (see "Where to see what's waiting for you").
@@ -282,7 +282,9 @@ prompt `flowstate-start`.
 - **Local review page**: a small page in your browser, on this computer only: review queue,
   review mode, pause apps, "Who did what". Click the link in your AI's answer (see "Where to see
   what's waiting for you"), double-click the "FlowState review" shortcut setup puts on your
-  desktop, or run `flowstate review-page` (one-time link).
+  desktop, or run `flowstate review-page` (one-time link). The page an AI's link opens can pause
+  an app but never resume one (`flowstate apps resume`, or the page `flowstate review-page`
+  opens).
 - **Per-app activity log and pause**: see which app did what (`flowstate apps list` /
   `apps activity`) and pause one app's writes (`apps pause --app NAME`). A paused app can still read.
 - **Markdown export and import**: `export-md` writes a readable copy of a project; `import-md`
@@ -301,15 +303,16 @@ prompt `flowstate-start`.
 - **Nightly backups**: integrity-checked; the newest per day for 14 days and per week for
   8 weeks are kept. Restore always goes to a new file unless you add `--force` (and then the
   current file is backed up first).
-- **Safety copies**: right before a delete, an approved clean-up or markdown edit, and before a
-  restore or a migration, FlowState takes a verified copy that is kept at least 7 days whatever
+- **Safety copies**: right before a delete, an approved clean-up or markdown edit, before a
+  restore or a migration, and before data-git brings in another computer's changes or runs
+  `data-git migrate`, FlowState takes a verified copy that is kept at least 7 days whatever
   the limits above say; if it can't, the change isn't made. This doesn't depend on nightly
   backups, and FlowState never adds a daily copy you didn't ask for.
 - **Health check**: on start, a quick check of the database. Only a problem shows, first in the
   brief, with the newest good backup. FlowState never repairs anything by itself.
 - **Optional private GitHub off-site copy**: opt-in. FlowState checks the repo is private
-  before every push and refuses otherwise. It pushes only the backup file and a manifest, to its
-  own branch, using your existing `gh` or git login. It never stores a GitHub token.
+  before every push and refuses otherwise. It pushes only the encrypted backup file and a small
+  unencrypted note with its date, size and checksum, to its own branch, using your existing `gh` or git login. It never stores a GitHub token.
 
 **Connecting**
 - **stdio and HTTP transports**: stdio for apps on the same computer; streamable HTTP with a
@@ -504,7 +507,7 @@ the venv active). Add `-h` to any command for its options.
 | `review [--project NAME]` | List what waits in the review queue |
 | `review records ID` / `review record ID TYPE:ID keep\|remove\|restore` | A session summary's records with their state / keep, remove (safety copy, undoable) or bring back one; asks for your `y` here |
 | `approve ID [ID ...]` / `reject ID [--reason TEXT]` | Decide review items; asks you to type `y` in this terminal (piped input doesn't count) |
-| `approvals [on\|off] [--project P]` | Opt-in approvals (off by default). `on`: an AI's deletes and turning review off wait for you. Turning them `off` asks for `y` in this terminal. Also `approvals phone on\|off`, `approvals popup add\|remove NAME` and `approvals cards add\|remove NAME` (adding an app asks for `y`) |
+| `approvals [on\|off] [--project P]` | Opt-in approvals (off by default). `on`: an AI's deletes and turning review off wait for you. Turning them `off` asks for `y` in this terminal. Also `approvals phone on\|off`, `approvals popup add\|remove NAME` and `approvals cards add\|remove NAME` (adding an app asks for `y`; for an app that signs in over the network, NAME is its key's, token's or OAuth app's own name) |
 | `relay chat-approvals [on\|off]` | May AIs connected through the relay approve and reject review items in the chat? Off by default (phone only). Turning it `on` asks for `y` in this terminal; with no argument it shows the setting |
 | `review-page` | Review page in your browser (127.0.0.1 only): approve / edit / reject, "Who did what" (with undo), and a Settings section for every setting (see "Where to change settings"). You can also just click the link in your AI's answer (see "Where to see what's waiting for you") |
 | `keys add --name N [--read-only] [--workspace W]` / `keys list` / `keys revoke --id ID` (or `--name N`) | Per-app keys for the local/LAN HTTP server; the key is shown once, only a hash is kept; a revoked key stops at once |
@@ -512,12 +515,12 @@ the venv active). Add `-h` to any command for its options.
 | `apps list` / `apps activity` / `apps pause --app NAME` / `apps resume --app NAME` | Which app did what; stop one app from writing |
 | `backup [--offsite]` / `restore <file> [--to <new file>]` | Back up now / restore into a new, verified file |
 | `schedule-backups [--time HH:MM] [--offsite]` / `schedule-backups --remove` | Nightly backup on / off |
-| `offsite setup --repo OWNER/NAME` / `offsite status` / `offsite push --dry-run` / `offsite disable` / `offsite key` | Private GitHub off-site copy, encrypted on this computer first. `key` shows its recovery code in your terminal (save it in a password manager) |
+| `offsite setup --repo OWNER/NAME` / `offsite status` / `offsite push --dry-run` / `offsite disable` / `offsite key` | Private GitHub off-site copy, encrypted on this computer first. `key` shows its recovery code in your terminal (save it in a password manager). A push never overwrites a newer copy on GitHub unless you add `--replace-newer` |
 | `erase TYPE:ID [...]` / `erase --deleted-before DAYS` (`--dry-run`) | Remove deleted records for good: their copies in the edit history, the search indexes, the session log and review items, plus attached files; then the database is compacted. Asks for your `y`. See "Erasing for good" |
-| `rules list --project P` / `rules add --project P "TEXT"` / `rules remove ID` | A project's hard rules; `add` sets one and `remove` removes one yourself at once (each asks for your `y`). A rule an AI asks to add or remove waits in the review queue for you |
-| `data-git status` / `init` / `remote URL [--unchecked]` / `sync [-m TEXT]` / `clone URL` | Git for FlowState's data folder: only README, `projects/` (attachments) and `export/` (a markdown export `sync` writes) are committed, never the database, backups, keys, tokens or settings. `remote`, `sync` and `clone` ask for your `y`; a GitHub remote must be private (checked before every push); any other remote needs `--unchecked` |
+| `rules list --project P` / `rules add --project P "TEXT"` / `rules remove ID` / `rules confirm ID` | A project's hard rules; `add` sets one and `remove` removes one yourself at once, `confirm` makes a rule an app added in an older version yours (each asks for your `y`). A rule an AI asks to add or remove waits in the review queue for you |
+| `data-git status` / `init` / `remote URL [--unchecked]` / `sync [-m TEXT]` / `clone URL` / `migrate` | Git for FlowState's data folder: only README, `projects/` (attachments) and `export/` (a markdown export `sync` writes) are committed, never the database, backups, keys, tokens or settings. `remote`, `sync`, `clone` and `migrate` ask for your `y`; a GitHub remote must be private (checked before every push); any other remote needs `--unchecked`. A repository made by 2.4.3 or older: see "Data-git never commits the database" |
 | `remote lan-tokens [on\|off]` | Accept remote-access tokens on the plain-HTTP LAN listener from other computers (off by default; `on` asks for `y`) |
-| `tighten [--dry-run]` | Make FlowState's existing files and folders owner-only (new ones already are) |
+| `tighten [--dry-run]` | Make FlowState's existing files and folders owner-only (new ones already are; on macOS and Linux FlowState also does this itself at start-up and at each backup) |
 | `migrate [--dry-run]` | Apply new database migrations (backup first) |
 | `update --dry-run` / `update` / `update --rollback` | Update to the newest signed release (dry run first; asks for `y`; rolls back on any failure). See "Upgrading" |
 | `update check` / `update check on\|off\|now` | The daily update check: show the last result, turn it on or off, or check now |
@@ -703,12 +706,21 @@ protocol is in [docs/relay-protocol.md](docs/relay-protocol.md).
   broken (`![` becomes `! [`), so a record can't make a chat app load an address. An AI can
   still be fooled by text it reads; hard rules are set and removed only by you, and each says who set it.
 - **Data-git never commits the database.** `flowstate data-git sync` commits a markdown export
-  and your attachments; git keeps every version of them in that repository for good.
+  and your attachments; git keeps every version of them in that repository for good. If your
+  data-git repository was made by FlowState 2.4.3 or older, it still holds your database:
+  update FlowState on **every** computer that syncs it first, then run `flowstate data-git
+  migrate` once on each. It makes a safety copy, takes the database and settings out of git
+  without touching them on disk, and pushes the change. Until then `sync` refuses that
+  repository, because a computer still on 2.4.3 would delete its own database when it pulls
+  the change. Older commits still hold those files.
 - **Owner-only files.** What FlowState creates (data and backup folders, the database, backups,
   restores, exports, token files, settings) is readable by your account only: 0700 / 0600 on
   macOS and Linux; on Windows an access list for your account and SYSTEM (the default folders
   are inside your user profile, which Windows already keeps to you, SYSTEM and administrators).
-  Files from older versions keep their permissions until you run `flowstate tighten`.
+  On macOS and Linux, files from older versions are made owner-only when FlowState starts and
+  at each backup (`flowstate tighten` does it at once). On a drive that doesn't support
+  permissions (USB, exFAT, some network shares) FlowState still works and says once that the
+  files there may be readable by other users of this computer.
 - **Undo covers changes made through FlowState.** Creating a record can be undone only by the
   app that made it and only while nothing refers to it (records created before 2.4, projects
   and components can't; delete them instead). Changes made directly in SQLite aren't tracked.
@@ -726,7 +738,7 @@ protocol is in [docs/relay-protocol.md](docs/relay-protocol.md).
 you have already deleted for good: their copies in the edit history (so undo stops working for
 them), the earlier versions edits overwrote, the keyword and meaning search indexes, notes that
 name them, the text of review items they came from, matching events in the automatic session
-log, and attached files FlowState copied in. Then it compacts the database (SQLite's
+log, and attached files FlowState copied in. Records an AI took back with undo count as deleted. Then it compacts the database (SQLite's
 `secure_delete` and `VACUUM`), so the old bytes leave the file too. No safety copy is taken.
 
 What it can't reach: **older backups** made before the erase still hold the text until they age
@@ -803,7 +815,10 @@ plan, then `<venv python> -m flowstate update --yes --user-said "<your words>"`.
    (migrations only add tables and columns, so the old version reads it as it is).
 
 Then quit and reopen your AI apps; until you do, an app still running the old version says so
-in its brief. `flowstate update --rollback` goes back to the version before the last update.
+in its brief. `flowstate update --rollback` goes back to the version before the last update. If you set a
+remote-access passphrase, going back to a version before 2.4.4 means setting it again
+(`flowstate remote passphrase`): 2.4.4 stores it in a stronger form older versions can't check
+(the rollback reminds you).
 A developer setup (your own branch or commits, extra worktrees, a linked `.venv`) is refused:
 update it by hand. To turn `flowstate update` off on a computer, run
 `flowstate update self-update off` (it puts `"self_update": false` in FlowState's `config.json`;
