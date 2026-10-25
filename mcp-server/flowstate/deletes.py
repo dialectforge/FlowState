@@ -73,7 +73,8 @@ LABELS = {"components": "components", "conversations": "decisions", "changes": "
           "handoff_notes": "handoffs", "record_links": "links",
           "project_variables": "variables", "project_methods": "methods",
           "attachments": "attachments", "learned_skills": "skills",
-          "review_items": "review items", "sessions": "sessions"}
+          "review_items": "review items", "sessions": "sessions",
+          "entry_evidence": "evidence snippets"}
 # Counts that must not change between the request and the approval (the user approved
 # these numbers). Sessions and review items move on their own while the user decides.
 _FIXED = tuple(v for v in LABELS.values() if v not in ("sessions", "review items"))
@@ -144,6 +145,8 @@ def plan(conn, table: str, rid: int) -> tuple[dict, dict]:
     gone, changed, needed = {(table, rid): root}, {}, []
     has_links = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
                              "AND name='record_links'").fetchone() is not None
+    has_evidence = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                                "AND name='entry_evidence'").fetchone() is not None
     queue = [(table, rid, root)]
     while queue:
         t, key, row = queue.pop()
@@ -165,6 +168,11 @@ def plan(conn, table: str, rid: int) -> tuple[dict, dict]:
                 """SELECT * FROM record_links WHERE (from_type = ? AND from_id = ?)
                    OR (to_type = ? AND to_id = ?)""", (_ENDPOINTS[t], key, _ENDPOINTS[t], key))}
             refs.append(("record_links", found, "CASCADE"))
+        if has_evidence and t in _ENDPOINTS:   # its evidence snippets go (and come back) with it
+            found = {r["id"]: {k: history._val(r[k]) for k in r.keys()} for r in conn.execute(
+                "SELECT * FROM entry_evidence WHERE record_type = ? AND record_id = ?",
+                (_ENDPOINTS[t], key))}
+            refs.append(("entry_evidence", found, "CASCADE"))
         for child, found, on_delete in refs:
             for ck, crow in found.items():
                 if (child, ck) in gone:

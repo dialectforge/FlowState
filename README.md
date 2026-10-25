@@ -516,7 +516,7 @@ the venv active). Add `-h` to any command for its options.
 | `backup [--offsite]` / `restore <file> [--to <new file>]` | Back up now / restore into a new, verified file |
 | `schedule-backups [--time HH:MM] [--offsite]` / `schedule-backups --remove` | Nightly backup on / off |
 | `offsite setup --repo OWNER/NAME` / `offsite status` / `offsite push --dry-run` / `offsite disable` / `offsite key` | Private GitHub off-site copy, encrypted on this computer first. `key` shows its recovery code in your terminal (save it in a password manager). A push never overwrites a newer copy on GitHub unless you add `--replace-newer` |
-| `erase TYPE:ID [...]` / `erase --deleted-before DAYS` (`--dry-run`) | Remove deleted records for good: their copies in the edit history, the search indexes, the session log and review items, plus attached files; then the database is compacted. Asks for your `y`. See "Erasing for good" |
+| `erase TYPE:ID [...]` / `erase --deleted-before DAYS` (`--dry-run`) | Remove deleted records (and removed hard rules' text) for good: their copies and earlier versions in the edit history, the search indexes, the session log, review items about them, evidence and claim history, plus attached files; then the database is compacted. Asks for your `y`. See "Erasing for good" |
 | `rules list --project P` / `rules add --project P "TEXT"` / `rules remove ID` / `rules confirm ID` | A project's hard rules; `add` sets one and `remove` removes one yourself at once, `confirm` makes a rule an app added in an older version yours (each asks for your `y`). A rule an AI asks to add or remove waits in the review queue for you |
 | `data-git status` / `init` / `remote URL [--unchecked]` / `sync [-m TEXT]` / `clone URL` / `migrate` | Git for FlowState's data folder: only README, `projects/` (attachments) and `export/` (a markdown export `sync` writes) are committed, never the database, backups, keys, tokens or settings. `remote`, `sync`, `clone` and `migrate` ask for your `y`; a GitHub remote must be private (checked before every push); any other remote needs `--unchecked`. A repository made by 2.4.3 or older: see "Data-git never commits the database" |
 | `remote lan-tokens [on\|off]` | Accept remote-access tokens on the plain-HTTP LAN listener from other computers (off by default; `on` asks for `y`) |
@@ -745,10 +745,16 @@ protocol is in [docs/relay-protocol.md](docs/relay-protocol.md).
 
 `flowstate erase TYPE:ID` (or `--deleted-before DAYS`), in your own terminal, removes records
 you have already deleted for good: their copies in the edit history (so undo stops working for
-them), the earlier versions edits overwrote, the keyword and meaning search indexes, notes that
-name them, the text of review items they came from, matching events in the automatic session
-log, and attached files FlowState copied in. Records an AI took back with undo count as deleted. Then it compacts the database (SQLite's
-`secure_delete` and `VACUUM`), so the old bytes leave the file too. No safety copy is taken.
+them), every earlier version edits overwrote (a renamed record's first title too), the keyword
+and meaning search indexes, notes that name them, their decision evidence, a todo's claim
+history and the topic of a disagreement card about them, the text of review items they came
+from or that are about them (another item only loses a whole sentence quoted from them, never
+a short shared phrase), matching events in the automatic session log, and attached files
+FlowState copied in. Records an AI took back with undo count as deleted, and so does a record
+deleted along with its project or component (the project's own delete can still be undone).
+A hard rule you removed can be erased too (`flowstate erase rule:ID`): it stays listed as
+removed, without its text. Then it compacts the database (SQLite's `secure_delete` and
+`VACUUM`), so the old bytes leave the file too. No safety copy is taken.
 
 What it can't reach: **older backups** made before the erase still hold the text until they age
 out (14 days for daily copies, 8 weeks for weekly ones, safety copies at least 7 days; delete
