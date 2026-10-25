@@ -587,7 +587,7 @@ def run(db_path: Path, p: dict, data_dir: Optional[Path] = None) -> dict:
     texts = _texts(pairs)
     labels = _labels(pairs)   # session-log labels: whole-label matches, any length
     n = {"history": 0, "search_index": 0, "meaning_index": 0, "meta": 0, "review_items": 0,
-         "session_events": 0, "linked": 0, "files": 0, "vacuumed": False}
+         "session_events": 0, "linked": 0, "files": 0, "rules": 0, "vacuumed": False}
     conn = _conn(db_path)
     try:
         conn.execute("PRAGMA secure_delete = ON")   # freed pages are zeroed, not left as they were
@@ -600,8 +600,9 @@ def run(db_path: Path, p: dict, data_dir: Optional[Path] = None) -> dict:
                                          (e,)).rowcount
         for t in p["targets"]:   # a removed hard rule: its row stays, its text goes
             if t["type"] == "rule" and t["edit_id"] is None:
-                conn.execute("UPDATE project_rules SET rule = ?, removed_request = NULL WHERE id = ?",
-                             (ERASED, t["id"]))
+                n["rules"] += conn.execute(
+                    "UPDATE project_rules SET rule = ?, removed_request = NULL WHERE id = ? "
+                    "AND rule != ?", (ERASED, t["id"], ERASED)).rowcount
         for (table, rid) in rows:
             n["history"] += conn.execute("DELETE FROM record_history WHERE table_name = ? AND "
                                          "record_id = ?", (table, rid)).rowcount
@@ -713,6 +714,9 @@ def report(n: dict) -> list:
            f"search-index row(s), {n['meta']} note row(s), {n['review_items']} review item(s), "
            f"{n['session_events']} session-log event(s), {n.get('linked', 0)} linked row(s) "
            f"(evidence, claim history, card topics), {n['files']} attached file(s)."]
+    if n.get("rules"):   # a removed rule's row stays on record; only its text went (task 60, I-1)
+        out.append(f"Blanked the text of {n['rules']} removed hard rule(s) (the rule stays on "
+                   f"record as removed, without its words).")
     out.append("Database compacted." if n["vacuumed"] else
                "The database was busy, so it wasn't compacted yet: old bytes may stay in the file "
                "until you run `flowstate erase --deleted-before 0` again with FlowState apps closed.")

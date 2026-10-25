@@ -200,3 +200,24 @@ def test_a_cli_erase_with_a_huge_number_doesnt_crash(backend, capsys):
     from flowstate import cli
     db = backend.backend.db_path
     assert cli.main(["erase", "--deleted-before", "99999999", "--dry-run", "--db", str(db)]) == 0
+
+
+def test_erase_summary_says_a_removed_rules_text_was_blanked(backend, capsys, monkeypatch):
+    """(task 60, I-1) `flowstate erase rule:ID` says the rule's own text was blanked; erasing
+    anything else doesn't get that line."""
+    from flowstate import cli, cli_review
+    from test_session_records import FakeTTY
+    db = backend.backend.db_path
+    rid = rules.add_by_user(db, 1, "Never name the supplier in commits")["rule"]["id"]
+    rules.remove_by_user(db, rid)
+    monkeypatch.setattr(cli_review, "open_terminal", lambda: FakeTTY(["y"]))
+    assert cli.main(["erase", f"rule:{rid}", "--db", str(db)]) == 0
+    out = capsys.readouterr().out
+    assert "Blanked the text of 1 removed hard rule(s)" in out
+    assert _q(db, "SELECT rule FROM project_rules WHERE id = ?", rid) == [(erase.ERASED,)]
+    lid = call(backend, "log_work", {"project": "Alpha", "kind": "learning",
+                                     "summary": "Short lived note"})["record"]["id"]
+    _delete(backend, "learning", lid)
+    monkeypatch.setattr(cli_review, "open_terminal", lambda: FakeTTY(["y"]))
+    assert cli.main(["erase", f"learning:{lid}", "--db", str(db)]) == 0
+    assert "Blanked the text" not in capsys.readouterr().out
