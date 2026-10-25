@@ -16,7 +16,8 @@ named here call the writers).
 |---|---|---|
 | Approvals on / off, install or `--project` | `flowstate approvals on\|off [--project P] [--clear]` (off asks for `y`) | Approvals row: Turn on / Turn off / Remove the project's own setting; off (or removing a project's own setting while it is on) asks on a confirm page |
 | Phone approval links | `flowstate approvals phone on\|off` | Phone approval links row (relay only) |
-| Popup apps | `flowstate approvals popup add\|remove NAME` | Popup row: Add / Remove; claude.ai and Anthropic names never get a popup whatever the list says |
+| Popup apps | `flowstate approvals popup add\|remove NAME` (add asks for `y`) | Popup row: Add / Remove; claude.ai and Anthropic names never get a popup whatever the list says |
+| Review card apps | `flowstate approvals cards add\|remove NAME` (add asks for `y`) | Review card row: Add / Remove; starts with `claude-ai` (Claude Desktop and claude.ai) |
 | Chat approvals through the relay | `flowstate relay chat-approvals on\|off` (on asks for `y`) | Chat approvals row (relay only); on asks on a confirm page |
 
 - **The confirm page** replaces the terminal's `y`. The first POST answers with a plain-words
@@ -154,9 +155,22 @@ chat by default. What the code enforces (`waiting.phone_only`, called first in
   path is `card`. The review page
   and the phone page audit as `review page`; an agent quoting the user audits as `chat`. A
   card closed because a decision was replaced, or because the user said the old possible-conflict
-  pair fits together, is audited as `automatic`. Card taps are not cryptographically proven to
-  be a person yet. That check is a known follow-up; a host that lets the model call the
-  app-only tool by name can still save a resolution.
+  pair fits together, is audited as `automatic`.
+- **What makes a card tap the user's** (both cards, since the 2.4.4 audit):
+  - only apps on the review card list (table above) get the cards and the app-only tools; the
+    MCP Apps flag an app sends is its own claim, so the list is the user's say;
+  - every card with buttons gets a one-use code (`card_taps.py`) in the tool result's `_meta`
+    (`flowstate/taps`), which MCP Apps hosts pass to the card's page and keep out of the
+    model's context. It is never in the text or the card data. The card sends it back with the
+    tap; a tap without it, with another card's or app's code, a used one or one older than 15
+    minutes is refused (`not_a_card_tap`), so a model that calls the hidden tool by name
+    decides nothing. A tap refused after its code was checked gets a fresh code;
+  - the app that queued an item doesn't decide it on its own card (`own_item`, and no buttons),
+    as in the chat. Session summaries are queued by FlowState itself and keep their buttons;
+  - the decision's request reads "Approve tapped on the review card in <app> (its one-use card
+    code checked)": FlowState records what it checked, never "the user".
+  - Honest limit: a program that pretends to be a listed card host (it connects with that name
+    and reads `_meta` itself) gets the codes too, as a program could pretend to be a popup app.
 - Review cards (2.4.4) are the same design for every other kind in the queue (session
   summaries, suggestions, imports, clean-ups, markdown edits, possible conflicts). The AI calls
   `show_review_card` (read-only, listed only to MCP Apps hosts; its definition names
@@ -170,8 +184,14 @@ chat by default. What the code enforces (`waiting.phone_only`, called first in
   buttons, with the phone link or, on this computer, the review page link; `resolve_review_card`
   refuses them (`user_only`) even if called. A decision runs the same apply step as
   `manage_review` approve / reject (`review_apply.py`) and every one is logged in `approval_log`
-  with path `card`, whatever the kind. The same limit applies: a tap is not proven to be a
-  person.
+  with path `card`, whatever the kind. The same tap rules apply (above). A session summary
+  record's Remove and Bring back on the card follow the delete rules: refused for apps that may
+  not delete (remote tokens, LAN keys, OAuth apps, the relay), and with approvals on only on the
+  review page or the phone.
+- The review link page (no key; any program on this computer can open it) never approves a
+  user-only item, does Remove / Bring back, or turns review off while approvals are on: it
+  points to the page `flowstate review-page` opens (a secret address and its own cookie) or the
+  terminal.
 
 ## What a queued delete shows
 

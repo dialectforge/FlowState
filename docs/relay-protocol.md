@@ -20,7 +20,10 @@ but **cannot decrypt them**:
 
 What the relay can see: the hostname (SNI), client IP addresses and ports, connection times,
 byte counts and timing. TLS 1.3 encrypts the server certificate, so the relay does not even
-see that.
+see that. From the agent itself (section 3.1) it also gets the FlowState version (`agent` in
+the hello, e.g. `flowstate/2.4.4`) and, only once the user has set one, the display name the
+user gave this FlowState (`flowstate name`); it keeps both with the device and clears them when
+the device is removed, revoked or unenrolled, or the account is deleted.
 
 What the relay could do if it turned malicious: because it controls DNS for
 `fsmcp.com`, it could obtain its own certificate for a user's hostname and
@@ -200,7 +203,9 @@ handle: when a new one is welcomed, the relay SHOULD send `{"type": "goaway"}` o
 and close it.
 
 From FlowState 2.4.4 the hello also carries `"name"`: the name the user gave this FlowState
-(`flowstate name`; 1-40 characters of plain text, no control or format characters), or `null`
+(`flowstate name`; 1-40 characters of plain text, no control, format, surrogate or private-use
+characters; characters newer than a side's Unicode version are allowed, so both sides agree),
+or `null`
 when the user has not set one or went back to the default with `flowstate name --reset` (the
 local default, "Main FlowState", is never sent). When the user renames or resets it while the
 agent is connected, the agent sends `{"type": "name", "name": "<new name>"}` (or `"name": null`)
@@ -209,8 +214,10 @@ one it kept and the site shows its own wording. A hello without the key (older a
 the kept name as it is.
 It is only a label for the owner's own pages on flowstatemcp.com; the handle stays the address,
 the routing and the sign-in. A relay that keeps it MUST take it only from a control connection
-whose token checked out, MUST apply the same checks (ignoring anything else), and SHOULD NOT
-log it. Relays that don't know it ignore the field and the message type (section 3.2: unknown
+whose token checked out and is still the device's current one, for a device that is still
+active, MUST apply the same checks (ignoring anything else), and SHOULD NOT log it. It needn't
+store a name that didn't change, and may store at most one change every few seconds, as long as
+the newest one is kept. Relays that don't know it ignore the field and the message type (section 3.2: unknown
 types are ignored).
 
 ### 3.2 Heartbeats

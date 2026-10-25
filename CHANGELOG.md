@@ -1,10 +1,9 @@
 # Changelog
 
-## Unreleased
+## 2.4.4 - 2026-10-24
 
-(Part of 2.4.4, which is not tagged yet: fold these into the 2.4.4 section at release prep.)
-
-- No new dependencies and no database migration.
+- No new dependencies and no database migration. `flowstate update` from 2.4.0 to 2.4.3
+  needs no new `.venv`.
 - **A name for this FlowState.** Each install now has a display name, "Main FlowState" until
   you change it, so people see a name instead of the relay handle (the random letters in your
   relay address). Change it with `flowstate name "Office laptop"` (no word shows it,
@@ -172,11 +171,6 @@
   changes. No confirm prompt, as on the page. If the `.flowstate-no-self-update` file is there,
   `on` says it still keeps the folder updated by hand and how to delete it; FlowState never
   deletes it.
-
-## 2.4.4 - 2026-10-24
-
-- No new dependencies and no database migration. `flowstate update` from 2.4.0 to 2.4.3
-  needs no new `.venv`.
 - Review cards in the chat. Hosts that support MCP Apps (such as Claude Desktop) now get a card
   for everything else that waits in the review queue: session summaries, suggestions, imports,
   clean-up ideas, markdown edits and possible conflicts. The AI calls a new read-only tool,
@@ -195,8 +189,8 @@
   delete show without buttons, with the phone or review-page link, and are refused if the tool
   is called anyway. Every card decision is logged in the approvals log with path `card`, for
   every kind. Approving or rejecting runs the same step as `manage_review` (one shared module,
-  `review_apply.py`); `manage_review`'s own rules are unchanged. Card taps are not
-  cryptographically proven to be a person, as with the disagreement card.
+  `review_apply.py`); `manage_review`'s own rules are unchanged. Since the fixes below, a tap
+  also needs the card's one-use code and an app on your card list.
 - Fix: the app whose save opened a disagreement card could dismiss it through `manage_review`
   by quoting its own decision: the card's own words were only its headline ("Two AIs disagree
   about ..."). The own-item check now compares against both claims on the card, as it did for
@@ -205,6 +199,81 @@
   when that is set, instead of always the per-OS data folder, so a second install or a test
   database no longer writes into the main one's folder. New data-folder git repos ignore
   `review-page/`.
+
+### Fixed before release (audit of 2.4.4)
+
+- **Cards only count when you tap them.** The in-chat cards (review card and disagreement card)
+  used to trust any app that said it could show them, so a program pretending to be a card host
+  could approve its own review items, and the log said "card" as if you had tapped. Now:
+  - only apps on your card list get the cards and their buttons. The list starts with
+    `claude-ai` (Claude Desktop and claude.ai); `flowstate approvals cards add|remove NAME`
+    (adding asks for your `y` in the terminal) or the new Settings row "Apps that may show
+    review cards in the chat" changes it;
+  - every card with buttons gets a one-use code that only the card's own page receives (in
+    the tool result's `_meta`, never in the text the AI reads). A tap without it, with another
+    card's code, a used code or one older than 15 minutes is refused (`not_a_card_tap`), so the
+    AI can't press the buttons itself. A refused tap gets a fresh code so you can tap again;
+  - the app that queued an item (a suggestion, a clean-up, a disagreement it flagged) gets no
+    buttons for it on its own card and is refused (`own_item`), as in the chat. Session
+    summaries keep their buttons: FlowState queues them itself when a session closes;
+  - a tap is recorded as "Approve tapped on the review card in <app> (its one-use card code
+    checked)", never as "the user".
+- **Remove and Bring back on a card follow the delete rules.** A session summary record's
+  Remove (or Bring back) on a card is refused for apps that may not delete (remote tokens, LAN
+  keys, OAuth apps, the relay), and with approvals on it is only done on the review page or your
+  phone. Keep still works everywhere.
+- **`flowstate review-page` always gives you editable Settings.** When FlowState's read-only
+  link page was already on port 8770, the command opened that page and stopped, so Settings
+  could never be changed there. It now starts its own key-protected page on a free port. The
+  "FlowState review" desktop shortcut runs the same command.
+- **The two review pages no longer share a cookie.** The Settings page now lives under a secret
+  address (`http://127.0.0.1:<port>/s/<secret>/`) and its cookie is only sent there, so the
+  link page can't sign you out of Settings and another local web server (a dev server, say)
+  never receives your Settings session. The link page has its own cookie.
+- **The link page can't be used to approve what only you decide.** Any program on this computer
+  can open the review link page, so with approvals on it no longer approves a delete or other
+  user-only item, does Remove / Bring back, or turns review off; it points you to the page
+  `flowstate review-page` opens or your terminal. Without approvals nothing changes.
+- **Review page messages come from FlowState only.** A `?flash=` text in the address is no
+  longer shown; each action's answer is kept on the page's side and shown once. A program
+  visiting the link page over and over can't sign you out any more (the least recently used
+  session goes first, and at most 10 new ones a minute are made).
+- **Pause follows the key.** Pausing an app (`flowstate apps pause --app NAME` or the page
+  button) now also pauses the key, token or sign-in it uses, so it can't come back under a new
+  name ("Grok Bot 2"). `flowstate apps list` shows both names ("Grok Bot (via Desk key)").
+- **Names of tokens, keys and OAuth apps are never reused.** `remote add-client`, `keys add` and
+  `remote rename` refuse a name another token or app has, had before a rename, or had before it
+  was revoked (case doesn't count), so a new token can never pass for an old app. An OAuth app
+  signing up under a taken name gets a number ("Claude (2)"). New names are at most 50
+  characters, so "(signed in as <name>)" is always recorded whole and the key keeps knowing its
+  own records. `remote add-client --to-file` into a git folder now refuses before anything is
+  made.
+- **An app can't imitate a sign-in in its name.** "(via ...)" and "(signed in as ...)" are taken
+  out of the names apps send, so "Grok Bot (via Laptop key)" on the shared token can't look like
+  a key-signed app.
+- **A damaged `config.json` is never wiped.** If the settings file exists but can't be read (a
+  typo, or a moment while another program replaces it), settings changes (`flowstate name`,
+  `update check`, `update self-update`, the Settings page, `offsite setup`) now refuse with a
+  plain sentence instead of saving only their own setting, `flowstate update` treats it as
+  "updated by hand", and the relay agent leaves the relay's copy of the name alone. Writers
+  now use a lock and their own temporary file, so two at once can't fail or lose a change.
+- **Session summary records:**
+  - a Remove racing with Keep all (from the page, the phone, a card or the terminal, in any
+    process) can no longer delete a record while the history says it was kept: Remove marks the
+    record first, and Keep all / Don't keep wait for it ("try again in a moment");
+  - Remove isn't offered on a record another app added to later (a fix attempt on this
+    session's problem), since it would take that work with it; Keep still is;
+  - only a record one of the session's own writes created can be removed: a link that was
+    already there reads "already there", and a record the session deleted reads "deleted";
+  - the session's own last update, saved a moment after its last call began, no longer shows
+    as "changed since this session";
+  - Keep all now records how it was decided (card, agent, review page, phone, terminal).
+- **Smaller fixes:** the cards show dates in your own time zone; the terminal's `approvals phone`,
+  `approvals popup` and `update check` changes are logged like the page's (and popup names are
+  tidied the same way); `approvals popup add` asks for your `y` like `approvals off`; names with
+  newer emoji are accepted (only control, format, surrogate and private-use characters are
+  refused, the same on every Python and on the relay); "within a minute" for the name reaching
+  your phone now says "normally".
 
 ## 2.4.3 - 2026-10-23
 
