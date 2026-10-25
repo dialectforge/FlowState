@@ -186,11 +186,13 @@ def test_walk_project_delete_needs_the_typed_name_and_user_only_items_work(backe
                answers=[acc(approve=True, confirm_name="beta"), acc(approve=True)])
     assert "confirm_name" in seen[0].requestedSchema["properties"]
     assert out["walked"][0].startswith(f"#{item}: not done")
-    assert out["walked"][1] == f"#{src_item}: approved"
+    # (task 57) a "did you say this?" item gets no box: only the review page, phone or terminal
+    assert len(out["walked"]) == 1 and len(seen) == 1
+    assert out["said_by_you"] and status(db, src_item) == "pending"
     assert status(db, item) == "pending" and _q(db, "SELECT COUNT(*) FROM projects WHERE name = 'Beta Project'") == [(1,)]
     assert _q(db, "SELECT source_set_by FROM record_meta WHERE record_type = 'learning' AND record_id = 1") \
-        == [("user",)]
-    assert (src_item, "chat", "approved") in log(db)
+        != [("user",)]
+    assert (src_item, "chat", "approved") not in log(db)
 
 
 def test_walk_with_nothing_waiting(backend, relay_dir):
