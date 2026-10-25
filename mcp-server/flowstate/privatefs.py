@@ -30,30 +30,47 @@ log = logging.getLogger("flowstate.privatefs")
 
 DIR_MODE, FILE_MODE = 0o700, 0o600
 
-# Drives that don't keep permissions (USB sticks, exFAT / FAT, many SMB shares) refuse chmod.
-# FlowState then carries on (the file is still made, as in 2.4.3) and says so once (re-audit N-F7).
-_warned = False
+# Drives that don't keep permissions (USB sticks, exFAT / FAT, many SMB shares) refuse chmod,
+# or accept it and change nothing. FlowState then carries on (the file is still made, as in
+# 2.4.3) and says so once per drive (re-audit N-F7; task 57: per drive, not per process).
+_warned: set = set()
 
 
 class NotPrivate(OSError):
     """FlowState refused to write a private file (a symbolic link is in the way)."""
 
 
+def _drive(path: Path):
+    p = path
+    while not p.exists() and p != p.parent:
+        p = p.parent
+    try:
+        return os.stat(p).st_dev
+    except OSError:
+        return str(p)
+
+
 def warn_no_permissions(path: Union[str, Path], err: BaseException = None) -> None:
-    """Once per process: this drive doesn't keep file permissions."""
-    global _warned
-    if _warned:
+    """Once per drive: this drive doesn't keep file permissions."""
+    path = Path(path)
+    where = _drive(path)
+    if where in _warned:
         return
-    _warned = True
+    _warned.add(where)
     log.warning("this drive doesn't support file permissions; %s (and FlowState's other files on "
                 "it) may be readable by other users of this computer%s", Path(path),
                 f" ({type(err).__name__})" if err else "")
 
 
 def _chmod(path: Union[str, Path], mode: int) -> bool:
-    """chmod that never raises: False (and the warning, once) when the drive refuses it."""
+    """chmod that never raises: False (and the warning, once) when the drive refuses it, or
+    accepts it and changes nothing (some SMB mounts: the mode reads back as before, so
+    FlowState doesn't claim the file is owner-only; task 56 Low)."""
     try:
         os.chmod(path, mode)
+        if stat.S_IMODE(os.stat(path).st_mode) & 0o077 & ~mode:
+            warn_no_permissions(path)
+            return False
         return True
     except OSError as e:
         warn_no_permissions(path, e)
@@ -98,6 +115,8 @@ def _icacls(path: Path, folder: bool) -> bool:
     try:
         r = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, timeout=20,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if r.returncode != 0:   # a USB / FAT drive has no access lists: say so (task 56 Info)
+            warn_no_permissions(path)
         return r.returncode == 0
     except (OSError, subprocess.SubprocessError) as e:
         log.warning("could not make %s owner-only: %s", path.name, type(e).__name__)
@@ -203,18 +222,33 @@ def is_private(path: Union[str, Path]) -> bool:
     return not stat.S_IMODE(os.stat(path).st_mode) & 0o077
 
 
-def _only_flowstate_files(d: Path) -> bool:
-    """A folder you chose for backups (FLOWSTATE_BACKUP_DIR) that holds nothing but FlowState's
-    own backups: it is tightened too. One with anything else in it is left as it is."""
+_SUBDIRS = ("restored", "offsite-staging")
+
+
+def _ours(p: Path) -> bool:
+    """One of FlowState's own entries in a backups folder: a backup file (flowstate-*, a file:
+    a folder of that name is someone else's), restored/ or offsite-staging/. A macOS "._name"
+    metadata file an exFAT / SMB drive keeps next to one of them counts with it."""
     from .backup import PREFIX
+    name = p.name[2:] if p.name.startswith("._") and p.is_file() else p.name
+    if name.startswith(PREFIX):
+        return p.is_file() and not p.is_symlink()
+    return name in _SUBDIRS and (p.is_dir() or p.name.startswith("._"))
+
+
+def _only_flowstate_files(d: Path) -> bool:
+    """A folder you chose for backups (FLOWSTATE_BACKUP_DIR, `backup --dir`) that holds
+    FlowState's own backups and nothing else: it is tightened too. One with anything else in
+    it, or nothing at all (an empty folder isn't FlowState's yet), is left as it is."""
     try:
-        return all(p.name.startswith(PREFIX) or p.name in ("restored", "offsite-staging")
-                   or p.name in (".DS_Store",) for p in d.iterdir())
+        entries = [p for p in d.iterdir() if p.name != ".DS_Store"]
+        return bool(entries) and all(_ours(p) for p in entries) \
+            and any(not p.name.startswith("._") for p in entries)
     except OSError:
         return False
 
 
-def _candidates(db_path: Path, deep: bool = True) -> list:
+def _candidates(db_path: Path, deep: bool = True, dirs=()) -> list:
     from . import paths
     db_path = Path(db_path)
     cands = []
@@ -224,6 +258,8 @@ def _candidates(db_path: Path, deep: bool = True) -> list:
     for d in {data, paths.data_root(), b, paths.config_dir()}:
         if d.is_dir() and (named(d) or (d == b and (named(d.parent) or _only_flowstate_files(d)))):
             cands.append(d)
+    for d in dirs:   # a backups folder you chose (`backup --dir`, `tighten --dir`; N-F31)
+        cands += _backup_folder(Path(d), deep, own=_only_flowstate_files(Path(d)))
     cands += [db_path, Path(str(db_path) + "-wal"), Path(str(db_path) + "-shm")]
     for d in (data, paths.config_dir()):
         cands += [d / "config.json", d / "update.json", d / "remote-auth.db",
@@ -231,23 +267,34 @@ def _candidates(db_path: Path, deep: bool = True) -> list:
     proj = data / "projects"
     if proj.is_dir() and named(data):
         cands += [proj] + ([p for p in proj.rglob("*")] if deep else [])
-    if b.is_dir():
-        from .backup import PREFIX
-        cands += [p for p in b.glob(PREFIX + "*")]
-        for sub in ("restored", "offsite-staging"):   # restores and decrypted copies (N-F31)
-            st = b / sub
-            if st.is_dir() and not st.is_symlink():
-                cands += [st] + ([p for p in st.rglob("*")] if deep or sub == "restored" else [])
+    cands += _backup_folder(b, deep, own=False)
     return cands
 
 
-def tighten_existing(db_path: Path, dry_run: bool = False, deep: bool = True) -> list:
+def _backup_folder(b: Path, deep: bool, own: bool) -> list:
+    """A backups folder's own files: backups (files only), "._" metadata of them, restored/
+    and offsite-staging/ with what is in them; the folder itself when `own`."""
+    if not b.is_dir() or b.is_symlink():
+        return []
+    from .backup import PREFIX
+    out = [b] if own else []
+    out += [p for p in b.glob(PREFIX + "*") if p.is_file() and not p.is_symlink()]
+    out += [p for p in b.glob("._" + PREFIX + "*") if p.is_file() and not p.is_symlink()]
+    for sub in _SUBDIRS:   # restores and decrypted copies (N-F31)
+        st = b / sub
+        if st.is_dir() and not st.is_symlink():
+            out += [st] + ([p for p in st.rglob("*") if not p.is_symlink()]
+                           if deep or sub == "restored" else [])
+    return out
+
+
+def tighten_existing(db_path: Path, dry_run: bool = False, deep: bool = True, dirs=()) -> list:
     """`flowstate tighten`: make FlowState's own existing files and folders owner-only (the
     database and its -wal / -shm, backups and restores, the data, backup and settings folders
     when they are FlowState's own, settings files, projects/ and the off-site staging folder).
     Never your home or a folder FlowState didn't name. Returns what changed (or would change).
     A drive that refuses permissions is skipped (with the warning, once)."""
-    cands = _candidates(db_path, deep)
+    cands = _candidates(db_path, deep, dirs)
     out = []
     for p in dict.fromkeys(cands):
         try:
@@ -267,7 +314,7 @@ def tighten_existing(db_path: Path, dry_run: bool = False, deep: bool = True) ->
     return out
 
 
-def auto_tighten(db_path: Path) -> list:
+def auto_tighten(db_path: Path, dirs=()) -> list:
     """At server start and `flowstate backup` (re-audit N-F31): files an older FlowState
     (2.4.3 and before) left readable by other users of this computer are made owner-only, as
     2.4.4 promises. macOS / Linux only (on Windows the default folders are already your
@@ -276,7 +323,7 @@ def auto_tighten(db_path: Path) -> list:
     if _windows():
         return []
     try:
-        changed = tighten_existing(db_path, deep=False)
+        changed = tighten_existing(db_path, deep=False, dirs=dirs)
     except Exception as e:  # noqa: BLE001 - never stops FlowState starting
         log.warning("could not check FlowState's file permissions: %s", type(e).__name__)
         return []

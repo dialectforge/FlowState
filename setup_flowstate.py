@@ -422,7 +422,11 @@ def backup(path: Path) -> Path:
     while dest.exists():
         dest = path.with_name(f"{path.name}.flowstate-backup-{stamp}-{n}")
         n += 1
-    shutil.copy2(path, dest)
+    shutil.copyfile(path, dest)
+    try:   # its dates and mode too; a drive without file permissions refuses the mode (task 56)
+        shutil.copystat(path, dest)
+    except OSError:
+        _chmod(dest, 0o600)
     return dest
 
 

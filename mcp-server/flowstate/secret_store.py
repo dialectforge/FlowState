@@ -148,8 +148,8 @@ class MacStore:
                           self.service, "-w"], text=True, capture_output=True)
         except OSError as e:
             raise StoreError(f"the Keychain couldn't be read ({type(e).__name__})") from None
-        if r.returncode == 0:
-            return r.stdout.strip() or None
+        if r.returncode == 0:   # "" for an item that is there but empty (not "none")
+            return r.stdout.strip()
         if r.returncode == MAC_NOT_FOUND:
             return None
         raise StoreError(f"the Keychain couldn't be read (security exit {r.returncode}; is it "
@@ -199,7 +199,7 @@ class FileStore:
 
     def get(self) -> Optional[str]:
         try:
-            return self.path.read_text(encoding="utf-8").strip() or None
+            return self.path.read_text(encoding="utf-8").strip()   # "": there, but empty
         except FileNotFoundError:
             return None
         except (OSError, UnicodeDecodeError) as e:

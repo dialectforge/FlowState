@@ -2,7 +2,7 @@
 
     flowstate data-git status | init | remote URL [--unchecked] | sync [-m TEXT] | clone URL | migrate
     flowstate erase    TYPE:ID [TYPE:ID ...] | --deleted-before DAYS   [--dry-run] [--db FILE]
-    flowstate tighten  [--dry-run] [--db FILE]
+    flowstate tighten  [--dry-run] [--dir DIR ...] [--db FILE]
     flowstate rules    list --project P | add --project P "TEXT" | remove ID   (you confirm add, remove)
 
 data-git remote / sync / clone / migrate send FlowState data off this computer (or pull a
@@ -236,7 +236,12 @@ def cmd_erase(a) -> int:
 def cmd_tighten(a) -> int:
     from . import privatefs
     db = _db(a)
-    changed = privatefs.tighten_existing(db, dry_run=a.dry_run)
+    dirs = [Path(d).expanduser() for d in (getattr(a, "dir", None) or [])]
+    for d in dirs:
+        if not d.is_dir():
+            say(f"No folder {d}; nothing was changed.")
+            return 1
+    changed = privatefs.tighten_existing(db, dry_run=a.dry_run, dirs=dirs)
     if not changed:
         say("Nothing to change: FlowState's files are already owner-only (or this system "
             "doesn't use those permission bits).")
@@ -394,5 +399,8 @@ def register(sub) -> None:
 
     p = sub.add_parser("tighten", help="make FlowState's existing files and folders owner-only")
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--dir", action="append", help="also a backups folder you chose with "
+                   "`backup --dir` (its backups, restored/ and the folder itself when it holds "
+                   "only FlowState's backups); repeatable")
     p.add_argument("--db")
     p.set_defaults(fn=cmd_tighten)

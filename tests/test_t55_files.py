@@ -72,7 +72,7 @@ def no_permissions(monkeypatch):
             raise OSError(errno.ENOTSUP, "Operation not supported")
         return real_mkdir(self, mode, parents, exist_ok)
     monkeypatch.setattr(Path, "mkdir", mkdir)
-    monkeypatch.setattr(privatefs, "_warned", False, raising=False)
+    monkeypatch.setattr(privatefs, "_warned", set(), raising=False)
 
 
 def test_nf7_database_backup_restore_export_and_settings_work_without_permissions(
@@ -202,8 +202,10 @@ def test_nf6_create_never_overwrites(tmp_path):
 
         def set(self, v):
             raise AssertionError("must not overwrite")
-    with pytest.raises(OC.CryptoError, match="not replaced"):
-        OC.get_or_create_key(Racy())
+    # (task 57) the key another FlowState made meanwhile is read under the lock and used,
+    # never overwritten
+    key, made = OC.get_or_create_key(Racy())
+    assert made is False and OC.key_id(key)
 
 
 # ================================================================ N-F9 which key's code was shown

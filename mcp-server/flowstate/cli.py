@@ -80,7 +80,8 @@ def cmd_backup(a) -> int:
     from .backup import BackupError, backup_now
     from .privatefs import auto_tighten
     db = _db(a)
-    loose = auto_tighten(db)   # files an older FlowState left readable by others (N-F31)
+    # files an older FlowState left readable by others, in a folder you chose too (N-F31)
+    loose = auto_tighten(db, [Path(a.dir).expanduser()] if a.dir else ())
     if loose:
         say(f"Made {len(loose)} of FlowState's files and folders owner-only (an older version "
             f"had left them readable by other users of this computer).")
@@ -89,6 +90,8 @@ def cmd_backup(a) -> int:
     except BackupError as e:
         say(f"Backup FAILED: {e}")
         return 1
+    if a.dir:   # the new copy's folder: owner-only like the default (N-F31)
+        auto_tighten(db, [Path(a.dir).expanduser()])
     say(f"Backup OK: {r['path']} ({r['size'] // 1024} KB, integrity ok)")
     if r["removed"]:
         say(f"Old backups removed by the 14-daily / 8-weekly rule: {len(r['removed'])}")
@@ -164,9 +167,10 @@ def _decrypted(src: Path):
     with this computer's key or the recovery code typed in the terminal. None: refused."""
     from . import offsite_crypto as OC
     try:
-        key = OC.get_key()
+        key = OC.get_key(doing="changed")
     except OC.CryptoError as e:   # unreadable or damaged: the recovery code still works
-        say(f"(This computer's off-site key can't be used: {e})")
+        say(f"(This computer's off-site key can't be used, so the restore asks for the "
+            f"recovery code instead: {e})")
         key = None
     if key is None or OC.key_id(key) != OC.file_key_id(src):
         from .cli_review import open_terminal
@@ -267,8 +271,9 @@ def cmd_offsite(a) -> int:
         try:
             key, made = get_or_create_key()
         except CryptoError as e:   # unreadable / damaged: never replaced (N-F6)
-            say(f"The encryption key isn't ready: {e}")
-            return 0
+            say(f"The repository is saved, but the encryption key isn't ready, so pushes will "
+                f"fail until it is: {e}")
+            return 1   # not ready: a script sees it (task 56 Info)
         except Exception as e:  # noqa: BLE001 - the push makes it later
             say(f"(The encryption key will be made at the first push: {type(e).__name__}.)")
             return 0
