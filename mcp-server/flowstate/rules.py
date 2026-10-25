@@ -31,8 +31,8 @@ MAX_RULES = 25
 # Rules waiting for the user's OK (not shown in briefs yet) don't use the limits above (an app
 # could fill them with junk and keep the user's own rules out); they have their own: at most
 # MAX_PENDING per project, and MAX_PENDING_PER_APP of those from one app (re-audit N-F24).
-MAX_PENDING = 10
-MAX_PENDING_PER_APP = 3
+MAX_PENDING = 20
+MAX_PENDING_PER_APP = 10
 
 
 class RuleError(links.LinkError):

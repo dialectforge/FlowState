@@ -355,22 +355,22 @@ def _ask(S, text, app):
 
 def test_rules_waiting_for_the_user_have_their_own_cap(backend, seeded_db):
     S, db = backend, seeded_db
+    per_app, total = rules.MAX_PENDING_PER_APP, rules.MAX_PENDING
     long = "Never do thing number {n}: " + "x" * 250
-    # 9 waiting rules of ~280 characters (over 2,000 together) from three apps: all queued
-    for n in range(9):
-        out = _ask(S, long.format(n=n), app=f"App {n % 3}")
-        assert out.get("queued_for_review"), out
-    out = _ask(S, "Never do thing number 9", app="App 0")       # App 0 has 3 waiting already
-    assert out["error"] == "rules_queue_full" and "This app already has 3" in out["message"]
-    assert _ask(S, "Never do thing number 9", app="App 3").get("queued_for_review")   # 10th
-    out = _ask(S, "Never do thing number 10", app="App 4")
-    assert out["error"] == "rules_queue_full" and "10 hard rules already wait" in out["message"]
+    # waiting rules of ~280 characters, far over 2,000 together: all queued, up to the caps
+    for n in range(total):
+        out = _ask(S, long.format(n=n), app=f"App {n // per_app}")
+        assert out.get("queued_for_review"), (n, out)
+        if n == per_app - 1:   # App 0 has its share waiting
+            out = _ask(S, "Never do thing number x", app="App 0")
+            assert out["error"] == "rules_queue_full" and \
+                f"This app already has {per_app}" in out["message"]
+    out = _ask(S, "Never do thing number y", app="Another app")
+    assert out["error"] == "rules_queue_full" and f"{total} hard rules already wait" in out["message"]
     # the user's own rules don't wait and aren't kept out by the waiting ones
-    r = rules.add_by_user(db, 1, "Never push to main")
-    assert r["rule"]["id"]
+    assert rules.add_by_user(db, 1, "Never push to main")["rule"]["id"]
     # asking again for a rule that already waits still points to the same item
-    again = _ask(S, long.format(n=0), app="App 9")
-    assert again.get("queued_for_review")
+    assert _ask(S, long.format(n=0), app="App 9").get("queued_for_review")
 
 
 # ================================================================ N-F26

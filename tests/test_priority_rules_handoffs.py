@@ -171,13 +171,17 @@ def test_rules_limits_and_secret_scan(backend):
     S = backend
     long = call(S, "rules", {"action": "add", "project": "Alpha", "rule": "x" * 301})
     assert long.isError and _j(long)["error"] == "rule_too_long"
-    for i in range(6):
+    from conftest import approve_rules
+    db = S.backend.db_path
+    for i in range(6):   # the caps count active rules (task 55: waiting ones have their own)
         r = call(S, "rules", {"action": "add", "project": "Alpha", "rule": f"Rule {i} " + "y" * 290})
         assert not r.isError
+        approve_rules(db)
     full = call(S, "rules", {"action": "add", "project": "Alpha", "rule": "One more " + "z" * 250})
     assert full.isError and _j(full)["error"] == "rules_full"
     for i in range(25):
         assert not call(S, "rules", {"action": "add", "project": "Beta Project", "rule": f"r{i}"}).isError
+        approve_rules(db)
     many = call(S, "rules", {"action": "add", "project": "Beta Project", "rule": "one too many"})
     assert many.isError and "25 rules" in _j(many)["message"]
     sec = call(S, "rules", {"action": "add", "project": "Alpha",
