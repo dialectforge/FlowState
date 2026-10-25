@@ -617,6 +617,11 @@ def git_sync(commit_message: Optional[str] = None, checker=None,
                         "error": "Couldn't make a safety copy of the database before bringing in "
                                  f"the remote's changes, so nothing was pulled or pushed ({why})."}
             ok, out, err = _run_git_command(["rebase", tip])
+            if not ok and _rebasing():
+                # two computers wrote the same export file: this computer's own copy wins (it
+                # is made from this computer's database at every sync anyway); any other clash
+                # still stops (task 57, N3)
+                ok = _settle_export_clashes()
             if not ok:
                 conflict = _rebasing() or "CONFLICT" in (out + err)
                 if conflict:
@@ -642,6 +647,40 @@ def git_sync(commit_message: Optional[str] = None, checker=None,
         "first_push": not tip,
         "message": commit_message or "FlowState sync"
     }
+
+
+def _clashing() -> list:
+    ok, out, _e = _run_git_command(["diff", "--name-only", "--diff-filter=U", "-z"])
+    return [p for p in out.split("\0") if p] if ok else []
+
+
+def _is_export(path: str) -> bool:
+    return path.startswith("export/") and path.endswith(".md") and "/" not in path[len("export/"):]
+
+
+def _settle_export_clashes(rounds: int = 200) -> bool:
+    """During `git rebase` onto the remote: settle every clash that is only about export/*.md
+    in favour of this computer's copy (in a rebase, "theirs" is the local commit being
+    replayed), and go on. False (the caller aborts) when another file clashes, or git fails."""
+    for _ in range(rounds):
+        if not _rebasing():
+            return True
+        clash = _clashing()
+        if not clash or not all(_is_export(p) for p in clash):
+            return False
+        for p in clash:
+            if _run_git_command(["checkout", "--theirs", "--", p])[0]:
+                if not _run_git_command(["add", "--", p])[0]:
+                    return False
+            elif not _run_git_command(["rm", "-q", "-f", "--", p])[0]:   # this side removed it
+                return False
+        env = {"GIT_EDITOR": "true"}
+        ok, out, err = _run_git_command(["rebase", "--continue"], env=env)
+        if not ok and _rebasing() and not _clashing():   # the commit had nothing else left
+            ok, out, err = _run_git_command(["rebase", "--skip"], env=env)
+        if not ok and not _rebasing():
+            return False
+    return not _rebasing()
 
 
 MIGRATE_MSG = ("FlowState data-git migrate: the database, settings and keys are no longer kept "

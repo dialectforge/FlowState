@@ -351,3 +351,92 @@ def test_the_migrate_commit_keeps_the_repositorys_own_gitignore_lines(tmp_path, 
     assert on(a, git_ops.git_migrate)["success"]
     lines = _git("show", "main:.gitignore", cwd=remote).splitlines()
     assert lines[0] == "my-notes/" and "*.db" in lines
+
+
+# ---------------------------------------------------------------- task 57: N3
+def _db_with(folder: Path, projects: dict) -> Path:
+    from flowstate.database import Database
+    folder.mkdir(parents=True, exist_ok=True)
+    db = folder / "flowstate.db"
+    d = Database(db)
+    for name, todo in projects.items():
+        p = d.create_project(name, "")
+        d.add_todo(p.id, todo, None, "medium")
+    return db
+
+
+def _sync_as(folder: Path, db: Path, msg: str) -> dict:
+    """What `flowstate data-git sync` does after its y: export, sync, export again."""
+    from flowstate import cli_data
+    on(folder, cli_data._export_all, db, folder)
+    r = on(folder, git_ops.git_sync, msg, db_path=db)
+    if r.get("success"):
+        on(folder, cli_data._export_all, db, folder)
+    return r
+
+
+def test_two_244_computers_sync_exports_without_clashing(tmp_path, remote):
+    """N3: in 2.4.4 each computer exports its own database. The same export file written on
+    both no longer stops every sync with a clash: this computer's copy wins (it is made again
+    at each sync). A computer never deletes the other's exports of projects it doesn't know."""
+    from flowstate.database import Database
+    a = tmp_path / "A"
+    db_a = _db_with(a, {"Alpha": "todo from A", "Only A": "a's own"})
+    on(a, git_ops.git_init)
+    on(a, git_ops.git_set_remote, str(remote), allow_unchecked=True)
+    assert _sync_as(a, db_a, "A first")["pushed"]
+    b = tmp_path / "B"
+    assert on(b, git_ops.git_clone, str(remote))["success"]
+    db_b = _db_with(b, {"Alpha": "todo from B", "Only B": "b's own"})
+    on(b, git_ops.git_set_remote, str(remote), allow_unchecked=True)
+    r = _sync_as(b, db_b, "B first")
+    assert r["success"] and r["pushed"], r
+    assert (b / "export" / "Only-A-2.md").exists()          # A's export of a project B lacks
+    Database(db_a).add_todo(1, "second todo from A", None, "medium")
+    r = _sync_as(a, db_a, "A again")                        # both wrote export/Alpha-1.md
+    assert r["success"] and r["pushed"], r
+    assert "second todo from A" in (a / "export" / "Alpha-1.md").read_text()   # A's copy won
+    assert (a / "export" / "Only-B-2.md").exists() and (a / "export" / "Only-A-2.md").exists()
+    r = _sync_as(b, db_b, "B again")
+    assert r["success"] and r["pushed"], r
+    assert "todo from B" in (b / "export" / "Alpha-1.md").read_text()
+    assert set(_tip_files(remote)) >= {"export/Only-A-2.md", "export/Only-B-2.md", "export/Alpha-1.md"}
+    r = _sync_as(a, db_a, "A third")                        # no clash: A's copy again
+    assert r["success"] and "second todo from A" in (a / "export" / "Alpha-1.md").read_text()
+    for m in (a, b):
+        assert not (m / ".git" / "rebase-merge").exists()
+    assert (a / "flowstate.db").exists() and (b / "flowstate.db").exists()
+
+
+def test_a_clash_outside_the_export_still_stops(tmp_path, remote):
+    a = tmp_path / "A"
+    db_a = _db_with(a, {"Alpha": "x"})
+    on(a, git_ops.git_init)
+    on(a, git_ops.git_set_remote, str(remote), allow_unchecked=True)
+    (a / "projects" / "n.md").write_text("one")
+    assert _sync_as(a, db_a, "A")["pushed"]
+    b = tmp_path / "B"
+    on(b, git_ops.git_clone, str(remote))
+    db_b = _db_with(b, {"Alpha": "x"})
+    on(b, git_ops.git_set_remote, str(remote), allow_unchecked=True)
+    (b / "projects" / "n.md").write_text("from B")
+    assert _sync_as(b, db_b, "B")["pushed"]
+    (a / "projects" / "n.md").write_text("from A")
+    r = _sync_as(a, db_a, "A clash")
+    assert r["success"] is False and r["conflict"] is True and r["pushed"] is False, r
+    assert (a / "projects" / "n.md").read_text() == "from A"
+    assert not (a / ".git" / "rebase-merge").exists()
+
+
+def test_the_export_removes_only_its_own_gone_projects(tmp_path, remote):
+    from flowstate import cli_data
+    from flowstate.database import Database
+    a = tmp_path / "A"
+    db = _db_with(a, {"Keep": "k", "Drop": "d"})
+    on(a, git_ops.git_init)
+    on(a, cli_data._export_all, db, a)
+    (a / "export" / "From-elsewhere-7.md").write_text("another computer's")
+    Database(db).delete_project(2) if hasattr(Database, "delete_project") else \
+        __import__("sqlite3").connect(db).execute("DELETE FROM projects WHERE id = 2").connection.commit()
+    on(a, cli_data._export_all, db, a)
+    assert sorted(p.name for p in (a / "export").glob("*.md")) == ["From-elsewhere-7.md", "Keep-1.md"]

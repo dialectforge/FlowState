@@ -76,10 +76,27 @@ def _export_all(db: Path, folder: Path) -> int:
                  or "project") + f"-{pid}.md"
         git_ops.safe_write(out / fname, markdown_io.export(db, pid), private=True)
         keep.add(fname)
+    # Only files this computer wrote at an earlier sync and whose project is gone here are
+    # removed: another computer's exports, of projects this one doesn't know, stay (task 57,
+    # N3). The list is kept inside .git, so it is never committed.
+    listed = folder / ".git" / "flowstate-exported.json"
+    mine = _exported_before(listed)
     for old in out.glob("*.md"):
-        if old.name not in keep and (old.is_file() or old.is_symlink()):
+        if old.name not in keep and old.name in mine and (old.is_file() or old.is_symlink()):
             old.unlink()
+    if (folder / ".git").is_dir() and not (folder / ".git").is_symlink():
+        import json
+        git_ops.safe_write(listed, json.dumps(sorted(keep)), private=True)
     return len(keep)
+
+
+def _exported_before(listed: Path) -> set:
+    import json
+    try:
+        names = json.loads(listed.read_text(encoding="utf-8")) if listed.is_file() else []
+    except (OSError, ValueError):
+        names = []
+    return {n for n in names if isinstance(n, str)}
 
 
 def cmd_data_git(a) -> int:
@@ -145,6 +162,11 @@ def _data_git(a, db: Path) -> int:
             say("Refused: " + git_ops.UNSAFE_HERE.format(paths=str(e)))
             return 1
         r = git_ops.git_sync(a.message, db_path=db)
+        if r.get("success"):
+            try:   # export/ shows this computer's database again, even where another
+                n = _export_all(db, db.parent)   # computer's copy of a file just came in (N3)
+            except git_ops.UnsafePath:
+                pass
         say(f"Exported {n} project(s). " + (("Pushed." if r.get("pushed") else r.get("message", ""))
                                              if r.get("success") else f"FAILED: {r.get('error')}"))
         return 0 if r.get("success") else 1

@@ -712,7 +712,16 @@ protocol is in [docs/relay-protocol.md](docs/relay-protocol.md).
   migrate` once on each. It makes a safety copy, takes the database and settings out of git
   without touching them on disk, and pushes the change. Until then `sync` refuses that
   repository, because a computer still on 2.4.3 would delete its own database when it pulls
-  the change. Older commits still hold those files.
+  the change. Older commits still hold those files. The migrate commit also adds FlowState's
+  `.gitignore`, so a computer that hasn't updated yet can't commit its database again.
+- **From 2.4.4, data-git shares exports, not the database.** Each computer keeps its own
+  database; `sync` shares the markdown export of each computer's projects and the
+  attachments. Records saved on one computer don't reach another computer's database, and an
+  export file from another computer isn't for `import-md` here (its record numbers are the
+  other database's). When two computers
+  wrote the same export file (a project both have), this computer's copy wins at its sync: the
+  file is made again from this computer's database each time, so after a sync `export/` shows
+  this computer's records. Exports of projects this computer doesn't have are left alone.
 - **Owner-only files.** What FlowState creates (data and backup folders, the database, backups,
   restores, exports, token files, settings) is readable by your account only: 0700 / 0600 on
   macOS and Linux; on Windows an access list for your account and SYSTEM (the default folders
