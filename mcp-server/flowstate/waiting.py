@@ -666,7 +666,7 @@ async def walk(result: dict, session, client: str) -> dict:
     A box answered faster than a person could (popup.HUMAN_SECONDS) was not shown: the walk
     stops there, logs nothing for it and, if nothing was decided, answers with the plain list."""
     from . import server as S
-    from .popup import as_user, elicit, no_box
+    from .popup import as_user, decider_label, elicit, no_box
     plan = result.pop("_walk")
     db = S.backend.db_path
     ways, local = plan["links"], plan.get("local", True)
@@ -680,7 +680,8 @@ async def walk(result: dict, session, client: str) -> dict:
         rid = S.server.request_context.request_id
     except LookupError:
         rid = None
-    label = f"chat ({client})"
+    from . import card_trust
+    label, where = decider_label("chat", client), card_trust.shown(client)
     done, n, unseen = [], len(plan["ids"]), False
     for i, item_id in enumerate(plan["ids"], 1):
         it = await asyncio.to_thread(S._safe_call, _item_view, db, item_id)
@@ -698,7 +699,7 @@ async def walk(result: dict, session, client: str) -> dict:
             note = " ".join(str(content.get("note") or "").split())[:300]
             args = {"item_id": item_id, "confirm_name": content.get("confirm_name"),
                     "user_request": f"The user {'approved' if choice else 'rejected'} this in the "
-                                    f"review walk in {client}.",
+                                    f"review walk in {where}.",
                     **({"reason": note or "rejected by the user in the chat"} if not choice else {})}
             out = await asyncio.wait_for(asyncio.to_thread(as_user, name, args, label),
                                          S.call_timeout())

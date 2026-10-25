@@ -59,8 +59,12 @@ POPUP_CLIENTS = ("claude-code", "cursor", "cursor-vscode", "visual studio code",
 # and to keep app-only tools from the model. `flowstate approvals cards add|remove NAME`
 # changes this per install. claude-ai is Claude Desktop (the MCP client name it sends on
 # stdio). An app on a key, token or OAuth sign-in is matched by that sign-in's own name, and
-# only one the user added (card_allowed_credential, card_trust.py).
+# only one the user added to the separate sign-in list (`approvals cards add --sign-in NAME`;
+# card_allowed_credential, card_trust.py), so an app name on this list never trusts a network
+# sign-in that happens to have the same name (task 57). Popups the same: `approvals popup add
+# --sign-in NAME`, and only for a LAN app on this computer (popup.no_box).
 CARD_CLIENTS = ("claude-ai",)
+SIGN_IN_LISTS = ("popup_signins", "card_signins")
 # Never a popup for these, whatever they declare: claude.ai, Claude Desktop / mobile and the
 # Anthropic connector proxy don't show one (and the proxy drops the connection).
 CONNECTOR_MARKS = ("claude-ai", "claude.ai", "claudeai", "anthropic")
@@ -339,33 +343,54 @@ def card_allowed(db_path: Optional[Path], client_name: str) -> bool:
     return bool(name) and name in card_clients(db_path)
 
 
-def card_allowed_credential(db_path: Optional[Path], credential: Optional[str]) -> bool:
-    """The same for an app that signed in over the network (card_trust.py): its key's,
-    token's or OAuth app's own name, and only a name the user added to the card list
-    themselves. The built-in default (claude-ai) is a stdio client name, and an OAuth app
-    picks its own name when it registers."""
+def signins(db_path: Optional[Path], what: str) -> set:
+    """The sign-in names (a key's, token's or OAuth app's own name, lower case) the user put on
+    the popup ("popup") or card ("card") list themselves; there is no built-in default."""
+    return _listed(db_path, (), f"{what}_signins")
+
+
+def change_signins(db_path: Path, what: str, name: str, add: bool, who: str = "command-line") -> set:
+    return _change_list(db_path, (), f"{what}_signins", name, add, who)
+
+
+def _signin_listed(db_path: Optional[Path], what: str, credential: Optional[str],
+                   source: Optional[str]) -> bool:
     name = clean_client_name(credential)
     if not name or db_path is None:
         return False
-    conn = _conn(db_path)
-    try:
-        if not available(conn):
-            return False
-        added = json.loads(_get(conn, "card_clients_add") or "[]")
-    except (ValueError, sqlite3.Error):
-        return False
-    finally:
-        conn.close()
-    return name in {str(n).lower() for n in added} and name in card_clients(db_path)
+    listed = signins(db_path, what)
+    if name in listed:
+        return True
+    # an OAuth app (approved with the owner passphrase) that registered again is given a
+    # number, "Claude (2)": it keeps the place its first registration had on the list
+    m = re.fullmatch(r"(.+) \((\d{1,3})\)", name)
+    return source == "oauth_client" and m is not None and m.group(1) in listed
+
+
+def card_allowed_credential(db_path: Optional[Path], credential: Optional[str],
+                            source: Optional[str] = None) -> bool:
+    """The same for an app that signed in over the network (card_trust.py): its key's,
+    token's or OAuth app's own name, and only a name the user added to the card sign-in list
+    themselves (signins). The built-in default (claude-ai) is a stdio client name, and an
+    OAuth app picks its own name when it registers."""
+    return _signin_listed(db_path, "card", credential, source)
 
 
 def popup_allowed(db_path: Optional[Path], client_name: str, declared: bool) -> bool:
     """May FlowState show this connection a popup? Declared the capability, on the allowlist,
-    and not claude.ai / the Anthropic connector."""
+    and not claude.ai / the Anthropic connector. stdio only: the name is the app's own say-so
+    (popup.no_box checks a LAN app's sign-in with popup_allowed_credential)."""
     name = (client_name or "").strip().lower()
     if not declared or not name or any(m in name for m in CONNECTOR_MARKS):
         return False
     return name in popup_clients(db_path)
+
+
+def popup_allowed_credential(db_path: Optional[Path], credential: Optional[str],
+                             declared: bool, source: Optional[str] = None) -> bool:
+    """A LAN app on this computer: its key's or token's own name on the popup sign-in list the
+    user made (`approvals popup add --sign-in NAME`), never the name it sends (task 57, H-1)."""
+    return declared and _signin_listed(db_path, "popup", credential, source)
 
 
 # ---------------------------------------------------------------- user-only items

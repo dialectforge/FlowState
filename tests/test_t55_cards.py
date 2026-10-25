@@ -99,7 +99,7 @@ def test_network_apps_calling_themselves_claude_ai_get_no_cards(backend, claims_
 def test_a_sign_in_the_user_put_on_the_card_list_gets_cards_and_is_logged(backend, claims_ui, way):
     S, db = backend, backend.backend.db_path
     token, listener = CALLERS[way]
-    approvals.change_card_clients(db, token.client_name, True)
+    approvals.change_signins(db, "card", token.client_name, True)
     assert CARD_TOOLS <= net_names(S, "whatever-it-says", token, listener)
     assert not CARD_TOOLS & net_names(S, "claude-ai", _token("Other key", token.identity_source),
                                       listener)                # a different sign-in: no
@@ -131,17 +131,20 @@ def test_the_built_in_default_is_only_for_stdio(backend, claims_ui):
     assert CARD_TOOLS <= names(S, "claude-ai")                     # stdio: as before
     token, listener = CALLERS["oauth app named claude-ai"]
     assert not CARD_TOOLS & net_names(S, "claude-ai", token, listener)
-    approvals.change_card_clients(db, "claude-ai", True)           # the user's own add
-    assert CARD_TOOLS <= net_names(S, "claude-ai", token, listener)
-    approvals.change_card_clients(db, "claude-ai", False)
+    approvals.change_card_clients(db, "claude-ai", True)           # an app name: stdio only
     assert not CARD_TOOLS & net_names(S, "claude-ai", token, listener)
+    approvals.change_signins(db, "card", "claude-ai", True)        # the user's own sign-in add
+    assert CARD_TOOLS <= net_names(S, "claude-ai", token, listener)
+    approvals.change_signins(db, "card", "claude-ai", False)
+    assert not CARD_TOOLS & net_names(S, "claude-ai", token, listener)
+    approvals.change_card_clients(db, "claude-ai", False)
     assert not CARD_TOOLS & names(S, "claude-ai")
 
 
 def test_relay_card_taps_use_the_sign_in_and_stay_phone_only(backend, claims_ui):
     S, db = backend, backend.backend.db_path
     token, listener = CALLERS["relay remote token"]
-    approvals.change_card_clients(db, "Phone app", True)
+    approvals.change_signins(db, "card", "Phone app", True)
     assert CARD_TOOLS <= net_names(S, "claude-ai", token, listener)
     item = suggest(S, "Use NATS for events")
     r, _ = net_call(S, "show_review_card", {"project": "Alpha", "item_id": item}, "claude-ai",
@@ -344,8 +347,8 @@ def test_showing_cards_in_a_loop_does_not_push_out_other_cards_codes():
 def test_codes_are_bound_to_the_sign_in(backend, claims_ui):
     S = backend
     db = S.backend.db_path
-    approvals.change_card_clients(db, "Laptop key", True)
-    approvals.change_card_clients(db, "Desk key", True)
+    approvals.change_signins(db, "card", "Laptop key", True)
+    approvals.change_signins(db, "card", "Desk key", True)
     item = suggest(S, "Use RabbitMQ for events")
     a, b = _token("Laptop key", "app_key"), _token("Desk key", "app_key", "c-2")
     r, _ = net_call(S, "show_review_card", {"project": "Alpha", "item_id": item}, "claude-ai", a, "lan")

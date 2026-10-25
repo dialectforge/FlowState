@@ -46,7 +46,7 @@ dismiss the card. The one you don't keep is marked superseded, not deleted. An a
 with `log_work` (`conflicts_with`, `topic`, `evidence`) or `manage_links(action="flag_conflict")`.
 The review page shows the card (side by side on a wide screen), and the tool reply includes the
 same card as plain text plus the review link. Chat apps that support MCP Apps can show the card
-in the chat (apps on your card list: Claude Desktop to start with; claude.ai or another app that signs in through your tunnel or the relay once you add its sign-in's name with `flowstate approvals cards add`); each button
+in the chat (apps on your card list: Claude Desktop to start with; claude.ai or another app that signs in through your tunnel or the relay once you add its sign-in's name with `flowstate approvals cards add --sign-in`); each button
 press carries a one-use code only the card gets, so the AI can't press them itself. Everything else
 that waits for your OK (session summaries, suggestions, imports, clean-up ideas) gets its own
 in-chat review card in those apps too (see "Where to see what's waiting for you").
@@ -507,7 +507,7 @@ the venv active). Add `-h` to any command for its options.
 | `review [--project NAME]` | List what waits in the review queue |
 | `review records ID` / `review record ID TYPE:ID keep\|remove\|restore` | A session summary's records with their state / keep, remove (safety copy, undoable) or bring back one; asks for your `y` here |
 | `approve ID [ID ...]` / `reject ID [--reason TEXT]` | Decide review items; asks you to type `y` in this terminal (piped input doesn't count) |
-| `approvals [on\|off] [--project P]` | Opt-in approvals (off by default). `on`: an AI's deletes and turning review off wait for you. Turning them `off` asks for `y` in this terminal. Also `approvals phone on\|off`, `approvals popup add\|remove NAME` and `approvals cards add\|remove NAME` (adding an app asks for `y`; for an app that signs in over the network, NAME is its key's, token's or OAuth app's own name) |
+| `approvals [on\|off] [--project P]` | Opt-in approvals (off by default). `on`: an AI's deletes and turning review off wait for you. Turning them `off` asks for `y` in this terminal. Also `approvals phone on\|off`, `approvals popup add\|remove [--sign-in] NAME` and `approvals cards add\|remove [--sign-in] NAME` (adding an app asks for `y`; for an app that signs in over the network, add `--sign-in` and NAME is its key's, token's or OAuth app's own name; popups only ever go to apps on this computer) |
 | `relay chat-approvals [on\|off]` | May AIs connected through the relay approve and reject review items in the chat? Off by default (phone only). Turning it `on` asks for `y` in this terminal; with no argument it shows the setting |
 | `review-page` | Review page in your browser (127.0.0.1 only): approve / edit / reject, "Who did what" (with undo), and a Settings section for every setting (see "Where to change settings"). You can also just click the link in your AI's answer (see "Where to see what's waiting for you") |
 | `keys add --name N [--read-only] [--workspace W]` / `keys list` / `keys revoke --id ID` (or `--name N`) | Per-app keys for the local/LAN HTTP server; the key is shown once, only a hash is kept; a revoked key stops at once |

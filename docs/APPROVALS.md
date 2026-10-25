@@ -16,8 +16,8 @@ named here call the writers).
 |---|---|---|
 | Approvals on / off, install or `--project` | `flowstate approvals on\|off [--project P] [--clear]` (off asks for `y`) | Approvals row: Turn on / Turn off / Remove the project's own setting; off (or removing a project's own setting while it is on) asks on a confirm page |
 | Phone approval links | `flowstate approvals phone on\|off` | Phone approval links row (relay only) |
-| Popup apps | `flowstate approvals popup add\|remove NAME` (add asks for `y`) | Popup row: Add / Remove; claude.ai and Anthropic names never get a popup whatever the list says |
-| Review card apps | `flowstate approvals cards add\|remove NAME` (add asks for `y`) | Review card row: Add / Remove; starts with `claude-ai` (Claude Desktop on this computer); a network app counts by its key's, token's or OAuth app's own name |
+| Popup apps | `flowstate approvals popup add\|remove [--sign-in] NAME` (add asks for `y`) | Popup row: Add / Remove (a tick marks a sign-in name); claude.ai and Anthropic names never get a popup whatever the list says; `--sign-in`: a LAN key's or token's own name, for an app on this computer |
+| Review card apps | `flowstate approvals cards add\|remove [--sign-in] NAME` (add asks for `y`) | Review card row: Add / Remove (a tick marks a sign-in name); starts with `claude-ai` (Claude Desktop on this computer); a network app counts only by its key's, token's or OAuth app's own name on the sign-in part (`--sign-in`); an OAuth app that registered again as "Claude (2)" keeps the place "Claude" had |
 | Chat approvals through the relay | `flowstate relay chat-approvals on\|off` (on asks for `y`) | Chat approvals row (relay only); on asks on a confirm page |
 
 - **The confirm page** replaces the terminal's `y`. The first POST answers with a plain-words
@@ -52,13 +52,21 @@ Whatever the approvals setting, the user can see and decide the whole review que
   boolean `approve` (ticked = approve, unticked = reject), an optional note (the reject reason)
   and, for a project delete, the project's name. Decline skips the item; cancel, no answer
   within 120 s or a failure stops the walk. Each decision goes through `popup.as_user` with the
-  label `chat (<app>)`. Nothing the calling app passes (`user_request`, extra arguments) is an
-  answer.
+  label `chat (<app>)`, or `chat (<app>, signed in as <key or token name>)` for a LAN app.
+  Nothing the calling app passes (`user_request`, extra arguments) is an answer.
   - **No boxes from outside this computer.** Requests that came through the relay listener or
-    the public (tunnel) listener never get a box, here or as the approvals popup
-    (`popup.no_box`): there the app's name is only its own say-so. `remote_auth.Gate` marks
-    every request with its listener (`lan` / `public` / `relay`; the relay agent builds its
-    app with `relay=True`), in the server, never from a header.
+    the public (tunnel) listener, or to the LAN listener from another computer, never get a
+    box, here or as the approvals popup (`popup.no_box`). `remote_auth.Gate` marks every
+    request with its listener (`lan` / `public` / `relay`; the relay agent builds its app with
+    `relay=True`) and whether its socket peer is this computer, in the server, never from a
+    header.
+  - **A LAN app counts by its sign-in, never by the name it sends** (2.4.4, task 57). On stdio
+    the popup list is checked against the MCP client name (an app this computer starts). A LAN
+    app on this computer gets boxes only when its key's or token's own name is on the popup
+    list's sign-in part (`flowstate approvals popup add --sign-in NAME`, or the tick on the
+    review page's Popup row), so a key calling itself `claude-code` gets none. The shared LAN
+    token never gets boxes. An app name on the list never trusts a sign-in of the same name,
+    and the same holds for the card list (`approvals cards add --sign-in NAME`).
   - **Too fast = not shown.** A box answered in under 1 second (`popup.HUMAN_SECONDS`) was not
     seen by a person (an app that auto-declines, for example): the walk stops at once, nothing
     is logged for it, and the answer is the plain list. The approvals popup does the same and

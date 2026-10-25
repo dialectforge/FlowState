@@ -46,14 +46,15 @@ class CardCaller:
             return self.app
         return f"{self.app} (signed in as {self.credential})"
 
-    def label(self) -> str:
-        """How a tap is recorded as the decider: "card (claude-ai)" /
-        "card (claude-ai, signed in as Laptop key)", the sign-in's name kept whole."""
+    def label(self, path: str = "card") -> str:
+        """How a tap (or a popup / walk answer: path "popup" / "chat") is recorded as the
+        decider: "card (claude-ai)" / "card (claude-ai, signed in as Laptop key)", the
+        sign-in's name kept whole."""
         if self.credential is None:
-            return f"card ({self.app})"[:LABEL_MAX]
+            return f"{path} ({self.app})"[:LABEL_MAX]
         tail = f", signed in as {self.credential})"
-        room = max(8, LABEL_MAX - len("card (") - len(tail))
-        return f"card ({self.app[:room]}{tail}"[:LABEL_MAX]
+        room = max(8, LABEL_MAX - len(path) - 2 - len(tail))
+        return f"{path} ({self.app[:room]}{tail}"[:LABEL_MAX]
 
 
 def caller() -> Optional[CardCaller]:
@@ -81,7 +82,7 @@ def allowed(db_path: Optional[Path], who: Optional[CardCaller]) -> bool:
         return False
     if who.credential is None:
         return approvals.card_allowed(db_path, who.sent)
-    return approvals.card_allowed_credential(db_path, who.credential)
+    return approvals.card_allowed_credential(db_path, who.credential, who.source)
 
 
 def key(fallback: Optional[str]) -> str:

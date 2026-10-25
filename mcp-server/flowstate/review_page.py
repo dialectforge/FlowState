@@ -465,6 +465,8 @@ class Page:
         name, op = " ".join(str(form.get("name", "")).split())[:80], form.get("op")
         if op not in ("add", "remove") or not name:
             return "Give the app's name as it connects (its MCP client name)."
+        if form.get("signin"):
+            return self._set_signin("popup", name, op)
         before = approvals.popup_clients(self.db_path)
         approvals.change_popup_clients(self.db_path, name, op == "add", self.client)
         self._log("popup_clients", ", ".join(sorted(before)),
@@ -480,11 +482,23 @@ class Page:
         name, op = approvals.clean_client_name(form.get("name", "")), form.get("op")
         if op not in ("add", "remove") or not name:
             return "Give the app's name as it connects (its MCP client name)."
+        if form.get("signin"):
+            return self._set_signin("card", name, op)
         before = approvals.card_clients(self.db_path)
         approvals.change_card_clients(self.db_path, name, op == "add", self.client)
         self._log("card_clients", ", ".join(sorted(before)),
                   f"{'added' if op == 'add' else 'removed'} {name}")
         return f"{'Added' if op == 'add' else 'Removed'} {name}."
+
+    def _set_signin(self, what: str, name: str, op: str) -> str:
+        """The sign-in part of the popup / card list (approvals.signins): a key's, token's or
+        OAuth app's own name, never matched against the name an app sends (task 57)."""
+        before = approvals.signins(self.db_path, what)
+        approvals.change_signins(self.db_path, what, name, op == "add", self.client)
+        name = approvals.clean_client_name(name)
+        self._log(f"{what}_signins", ", ".join(sorted(before)),
+                  f"{'added' if op == 'add' else 'removed'} {name}")
+        return f"{'Added' if op == 'add' else 'Removed'} the sign-in {name}."
 
     def set_self_update(self, form: dict, sess: str) -> str:
         if self.settings != "edit":
@@ -783,7 +797,8 @@ class Page:
         if scope.startswith("app:"):
             return f"Pause {scope[4:]}"
         return {"phone_approvals": "Phone approval links", "popup_clients": "Popup apps",
-                "card_clients": "Review card apps",
+                "card_clients": "Review card apps", "popup_signins": "Popup sign-ins",
+                "card_signins": "Review card sign-ins",
                 "config:self_update": "Updates by flowstate update",
                 install_name.SCOPE: "Name of this FlowState",
                 "config:update_check": "Daily update check"}.get(scope, scope)
@@ -894,41 +909,51 @@ class Page:
                            ("clear", "Remove the project's own setting", False)), scope),
             "Turning them off asks you to confirm on a second page, like "
             "<code>flowstate approvals off</code> asks for your <code>y</code>."))
-        popup = sorted(approvals.popup_clients(db))
-        items = "".join(
-            f"<li>{_e(n)}" + (f"<form method='post' action='{self.base}/settings/popup'>{hidden}"
-                              f"<input type='hidden' name='op' value='remove'><input type='hidden' "
-                              f"name='name' value='{_e(n)}'><button>Remove</button></form>"
-                              if edit else "") + "</li>" for n in popup)
-        add = (f"<form method='post' action='{self.base}/settings/popup'>{hidden}"
-               "<input type='hidden' name='op' value='add'><div class='row'>"
-               "<input type='text' name='name' maxlength='80' placeholder=\"the app's MCP client name\" "
-               "autocomplete='off'><button class='go'>Add</button></div></form>") if edit else ""
+        def names_list(action: str, names: list, signin: bool) -> str:
+            flag = "<input type='hidden' name='signin' value='1'>" if signin else ""
+            tag = "sign-in: " if signin else ""
+            return "".join(
+                f"<li>{tag}{_e(n)}" + (f"<form method='post' action='{action}'>{hidden}{flag}"
+                                       f"<input type='hidden' name='op' value='remove'><input type='hidden' "
+                                       f"name='name' value='{_e(n)}'><button>Remove</button></form>"
+                                       if edit else "") + "</li>" for n in names)
+
+        def add_form(action: str, what: str) -> str:
+            if not edit:
+                return ""
+            return (f"<form method='post' action='{action}'>{hidden}"
+                    "<input type='hidden' name='op' value='add'><div class='row'>"
+                    "<input type='text' name='name' maxlength='80' placeholder=\"the app's MCP client "
+                    "name, or a sign-in's name\" autocomplete='off'><button class='go'>Add</button></div>"
+                    f"<label><input type='checkbox' name='signin' value='1'> This is the name of "
+                    f"the key or token {what} uses to sign in, not the name the app sends</label></form>")
+
+        popup, popup_in = sorted(approvals.popup_clients(db)), sorted(approvals.signins(db, "popup"))
+        action = f"{self.base}/settings/popup"
+        items = names_list(action, popup, False) + names_list(action, popup_in, True)
         out.append(self._row(
             "Apps that may show an approval popup",
             "These apps get a popup (a form in the app) asking you to approve a delete while "
-            "approvals are on. Others get your phone link or the terminal command.",
-            f"<ul>{items}</ul>" if popup else "<b>no apps</b>.", add,
+            "approvals are on. Others get your phone link or the terminal command. An app this "
+            "computer starts is matched by the name it sends; an app on this computer that "
+            "connects to the LAN listener only by the name of its key or token (a sign-in, added "
+            "with the tick below). Apps on other computers never get a popup.",
+            f"<ul>{items}</ul>" if items else "<b>no apps</b>.",
+            add_form(action, "an app on this computer"),
             "claude.ai, Claude Desktop and other Anthropic apps never get a popup, whatever this "
             "list says (they don't show one)."))
-        cards = sorted(approvals.card_clients(db))
-        items = "".join(
-            f"<li>{_e(n)}" + (f"<form method='post' action='{self.base}/settings/cards'>{hidden}"
-                              f"<input type='hidden' name='op' value='remove'><input type='hidden' "
-                              f"name='name' value='{_e(n)}'><button>Remove</button></form>"
-                              if edit else "") + "</li>" for n in cards)
-        add = (f"<form method='post' action='{self.base}/settings/cards'>{hidden}"
-               "<input type='hidden' name='op' value='add'><div class='row'>"
-               "<input type='text' name='name' maxlength='80' placeholder=\"the app's MCP client name\" "
-               "autocomplete='off'><button class='go'>Add</button></div></form>") if edit else ""
+        cards, cards_in = sorted(approvals.card_clients(db)), sorted(approvals.signins(db, "card"))
+        action = f"{self.base}/settings/cards"
+        items = names_list(action, cards, False) + names_list(action, cards_in, True)
         out.append(self._row(
             "Apps that may show review cards in the chat",
             "These apps get the in-chat cards with Approve, Reject, Keep and Remove buttons. A "
             "tap counts as yours, so only add an app that draws the cards itself (claude-ai is "
             "Claude Desktop on this computer). An app that connects over the network is matched "
             "by the name of its key, token or OAuth sign-in, never by the name it sends: add "
-            "that name here. Other apps get the text and your review page link.",
-            f"<ul>{items}</ul>" if cards else "<b>no apps</b>.", add,
+            "that name with the tick below. Other apps get the text and your review page link.",
+            f"<ul>{items}</ul>" if items else "<b>no apps</b>.",
+            add_form(action, "the app"),
             "Each tap carries a one-use code only the card gets; an app never decides what it "
             "queued itself on its own card."))
         no_relay = "" if relay else "Only used with the FlowState relay (not set up here)."

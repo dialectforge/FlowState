@@ -6,7 +6,7 @@
     flowstate approve  ID [ID ...] [--db FILE]               asks you to confirm, then approves
     flowstate reject   ID [ID ...] [--reason TEXT] [--db FILE]  asks you to confirm, then rejects
     flowstate approvals [status|on|off] [--project P] [--clear]   user-only approvals (approvals.py)
-    flowstate approvals phone on|off / popup|cards add|remove NAME  phone link, popup / card apps
+    flowstate approvals phone on|off / popup|cards add|remove [--sign-in] NAME  phone link, popup / card apps
 
 With approvals on, an agent can't approve its own delete requests or turn review off; it asks
 you to run one of these (or to use the popup or the phone link). approve / reject and
@@ -21,6 +21,8 @@ opens a terminal of its own (a pseudo-terminal, or a new console on Windows) to 
 import json
 import os
 from pathlib import Path
+
+from . import term
 
 CLIENT = "command-line"
 USER_WORDS = "The user confirmed this in their own terminal (flowstate {what})."
@@ -304,10 +306,12 @@ def cmd_approvals(a) -> int:
         return 0
     if what in ("popup", "cards"):
         popup = what == "popup"
+        signin = bool(getattr(a, "sign_in", False))
         if arg not in ("add", "remove") or not a.name:
-            say(f"Use: flowstate approvals {what} add|remove NAME (the app's MCP client name"
-                + ("; an app on a key, token or OAuth sign-in: that sign-in's name)" if what == "cards"
-                   else ")"))
+            say(f"Use: flowstate approvals {what} add|remove NAME (the app's MCP client name, for "
+                f"an app this computer starts), or add|remove --sign-in NAME (the own name of the "
+                f"key or token an app on this computer uses over the LAN"
+                + (", or of an OAuth sign-in)" if not popup else ")"))
             return 2
         name = approvals.clean_client_name(a.name)
         if arg == "add":   # its answers then count as yours: your own y, as for approvals off
@@ -319,21 +323,30 @@ def cmd_approvals(a) -> int:
             try:
                 does = ("its approval popups count as your own answer" if popup else
                         "taps on its in-chat cards count as your own decisions")
-                if tty.ask(f"Add {name}? Then {does}. Type y to confirm: ").lower() not in ("y", "yes"):
+                whom = f"the sign-in {name}" if signin else name
+                if tty.ask(f"Add {term.safe(whom)}? Then {does}. Type y to confirm: ").lower() \
+                        not in ("y", "yes"):
                     say("Not confirmed; nothing changed.")
                     return 1
             finally:
                 tty.close()
-        lister = approvals.popup_clients if popup else approvals.card_clients
-        before = lister(db)
-        if popup:
-            names = approvals.change_popup_clients(db, name, arg == "add")
+        kind = "popup" if popup else "card"
+        if signin:
+            before = approvals.signins(db, kind)
+            names = approvals.change_signins(db, kind, name, arg == "add")
+            setting = f"{kind}_signins"
         else:
-            names = approvals.change_card_clients(db, name, arg == "add")
-        approvals.log_setting(db, "popup_clients" if popup else "card_clients",
-                              ", ".join(sorted(before)),
+            lister = approvals.popup_clients if popup else approvals.card_clients
+            before = lister(db)
+            if popup:
+                names = approvals.change_popup_clients(db, name, arg == "add")
+            else:
+                names = approvals.change_card_clients(db, name, arg == "add")
+            setting = "popup_clients" if popup else "card_clients"
+        approvals.log_setting(db, setting, ", ".join(sorted(before)),
                               f"{'added' if arg == 'add' else 'removed'} {name}")
-        say(("Popup apps: " if popup else "Card apps: ") + (", ".join(sorted(names)) or "none"))
+        say(("Popup " if popup else "Card ") + ("sign-ins: " if signin else "apps: ")
+            + term.safe(", ".join(sorted(names)) or "none"))
         return 0
     if what == "off" or (a.clear and pid is not None and approvals.is_on(db, pid)):
         tty = open_terminal()
@@ -364,9 +377,13 @@ def cmd_approvals(a) -> int:
         say(f"Phone links: {'on' if approvals.phone_on(db) else 'off'}"
             + ("" if approvals.relay_handle() else " (no relay set up)")
             + ("" if approvals.keys_ready() else "; not available in this release yet") + ".")
-        say("Popup apps: " + ", ".join(sorted(approvals.popup_clients(db))))
+        say("Popup apps: " + term.safe(", ".join(sorted(approvals.popup_clients(db)))))
+        say("Popup sign-ins (LAN keys / tokens of apps on this computer): "
+            + term.safe(", ".join(sorted(approvals.signins(db, "popup"))) or "none"))
         say("Card apps (their in-chat card taps count as yours): "
-            + (", ".join(sorted(approvals.card_clients(db))) or "none"))
+            + term.safe(", ".join(sorted(approvals.card_clients(db))) or "none"))
+        say("Card sign-ins (keys, tokens, OAuth apps): "
+            + term.safe(", ".join(sorted(approvals.signins(db, "card"))) or "none"))
         say("Chat approvals through the relay: "
             + ("on (AIs on the relay may approve / reject items that aren't yours alone)"
                if approvals.relay_chat_on(db) else "off (phone only)")
@@ -401,8 +418,10 @@ def register(sub) -> None:
     p = sub.add_parser("approvals", help="user-only approvals: status, on, off (off asks you to confirm)")
     p.add_argument("what", nargs="?", default="status", choices=["status", "on", "off", "phone", "popup", "cards"])
     p.add_argument("arg", nargs="?", help="phone: on|off; popup / cards: add|remove")
-    p.add_argument("name", nargs="?", help="popup / cards: the app's MCP client name (cards, "
-                   "for an app on a key, token or OAuth sign-in: that sign-in's own name)")
+    p.add_argument("name", nargs="?", help="popup / cards: the app's MCP client name (an app this "
+                   "computer starts); with --sign-in, a key's, token's or OAuth app's own name")
+    p.add_argument("--sign-in", dest="sign_in", action="store_true",
+                   help="popup / cards: NAME is a sign-in's own name (an app over the network)")
     p.add_argument("--project", help="one project's own setting (name or id)")
     p.add_argument("--clear", action="store_true", help="drop the project's own setting")
     p.add_argument("--db")
