@@ -9,6 +9,7 @@ import pytest
 from mcp import types
 from mcp.shared.memory import create_connected_server_and_client_session
 
+from flowstate import stored
 from flowstate import approvals, card_taps, conflict_cards, popup, review, waiting
 from flowstate.conflict_card_ui import CARD_HTML, MIME, UI_URI
 from flowstate.review_page import HOST, Page, create_app
@@ -525,7 +526,8 @@ def test_show_conflict_card_reads_one_or_all_and_never_decides(backend, seeded_d
     S = backend
     monkeypatch.setattr(conflict_cards, "client_has_ui", lambda: True)
     r, body = call(S, "show_conflict_card", {"project": "Alpha"})
-    assert body["shown"] == 0 and r.structuredContent == {"cards": [], "note": "No disagreement is waiting."}
+    assert body["shown"] == 0 and r.structuredContent == {"cards": [], "note": "No disagreement is waiting.",
+                                                   "records_are": stored.NOTE}   # task 55, N-F8
     a = decide(S, "Charge in USD only")["record"]["id"]
     b = decide(S, "Offer a yearly plan")["record"]["id"]
     c = decide(S, "Run on one server")["record"]["id"]

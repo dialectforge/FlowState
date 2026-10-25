@@ -104,16 +104,23 @@ def label(fallback: Optional[str]) -> str:
 
 
 def defused(result, card: bool = True):
-    """A card tool's answer as the model gets it (re-audit N-F8): its text part defused and
-    marked like every other answer (stored.py, audit D6); only the card's own data (`_ui`:
-    structuredContent and the tap codes in _meta, for the card's page, which writes every text
-    with textContent) stays as stored."""
+    """A card tool's answer as the model may see it (re-audit N-F8). Both model-visible parts,
+    the text and the card's structuredContent (`_ui["structured"]`), are defused and marked
+    like every other answer (stored.py, audit D6); the card pages write every text with
+    textContent, so a defused character only shows as a slightly changed one. Only the tap
+    codes (`_ui["taps"]`, sent in _meta, which the model doesn't get) stay as they are."""
     from . import stored
     ui = result.pop("_ui", None) if isinstance(result, dict) else None
     result = stored.defuse_all(stored.mark("", result))
     if card and isinstance(result, dict):
         if "error" not in result and "records_are" not in result:
             result = {"records_are": stored.NOTE, **result}
-        if ui is not None:
+        if isinstance(ui, dict):
+            ui = dict(ui)
+            if isinstance(ui.get("structured"), dict):
+                ui["structured"] = {"records_are": stored.NOTE,
+                                    **stored.defuse_all(ui["structured"])}
+            elif ui.get("structured") is not None:
+                ui["structured"] = stored.defuse_all(ui["structured"])
             result["_ui"] = ui
     return result
