@@ -103,22 +103,24 @@ def stdio_machine() -> Optional[str]:
 
 
 # "(via ...)" and "(signed in as ...)" are how FlowState shows a key's or sign-in's name next
-# to the app's; an app may not put them in its own name to look like one
-_LOOKALIKE = re.compile(r"\s*\(\s*(via|signed\s+in\s+as)\b[^)]*\)?", re.I)
+# to the app's; an app may not put them in its own name to look like one, nor hide them with
+# lookalike brackets or letters, invisible characters or direction marks (names.strip_marks),
+# nor call itself by a name FlowState uses for the user or for itself ("user", "phone", ...)
 
 
 def _app_name(client) -> Optional[str]:
     """The name an app sent, tidied, without anything that imitates FlowState's own marks."""
+    from . import names
     name = clean(client)
     if name is None:
         return None
-    return clean(_LOOKALIKE.sub("", name))
+    name = clean(names.strip_marks(name))
+    return None if name is None or names.reserved(name) else name
 
 
 def _sent_name(client) -> Optional[str]:
     """The MCP client name the app sent at initialize, or None (none sent: "unknown")."""
-    name = _app_name(client)
-    return None if name is None or name.lower() == "unknown" else name
+    return _app_name(client)
 
 
 def resolve(client: str, http: bool = False, token=None, headers: Optional[dict] = None,

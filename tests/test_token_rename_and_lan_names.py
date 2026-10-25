@@ -69,10 +69,10 @@ def test_rename_keeps_the_same_token_working(store):
 
 def test_rename_refusals_say_why(store):
     a, _ = store.add_token_client("Cursor", list(RA.SCOPES))
-    b, _ = store.add_token_client("Phone", list(RA.SCOPES))
+    b, _ = store.add_token_client("Pager", list(RA.SCOPES))
     for old, new, why in [("Nobody", "X", "no active app is named 'Nobody'"),
                           ("Cursor", "  ", "the new name is empty"),
-                          ("Cursor", "phone", "the name 'phone' is taken (by " + b),
+                          ("Cursor", "pager", "the name 'pager' is taken (by " + b),
                           ("Cursor", "Cursor", "already named 'Cursor'"),
                           ("Cursor", "x" * 51, "longer than 50"),
                           ("", "X", "say which app")]:
@@ -81,12 +81,12 @@ def test_rename_refusals_say_why(store):
         assert why in str(e.value), (old, new, str(e.value))
     store.rename_client("Cursor", "Work laptop")
     with pytest.raises(ValueError) as e:                 # a name another token had before
-        store.rename_client("Phone", "cursor")
+        store.rename_client("Pager", "cursor")
     assert "taken" in str(e.value) and a in str(e.value)
     store.rename_client("Work laptop", "Cursor")         # its own old name: allowed
     store.revoke_client(b)
     with pytest.raises(ValueError, match="no active app"):
-        store.rename_client("Phone", "Tablet")           # revoked: not renamed
+        store.rename_client("Pager", "Tablet")           # revoked: not renamed
 
 
 def test_rename_refuses_a_secret_looking_name(store):
@@ -317,12 +317,12 @@ def test_names_are_never_reused_for_a_new_token_key_or_rename(store):
     for name in ("Cursor", "cursor", "  CURSOR "):
         with pytest.raises(ValueError, match="taken"):
             store.add_token_client(name, list(RA.SCOPES))
-    b, _ = store.add_token_client("Phone", list(RA.SCOPES))
+    b, _ = store.add_token_client("Pager", list(RA.SCOPES))
     store.revoke_client(b)
     with pytest.raises(ValueError, match="taken"):
-        store.add_token_client("Phone", list(RA.SCOPES))          # a revoked token's name
+        store.add_token_client("Pager", list(RA.SCOPES))          # a revoked token's name
     with pytest.raises(ValueError, match="taken"):
-        store.rename_client("Cursor", "phone")                     # rename into a revoked name
+        store.rename_client("Cursor", "pager")                     # rename into a revoked name
     store.rename_client("Cursor", "Work laptop")
     with pytest.raises(ValueError, match="taken"):
         store.add_token_client("Cursor", list(RA.SCOPES))          # a former name
@@ -332,7 +332,8 @@ def test_names_are_never_reused_for_a_new_token_key_or_rename(store):
     app_keys.revoke(store, key_id=k)
     with pytest.raises(ValueError, match="taken"):
         app_keys.add(store, "Desk key")
-    app_keys.add(store, "Cursor")      # a key and a token are different sign-ins (as before)
+    with pytest.raises(ValueError, match="taken"):
+        app_keys.add(store, "Cursor")  # one list for keys and tokens since task 55 (N-F22)
 
 
 def test_an_oauth_app_signing_up_again_under_a_taken_name_gets_a_number(store):

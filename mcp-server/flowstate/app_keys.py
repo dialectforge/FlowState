@@ -37,12 +37,12 @@ def add(store: "RA.AuthStore", name: str, read_only: bool = False,
     workspace = " ".join((workspace or "").split())[:MAX_NAME] or None
     kid, key = "key_" + secrets.token_hex(6), _new_key()
     with store._conn() as c:
-        fold = name.casefold()   # one key per name, ever: who wrote what is matched by it
-        other = next((r["id"] for r in c.execute("SELECT id, name FROM app_keys")
-                      if (r["name"] or "").casefold() == fold), None)
+        # one name per key, token or OAuth app, ever: who wrote what is matched by it, and
+        # a pause switch is kept by name (remote_auth.AuthStore._name_taken)
+        other = store._name_taken(c, name)
         if other:
-            raise ValueError(f"the key name {name!r} is taken (by {other}, now or before it was "
-                             f"revoked); pick another, one per app")
+            raise ValueError(f"the key name {name!r} is taken (by {other}, now, before a rename "
+                             f"or before it was revoked); pick another, one per app")
         c.execute("INSERT INTO app_keys (id, name, hash, read_only, workspace, created_at) "
                   "VALUES (?, ?, ?, ?, ?, ?)",
                   (kid, name, RA._h(key), int(bool(read_only)), workspace, time.time()))

@@ -312,14 +312,16 @@ class Page:
     def set_app(self, form: dict) -> str:
         app = form.get("app", "")
         paused = form.get("paused") == "1"
-        names = activity.pause_names(self.db_path, app)
+        held = {} if paused else activity.still_paused_by(self.db_path, app)
+        names = activity.pause_names(self.db_path, app, paused)
         for n in names:
             was = activity.is_paused(self.db_path, n)
             activity.set_paused(self.db_path, n, paused, self.client)
             self._log(f"app:{n.strip()[:70]}", "paused" if was else "running",
                       "paused" if paused else "running")
         also = f" (with {', '.join(names[1:])}, the key or sign-in it uses)" if names[1:] else ""
-        return f"{app}{also}: {'paused' if paused else 'resumed'}."
+        return f"{app}{also}: {'paused' if paused else 'resumed'}." + "".join(
+            " " + activity.held_text(app, k, o) for k, o in held.items())
 
     # ------------------------------------------------------------ settings (local page only)
     def _log(self, scope: str, old: Optional[str], new: Optional[str]) -> None:

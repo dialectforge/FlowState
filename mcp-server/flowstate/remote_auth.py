@@ -32,6 +32,7 @@ import logging
 import os
 import secrets
 import sqlite3
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -60,6 +61,10 @@ PENDING_TTL = 600                 # consent page must be answered within 10 minu
 MAX_OAUTH_CLIENTS = 100
 PASSPHRASE_MIN = 12
 LOCKOUT_FAILS, LOCKOUT_WINDOW = 5, 900   # 5 wrong passphrases in 15 min -> wait 15 min
+# passphrase hashes (scrypt, 128 MiB each) running at once in this process; a try that can't
+# start within PASSPHRASE_WAIT seconds is answered "busy, try again in a moment" (audit N-F10)
+PASSPHRASE_HASHES, PASSPHRASE_WAIT = 1, 1.5
+_HASH_SLOTS = threading.BoundedSemaphore(PASSPHRASE_HASHES)
 
 # Where OAuth clients may send the browser back to. Hosts of the apps we expect, plus
 # loopback (Claude Code / Cursor desktop). Add more with `flowstate remote allow-redirect`.
@@ -125,6 +130,9 @@ CREATE TABLE IF NOT EXISTS app_keys (                                 -- see app
 CREATE TABLE IF NOT EXISTS client_names (                             -- names before a rename
     client_id TEXT NOT NULL, name TEXT NOT NULL, until REAL NOT NULL);
 CREATE INDEX IF NOT EXISTS client_names_client ON client_names(client_id);
+CREATE TABLE IF NOT EXISTS lan_exposures (                            -- audit N-F27
+    client_id TEXT PRIMARY KEY, first_at REAL NOT NULL, last_at REAL NOT NULL,
+    times INTEGER NOT NULL, last_ip TEXT, kept_at REAL);
 """
 
 
@@ -174,46 +182,104 @@ class AuthStore:
         return max(1, int(rows[-LOCKOUT_FAILS] + LOCKOUT_WINDOW - now))
 
     def check_passphrase(self, passphrase: str) -> bool:
-        with self._conn() as c:
-            row = c.execute("SELECT salt, hash FROM owner WHERE id = 1").fetchone()
-        ok = bool(row) and hmac.compare_digest(_scrypt(passphrase, row["salt"]), row["hash"])
-        if not ok:
-            with self._conn() as c:
-                c.execute("INSERT INTO failures (at) VALUES (?)", (time.time(),))
-        elif _log2n(row["salt"]) < SCRYPT_LOG2N:   # an older, lighter hash: upgrade it now
-            salt = _new_salt()
-            with self._conn() as c:
-                c.execute("UPDATE owner SET salt = ?, hash = ? WHERE id = 1 AND salt = ?",
-                          (salt, _scrypt(passphrase, salt), row["salt"]))
-        return ok
+        """True only for the right passphrase (try_passphrase: counted before hashing)."""
+        return self.try_passphrase(passphrase) == "ok"
 
-    # -- names: who wrote what is matched by the sign-in's name (identity.same_sign_in), so a
-    # name is never given to a second token or OAuth app: not one in use, not one revoked, not
-    # one an app had before a rename (case doesn't count). Keys keep their own list (app_keys).
+    def try_passphrase(self, passphrase: str) -> str:
+        """"ok", "wrong", "locked" (too many tries: nothing was hashed) or "busy" (another
+        passphrase is being checked right now: nothing was hashed or counted; try again in a
+        moment). Audit N-F10: each try is counted in the database before the slow hash, in one
+        statement, so tries sent at the same moment can't all slip under the limit (also
+        across processes sharing this file); and only PASSPHRASE_HASHES hashes run at once in
+        this process, so a burst can't take 128 MiB per try. A right passphrase doesn't count
+        (its slot is given back); a wrong one stays counted for LOCKOUT_WINDOW."""
+        if not _HASH_SLOTS.acquire(timeout=PASSPHRASE_WAIT):
+            return "busy"
+        try:
+            now = time.time()
+            with self._conn() as c:
+                c.execute("DELETE FROM failures WHERE at < ?", (now - LOCKOUT_WINDOW,))
+                cur = c.execute("INSERT INTO failures (at) SELECT ? WHERE (SELECT COUNT(*) FROM "
+                                "failures WHERE at >= ?) < ?",
+                                (now, now - LOCKOUT_WINDOW, LOCKOUT_FAILS))
+                slot = cur.lastrowid if cur.rowcount == 1 else None
+                row = c.execute("SELECT salt, hash FROM owner WHERE id = 1").fetchone()
+            if slot is None:
+                return "locked"
+            ok = bool(row) and hmac.compare_digest(_scrypt(passphrase, row["salt"]), row["hash"])
+            if not ok:
+                return "wrong"
+            with self._conn() as c:
+                c.execute("DELETE FROM failures WHERE rowid = ?", (slot,))
+            if _log2n(row["salt"]) < SCRYPT_LOG2N:   # an older, lighter hash: upgrade it now
+                salt = _new_salt()
+                with self._conn() as c:
+                    c.execute("UPDATE owner SET salt = ?, hash = ? WHERE id = 1 AND salt = ?",
+                              (salt, _scrypt(passphrase, salt), row["salt"]))
+            return "ok"
+        finally:
+            _HASH_SLOTS.release()
+
+    # -- names: who wrote what is matched by the sign-in's name (identity.same_sign_in), and
+    # pause switches are kept by name, so a name is never given to a second token, OAuth app
+    # or per-app LAN key (one list for all three): not one in use, not one revoked, not one an
+    # app had before a rename. Compared by names.skeleton, so case, invisible characters and
+    # lookalike letters ("Сursor" with a Cyrillic С) don't make a different name. Pairs made
+    # before 2.4.4 (a key and a token both "Cursor") keep working as they are.
     def _name_taken(self, c, name: str, except_id: Optional[str] = None) -> Optional[str]:
-        """The id that has (or had) this name, else None."""
-        fold = name.casefold()
-        for r in c.execute("SELECT id, name FROM clients"):
-            if r["id"] != except_id and (r["name"] or "").casefold() == fold:
+        """The id of the token, OAuth app or key that has (or had) this name, else None."""
+        from .names import skeleton
+        key = skeleton(name)
+        rows = list(c.execute("SELECT id, name FROM clients")) + \
+            list(c.execute("SELECT client_id AS id, name FROM client_names")) + \
+            list(c.execute("SELECT id, name FROM app_keys"))
+        for r in rows:
+            if r["id"] != except_id and skeleton(r["name"] or "") == key:
                 return r["id"]
-        for r in c.execute("SELECT client_id, name FROM client_names"):
-            if r["client_id"] != except_id and (r["name"] or "").casefold() == fold:
-                return r["client_id"]
         return None
 
     @staticmethod
     def check_name(name: str, what: str = "the name") -> str:
         """The tidied name, or ValueError with a sentence: empty, too long for "(signed in as
-        <name>)" to be recorded whole, or secret-looking."""
+        <name>)" to be recorded whole, secret-looking, with invisible characters, imitating
+        FlowState's "(via ...)" marks, or one FlowState uses itself ("unknown", "phone", ...)."""
+        from . import names
         from .identity import clean
+        if names.invisible(name or ""):
+            raise ValueError(f"{what} holds invisible characters (zero-width spaces, direction "
+                             f"marks or the like); type it plainly")
         name = " ".join((name or "").split())
         if not name:
             raise ValueError(f"{what} is empty; give the app a name")
+        if names.tidy(name) != name:
+            raise ValueError(f"{what} uses special forms of letters (full-width or the like); "
+                             f"type it plainly: {names.tidy(name)!r}")
         if len(name) > MAX_NAME:
             raise ValueError(f"{what} is longer than {MAX_NAME} characters")
         if clean(name) != name:
             raise ValueError(f"{what} looks like it holds a secret; pick a plain name")
+        if names.has_marks(name):
+            raise ValueError(f"{what} can't contain \"(via ...)\" or \"(signed in as ...)\": "
+                             f"FlowState adds those itself")
+        if names.reserved(name):
+            raise ValueError(f"{name!r} is a name FlowState uses itself (for you, your phone, "
+                             f"or callers it doesn't know); pick another, e.g. 'My {name}'")
         return name
+
+    @staticmethod
+    def oauth_name(raw) -> str:
+        """The name an OAuth app gave itself at sign-up, made safe the way check_name checks a
+        typed one (the app can't be asked to retype it): tidied, without "(via ...)" marks,
+        not secret-looking, not one of FlowState's own names, short enough for "(2)"."""
+        from . import names
+        from .identity import clean
+        base = names.strip_marks(raw if isinstance(raw, str) else "")
+        base = base[:MAX_NAME - 5].strip()
+        if not base or clean(base) != base:
+            return "unnamed OAuth app"
+        if names.reserved(base):
+            base = f"OAuth app {base}"[:MAX_NAME - 5].strip()
+        return base
 
     # -- clients
     def add_token_client(self, name: str, scopes: list[str],
@@ -249,8 +315,7 @@ class AuthStore:
                 raise RegistrationError("invalid_client_metadata",
                                         "too many registered clients; revoke some first")
             # the app picks its own name here, so a taken one gets a number: "Claude (2)"
-            base = " ".join((info.client_name or "unnamed app").split())[:MAX_NAME - 5].strip() \
-                or "unnamed app"
+            base = self.oauth_name(info.client_name)
             name, n = base, 1
             while self._name_taken(c, name):
                 n += 1
@@ -325,6 +390,34 @@ class AuthStore:
                       (now, client_id))
             c.execute("DELETE FROM pending WHERE client_id = ?", (client_id,))
         return n > 0
+
+    # -- remote tokens sent over the plain-HTTP LAN listener (audit N-F27)
+    def note_lan_exposure(self, client_id: str, ip: Optional[str]) -> None:
+        """A remote token came in on the LAN listener from another computer and was refused
+        (lan-tokens off). It still crossed the network readable by anyone on it, so the user
+        is told (`flowstate remote clients`, the brief) until they revoke it or keep it. Not
+        revoked here: that would break the user's app without them knowing why, and the token
+        is only as exposed as their own network is."""
+        now = time.time()
+        with self._conn() as c:
+            c.execute("INSERT INTO lan_exposures (client_id, first_at, last_at, times, last_ip) "
+                      "VALUES (?, ?, ?, 1, ?) ON CONFLICT(client_id) DO UPDATE SET "
+                      "last_at = excluded.last_at, times = times + 1, last_ip = excluded.last_ip, "
+                      "kept_at = NULL", (client_id, now, now, (ip or "")[:64] or None))
+
+    def lan_exposures(self) -> dict:
+        """{client id: row} of live tokens sent over the LAN that the user hasn't kept."""
+        with self._conn() as c:
+            return {r["client_id"]: dict(r) for r in c.execute(
+                "SELECT e.*, cl.name FROM lan_exposures e JOIN clients cl ON cl.id = e.client_id "
+                "WHERE cl.revoked_at IS NULL AND e.kept_at IS NULL")}
+
+    def keep_exposed(self, client_id: str) -> bool:
+        """The user's `flowstate remote keep-token`: keep using a token sent over the LAN; the
+        warning goes until it is sent that way again."""
+        with self._conn() as c:
+            return c.execute("UPDATE lan_exposures SET kept_at = ? WHERE client_id = ? AND "
+                             "kept_at IS NULL", (time.time(), client_id)).rowcount > 0
 
     # -- tokens
     def issue(self, kind: str, client_id: str, scopes: list[str], family: str,
@@ -674,8 +767,14 @@ def consent_routes(provider: FlowStateOAuthProvider):
         if locked:
             return page(429, name=name, redirect_host=host, scopes=params.scopes, pid=pid,
                         locked=locked)
-        ok = await asyncio.to_thread(store.check_passphrase, str(form.get("passphrase", "")))
-        if not ok:
+        got = await asyncio.to_thread(store.try_passphrase, str(form.get("passphrase", "")))
+        if got == "busy":
+            return page(503, name=name, redirect_host=host, scopes=params.scopes, pid=pid,
+                        error="Another passphrase is being checked; try again in a moment.")
+        if got == "locked":
+            return page(429, name=name, redirect_host=host, scopes=params.scopes, pid=pid,
+                        locked=max(1, store.locked_for()))
+        if got != "ok":
             log.warning("wrong owner passphrase on the consent page (client %s)", cid)
             return page(403, name=name, redirect_host=host, scopes=params.scopes, pid=pid,
                         error="Wrong passphrase.", locked=store.locked_for())
@@ -758,6 +857,39 @@ def lan_remote_tokens_allowed() -> bool:
         return paths.load_config().get("lan_remote_tokens") is True
     except Exception:  # noqa: BLE001 - an unreadable settings file means the safe default
         return False
+
+
+def exposure_text(cid: str, name: str, at: float) -> str:
+    from datetime import datetime
+    day = datetime.fromtimestamp(at).strftime("%Y-%m-%d")
+    return (f"The remote token {name!r} ({cid}) was sent over plain HTTP from another computer "
+            f"on your network on {day}; FlowState refused it, but anyone on that network could "
+            f"have read it and could use it over the internet. Revoke it with `flowstate remote "
+            f"revoke --client {cid}` and make a new one (or give that app a LAN key: `flowstate "
+            f"keys add`); to keep it anyway: `flowstate remote keep-token --client {cid}`.")
+
+
+def exposure_lines() -> list[str]:
+    """The brief's warning lines for remote tokens sent over the LAN (exposure_text), read
+    without creating the settings database; [] when there is none or it can't be read."""
+    path = auth_db_path()
+    if not path.exists():
+        return []
+    try:
+        conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=1.0)
+        try:
+            if not conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND "
+                                "name = 'lan_exposures'").fetchone():
+                return []
+            rows = conn.execute(
+                "SELECT e.client_id, cl.name, e.last_at FROM lan_exposures e JOIN clients cl "
+                "ON cl.id = e.client_id WHERE cl.revoked_at IS NULL AND e.kept_at IS NULL "
+                "ORDER BY e.last_at DESC LIMIT 3").fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return []
+    return ["Security warning (tell the user once): " + exposure_text(*r) for r in rows]
 
 
 def lan_warning(host: str) -> Optional[str]:
@@ -853,7 +985,17 @@ class Gate:
                         and not is_loopback((scope.get("client") or ("",))[0])
                         and not lan_remote_tokens_allowed()):
                     # LAN traffic is plain HTTP: a remote token seen on the Wi-Fi would work
-                    # from anywhere through the relay or tunnel (audit D4)
+                    # from anywhere through the relay or tunnel (audit D4); it has crossed the
+                    # network already, so the user is told (audit N-F27)
+                    try:
+                        await asyncio.to_thread(self.checker.store.note_lan_exposure,
+                                                info.client_id, ip)
+                    except Exception as e:  # noqa: BLE001 - the refusal must still go out
+                        log.warning("could not record a remote token sent over the LAN: %s",
+                                    type(e).__name__)
+                    log.warning("remote token %s was sent over plain HTTP from another "
+                                "computer and refused; revoke it (flowstate remote clients)",
+                                info.client_id)
                     await _json(send_wrapped, 401, {"error": "remote_token_on_lan", "message":
                                 LAN_REMOTE_REFUSED},
                                 [(b"www-authenticate", b'Bearer error="invalid_token"')])

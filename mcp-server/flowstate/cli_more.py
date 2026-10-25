@@ -70,9 +70,12 @@ def cmd_apps(a) -> int:
         if not a.app:
             say("Name the app with --app (see `flowstate apps list`).")
             return 1
+        held = activity.still_paused_by(db, a.app) if a.action == "resume" else {}
         names = activity.set_paused_all(db, a.app, a.action == "pause", "cli")
         also = f" (with the key / sign-in it uses: {', '.join(names[1:])})" if names[1:] else ""
         say(f"{a.app}{also}: {'paused (it can still read; its writes are refused)' if a.action == 'pause' else 'resumed'}.")
+        for key, others in held.items():
+            say(activity.held_text(a.app, key, others))
         return 0
     for r in activity.recent(db, a.app, a.limit):
         say(f"{r['at']} {r['app']}: {r['tool']}{('/' + r['action']) if r['action'] else ''}"

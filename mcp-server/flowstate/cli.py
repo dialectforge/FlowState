@@ -407,6 +407,7 @@ def cmd_remote(a) -> int:
         rows = store.list_clients()
         if not rows:
             say("No apps have been given access yet.")
+        exposed = store.lan_exposures()
         for c in rows:
             state = "REVOKED " + _when(c["revoked_at"]) if c["revoked_at"] else \
                 ("waiting for approval" if not c["approved_at"] else "active")
@@ -414,7 +415,22 @@ def cmd_remote(a) -> int:
             say(f"{c['id']}  {c['name']!r}  {c['kind']}  {c['scopes']}  added {_when(c['created_at'])}"
                 f"  last used {_when(c['last_used_at'])}  {state}"
                 + (f"  (was {', '.join(repr(n) for n in was)})" if was else ""))
+            e = exposed.get(c["id"])
+            if e:   # audit N-F27
+                say(f"    WARNING: {RA.exposure_text(c['id'], c['name'], e['last_at'])} "
+                    f"(sent that way {e['times']} time(s), last from {e['last_ip'] or '?'} at "
+                    f"{_when(e['last_at'])})")
         return 0
+    if a.action == "keep-token":
+        if not a.client_id:
+            say("Which token? flowstate remote keep-token --client <id from `flowstate remote "
+                "clients`>")
+            return 1
+        ok = store.keep_exposed(a.client_id)
+        say(f"{a.client_id}: kept; the warning about it being sent over the LAN is gone (it "
+            f"comes back if it is sent that way again)." if ok
+            else f"{a.client_id}: no warning to clear.")
+        return 0 if ok else 1
     if a.action == "rename":
         names = list(a.names or [])
         if len(names) != 2:
@@ -551,7 +567,7 @@ def build_parser() -> argparse.ArgumentParser:
                        description="rename OLD NEW: give a token or OAuth app a new name; the "
                                    "same token keeps working (OLD may be its id)")
     p.add_argument("action", choices=["status", "passphrase", "add-client", "clients", "rename",
-                                      "revoke", "allow-redirect", "lan-tokens"])
+                                      "revoke", "allow-redirect", "lan-tokens", "keep-token"])
     p.add_argument("names", nargs="*", metavar="NAME",
                    help="rename: the app's current name (or id), then its new name")
     p.add_argument("--db", help="rename: the database whose pause switch to carry over")
@@ -559,7 +575,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--read-only", action="store_true", help="add-client: read-only access")
     p.add_argument("--days", type=int, help="add-client: token expires after N days")
     p.add_argument("--to-file", help="add-client: write the token to this file instead of the screen")
-    p.add_argument("--client", dest="client_id", help="revoke: the app's id")
+    p.add_argument("--client", dest="client_id", help="revoke / keep-token: the app's id")
     p.add_argument("--from", dest="source", help="passphrase: read it from this file")
     p.set_defaults(fn=cmd_remote)
     from . import app_keys

@@ -127,6 +127,14 @@ SIZE_NAMES = tuple(SIZES)
 _MORE = " ...(handoff list shows it all)"
 
 
+def _exposure_lines() -> list:
+    try:
+        from .remote_auth import exposure_lines
+        return exposure_lines()
+    except Exception:  # noqa: BLE001 - a warning line never breaks the brief
+        return []
+
+
 def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
                 cap: Optional[int] = None, size: str = "standard",
                 shown: Optional[list] = None, since: Optional[str] = None) -> str:
@@ -243,6 +251,8 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
             if b.add(line):
                 _note(shown, "handoff", _HANDOFF_ID.match(line))
             room -= len(line) + 1
+    for line in _exposure_lines():   # a remote token sent over the plain LAN (audit N-F27)
+        b.add(line)
     if project.get("description"):
         b.add(_one_line(project["description"], 200))
     if session:
