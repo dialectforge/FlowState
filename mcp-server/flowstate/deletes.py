@@ -561,9 +561,12 @@ def delete_now(db_path: Path, project_id: int, rtype: str, rid, client: str = "u
 
 def _carry_out(db_path: Path, pid: int, rtype: str, rid: int, client: str,
                asked: Optional[dict] = None, confirm_name: Optional[str] = None,
-               pname: Optional[str] = None, title: Optional[str] = None) -> dict:
+               pname: Optional[str] = None, title: Optional[str] = None,
+               same_save=None) -> dict:
     """The delete itself, in one transaction. `asked` (an approved request's counts): refuse
-    if what would go changed since; None for a delete made at once."""
+    if what would go changed since; None for a delete made at once. `same_save(conn,
+    edit_id)`, if given, writes more in that same transaction just before it commits (a
+    session summary's "removed" decision): if it raises, nothing is deleted."""
     table = TYPES[rtype][0]
     conn = connect(db_path)
     try:
@@ -609,6 +612,8 @@ def _carry_out(db_path: Path, pid: int, rtype: str, rid: int, client: str,
                 "tool": f"delete/{rtype}", "old_row": json.dumps(old),
                 "new_row": json.dumps(new) if new is not None else None,
                 "client": (client or "")[:80], "created_at": at}, client)
+        if same_save is not None:
+            same_save(conn, edit_id)
         conn.execute("COMMIT")
     except Exception:
         if conn.in_transaction:

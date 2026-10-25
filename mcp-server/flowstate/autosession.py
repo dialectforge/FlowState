@@ -296,7 +296,8 @@ class AutoSessions:
             recs = session_contents.refs(conn, row["session_id"])
         except sqlite3.Error:
             recs = None
-        summary = build_summary(row["client"], project, events, trimmed)
+        summary = build_summary(row["client"], project, events, trimmed,
+                                _taken_back(conn, recs))
         outcomes = {"auto_captured": True, "needs_review": True, "close_reason": reason,
                     "client": row["client"], "calls": row["call_count"]}
         if recs:
@@ -410,10 +411,31 @@ def _and(parts: list) -> str:
     return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
 
 
-def build_summary(client: str, project: str, events: list, trimmed: bool = False) -> str:
+def _taken_back(conn, recs) -> dict:
+    """kind -> how many records the session saved that are no longer there when it closes
+    (an undo took one back, or the session deleted it): the summary counts what is still
+    there (audit 53, N-F39). From the run ledger's records; empty without one."""
+    from .history import TABLES
+    out: dict = {}
+    for rtype, rid, verb in recs or []:
+        if rtype not in _KINDS or str(verb).split(", ")[0] != "saved":
+            continue
+        try:
+            there = conn.execute(f'SELECT 1 FROM "{TABLES[rtype]}" WHERE id = ?',
+                                 (int(rid),)).fetchone()
+        except (sqlite3.Error, KeyError, ValueError, TypeError):
+            continue
+        if there is None:
+            out[rtype] = out.get(rtype, 0) + 1
+    return out
+
+
+def build_summary(client: str, project: str, events: list, trimmed: bool = False,
+                  taken_back: Optional[dict] = None) -> str:
     """Short, plain summary from the event log: what the session saved, counted by kind.
     Starts with AUTO_TAG (the caller swaps it for OFF_TAG / SKIP_TAG). Which records they
-    are is shown beside it (session_contents.py), not in it."""
+    are is shown beside it (session_contents.py), not in it. `taken_back`: kind -> saved
+    records no longer there (_taken_back), not counted as saved."""
     saved, suggested, other, chores = {}, {}, {}, {}
     for e in events:
         if e.startswith("read:"):
@@ -432,6 +454,11 @@ def build_summary(client: str, project: str, events: list, trimmed: bool = False
         else:
             words = _WORDS.get(what) or what.replace("/", " ").replace("_", " ")
             other[words] = other.get(words, 0) + 1
+    for k, n in (taken_back or {}).items():
+        if k in saved:
+            saved[k] -= n
+            if saved[k] <= 0:
+                del saved[k]
     parts = []
     if saved:
         parts.append("saved " + _and([_n(saved[k], k) for k in _KINDS if k in saved]))
