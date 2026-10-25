@@ -690,7 +690,8 @@ protocol is in [docs/relay-protocol.md](docs/relay-protocol.md).
   secret values in `variable`. Older records are not re-scanned automatically; run `flowstate scan-secrets`.
 - **The off-site copy keeps one backup** (a single commit, replaced each night); history depth
   comes from your local backups. It is encrypted on this computer (AES-256-GCM) before it leaves,
-  so GitHub only holds the encrypted file; the key stays in this computer's credential store.
+  so GitHub only holds the encrypted file and a small unencrypted note with its date, size and
+  checksum; the key stays in this computer's credential store.
   Save the recovery code (`flowstate offsite key`): without it, a new computer can't read the
   copy. GitHub may keep an older night's commit reachable for a while after the force-push, and
   copies pushed by FlowState before 2.4.4 were not encrypted (delete that repository's old

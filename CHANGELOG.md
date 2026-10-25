@@ -380,7 +380,7 @@
 Review cards
 - An app that connects over the network (a LAN key, a remote token, or an OAuth app through your
   tunnel or the relay) now gets the in-chat cards only if you added that key's, token's or OAuth
-  app's own name to the card list (`flowstate approvals cards add "<name>"`). The name the app
+  app's own name to the card list (`flowstate approvals cards add --sign-in "<name>"`). The name the app
   gives itself no longer counts, so an app can't get the cards by calling itself "claude-ai". The
   built-in `claude-ai` entry covers Claude Desktop on this computer only, and the shared LAN
   token never gets cards.
@@ -503,6 +503,86 @@ Review pages, settings and rules
 - `flowstate update --rollback` to a version before 2.4.4 reminds you to set your remote-access
   passphrase again (`flowstate remote passphrase`): 2.4.4 stores it in a stronger form older
   versions can't check.
+
+### Fixes after the second re-check (audit of 2.4.4, part 4)
+
+Approve / Reject boxes
+- An app with a LAN key, LAN token or LAN sign-in can no longer answer its own Approve / Reject
+  boxes by calling itself "claude-code". Boxes go only to apps on this computer: one this
+  computer starts (stdio, matched by the name it sends, as before), or one on this computer that
+  uses the LAN listener and whose key's or token's own name you added with `flowstate approvals
+  popup add --sign-in "<name>"` (or the tick on the review page's Popup row). Apps on other
+  computers, the shared LAN token, the relay and the tunnel never get boxes. The log says which
+  sign-in answered: "chat (claude-code, signed in as Laptop key)".
+- The popup and card lists now keep app names and sign-in names apart, so adding the app name
+  `claude-ai` never trusts a network sign-in that happens to be called `claude-ai`. An OAuth app
+  that registers again and is named "Claude (2)" keeps the place "Claude" had.
+- "Did you say this?" items get no box in the review walk, like hard rules: you confirm them on
+  the review page, your phone or with `flowstate approve <id>`.
+- A card tap whose save fails no longer uses up the card's code.
+
+Data-git
+- `flowstate data-git migrate` works on the second computer (it failed with "use -f to force
+  removal" when another computer had pushed first), and its commit adds FlowState's
+  `.gitignore`, so a computer still on 2.4.3 can't commit its database again.
+- From 2.4.4 data-git shares the markdown exports, not the database. With two 2.4.4 computers,
+  an export file both wrote no longer stops every sync with a clash: this computer's copy wins
+  (it is made again from this computer's database at each sync), and exports of projects this
+  computer doesn't have are left alone. The README says so.
+- A data folder that is itself a link works with data-git. `.gitattributes` and `.gitmodules`
+  are never committed or pulled. `data-git clone` refuses a repository with links before it
+  writes anything, and the clone is owner-only at once. An attachment is never written through
+  a link. The export's "run this to import" line names the project by its number, so no
+  AI-written name lands in a shell command.
+
+Your terminal
+- Nothing an app wrote (a hard rule, a review item, a project, app or key name) can send escape
+  codes to your terminal any more: control and invisible characters show as visible escapes
+  (`\x1b`), so you type `y` to exactly what is stored. A new hard rule can't contain them.
+- The per-app limit on waiting hard rules counts the app's sign-in, not the name it sends.
+
+Erase
+- Erase also takes the text of earlier versions of a record (a renamed todo's first title), its
+  evidence snippets, a todo's claim history and the topic of a disagreement card about it. A
+  delete now takes a decision's evidence with it (undo brings it back).
+- Erase no longer changes review items that only share a short phrase with the erased record
+  (a component called "Authentication"); a whole sentence quoted from it still goes.
+- A short title like "fix" no longer blanks another record's session-log line. A record deleted
+  together with its project can be erased (the project's delete can still be undone). A hard
+  rule you removed can be erased: `flowstate erase rule:ID` (an active rule points you to
+  `flowstate rules remove`). `--deleted-before 0` includes deletes made the same second, a huge
+  number no longer crashes, and composed / decomposed accents match.
+
+Files and the off-site copy
+- `flowstate backup --dir DIR` makes the folder you chose owner-only like the default one, and
+  `flowstate tighten --dir DIR` does it on request. An empty folder or a `flowstate-*` folder
+  doesn't count as FlowState's, and `._` files from exFAT / SMB drives don't stop it.
+- On a drive where chmod is accepted but changes nothing, FlowState warns instead of saying it
+  made files owner-only at every start. The warning is once per drive; a Windows access-list
+  failure (USB drive) warns too.
+- An empty off-site key file or Keychain item now says so and what to do, instead of "try
+  again"; it is never replaced. Two first-time pushes at the same moment make one key (Windows).
+  `flowstate offsite setup` exits 1 when the key can't be read, and `restore` no longer says
+  "nothing was pushed".
+- Setup no longer crashes on a drive without file permissions when the `--config` file exists.
+
+Remote access and names
+- A request through a proxy on this computer no longer counts as coming from this computer
+  (FlowState sees the proxy's forwarding headers; set `FLOWSTATE_LAN_PROXY=1` for a proxy that
+  adds none). A remote token on it counts as sent over the LAN.
+- Old "phone (<handle>)" labels are hidden from apps elsewhere also after you turn the relay off
+  or enrol again under a new handle.
+- More lookalike letters (Armenian, Cherokee, Lisu, Coptic) and angle brackets in "(via ...)"
+  are caught.
+- An OAuth registration you never approved no longer holds a name such as "Cursor", so your own
+  `flowstate keys add --name Cursor` works; the app gets a number if you approve it later.
+- `flowstate remote keep-token` asks for your `y` in a terminal, and the brief's warning no
+  longer gives an AI the command.
+
+Brief and defusing
+- The project's description, linked-project alerts and the last session's summary now sit
+  inside the brief's "records" section, and links hidden with entities encoded twice are broken
+  too.
 
 ## 2.4.3 - 2026-10-23
 
