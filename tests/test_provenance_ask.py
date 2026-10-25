@@ -140,6 +140,8 @@ def test_ask_answers_with_ids_and_says_when_it_has_nothing(backend, seeded_db):
                          "summary": "The LAN server uses port 8766 on 10.0.0.5",
                          "details": "Public listener is 8767."})
     call(S, "rules", {"action": "add", "project": "Alpha", "rule": "Never restart the public listener"})
+    from conftest import approve_rules   # the app's rule waits for the user (audit D2)
+    approve_rules(seeded_db)
     r = _j(call(S, "ask", {"question": "Which port does the LAN server use?", "project": "Alpha"}))
     assert "port 8766" in r["answer"] and "[learning #" in r["answer"] and "user" in r["answer"]
     assert r["sources"][0]["type"] in ("learning", "rule") and r["mode"] == "keywords"

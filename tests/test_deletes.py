@@ -97,6 +97,8 @@ def rich(backend, seeded_db):
     ok(call(S, "manage_todos", {"action": "add", "project": "Alpha", "title": "after the bug",
                                 "blocked_by_problem": 1}))
     ok(call(S, "manage_rules", {"action": "add", "project": "Alpha", "rule": "never push"}))
+    from conftest import approve_rules   # an app's rule waits for the user (audit D2)
+    approve_rules(S.backend.db_path)
     ok(call(S, "manage_handoffs", {"action": "leave", "project": "Alpha", "where_i_was": "half way",
                                    "next_step": "finish"}))
     ok(call(S, "manage_variables", {"action": "create", "project": "Alpha", "name": "port",

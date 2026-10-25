@@ -52,13 +52,15 @@ def test_who_tells_two_windows_of_one_app_apart(backend, monkeypatch):
     from flowstate import identity
     S = backend
     call(S, "log_work", {"project": "Alpha", "kind": "decision", "summary": "Window one decides"})
-    call(S, "manage_rules", {"action": "add", "project": "Alpha", "rule": "Never store card numbers."})
+    # (a handoff, not a hard rule: an app's rule waits for the user since 2.4.4, audit D2)
+    call(S, "manage_handoffs", {"action": "leave", "project": "Alpha", "where_i_was": "half way",
+                                "next_step": "finish"})
     monkeypatch.setattr(identity, "PROCESS_SESSION", "second-window")
     call(S, "log_work", {"project": "Alpha", "kind": "decision", "summary": "Window two decides"})
     call(S, "manage_todos", {"action": "claim", "project": "Alpha", "todo_id": 1})
     rows = json.loads(call(S, "manage_history", {"action": "who", "project": "Alpha"}))["rows"]
     by = {r["what"]: r.get("session") for r in rows}
-    one = by[next(k for k in by if k.startswith("added hard rule"))]        # window one's
+    one = by[next(k for k in by if "handoff" in k)]                         # window one's
     decided = {v for k, v in by.items() if k.startswith("created decision #")}
     assert all(r["app"] == "Cursor" for r in rows) and len(decided) == 2 and one in decided, by
     assert by[next(k for k in by if k.startswith("claimed todo #1"))] not in (None, one), by

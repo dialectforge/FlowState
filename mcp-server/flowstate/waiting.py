@@ -213,7 +213,8 @@ ELSEWHERE = ("on the computer where FlowState runs (the FlowState review shortcu
 # ---------------------------------------------------------------- 1. the chat walk
 _KIND = {"session_summary": "session summary", "cleanup": "clean-up idea", "edit": "markdown edit",
          "conflict": "possible conflict", "disagreement": "disagreement",
-         "setting": "review setting", "source": "said by you?", "delete": "delete request"}
+         "setting": "review setting", "source": "said by you?", "delete": "delete request",
+         "rule": "hard rule", "handoff": "handoff note"}
 
 
 LINE_MAX = 160          # one item's line, as the app reads it in the JSON answer

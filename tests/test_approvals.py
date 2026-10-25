@@ -417,7 +417,7 @@ def test_phone_approve_end_to_end(on, relay):
     assert r.status_code == 200 and r.json()["ok"], r.text
     assert _q(db, "SELECT COUNT(*) FROM todos WHERE id = 1") == [(0,)]
     assert _q(db, "SELECT status, decided_by FROM review_items WHERE id = ?", item) == \
-        [("approved", "phone (testbox)")]
+        [("approved", "phone")]   # no handle (audit D19)
     assert _q(db, "SELECT used_at IS NOT NULL FROM approval_requests WHERE item_id = ?", item) == [(1,)]
     assert _q(db, "SELECT path, decision FROM approval_log WHERE item_id = ?", item) == [("phone", "approved")]
     again = _decide(c, item, grant, body["token"])

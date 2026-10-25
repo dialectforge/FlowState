@@ -68,6 +68,8 @@ def test_brief_rules_and_handoffs_are_recorded_as_shown(backend):
         async with create_connected_server_and_client_session(S.server) as c:
             await c.call_tool("manage_rules", {"action": "add", "project": "Alpha",
                                                "rule": "Never push to main"})
+            from conftest import approve_rules   # waits for the user (audit D2)
+            approve_rules(db)
             await c.call_tool("manage_handoffs", {"action": "leave", "project": "Alpha",
                                                   "where_i_was": "halfway", "next_step": "finish"})
             await c.call_tool("start_here", {"project": "Alpha"})

@@ -12,7 +12,8 @@ the content (a handoff picked up, a link or rule removed but kept and listable),
 
 Profiles (FLOWSTATE_TOOLS or `flowstate --tools`): unset = the 12 default tools; core = the
 6 everyday tools; full (or all, the older spelling) = the default tools plus the 6 specialist
-ones. Every profile still answers every tool name, including the older names (surface.py).
+ones. Every profile answers the default tools, including their older names (surface.py); the
+specialist ones are refused outside full, even by name (surface.outside_profile, audit D1).
 """
 
 import os

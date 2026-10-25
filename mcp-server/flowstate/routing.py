@@ -251,12 +251,14 @@ def route_tool(name: str, args: dict, db_path) -> Any:
             return tools.git_init()
         elif action == "status":
             return tools.git_status()
-        elif action == "sync":
-            return tools.git_sync(args.get("commit_message"))
-        elif action == "set_remote":
-            return tools.git_set_remote(args["remote_url"])
-        elif action == "clone":
-            return tools.git_clone(args["remote_url"], args.get("local_path"))
+        elif action in ("sync", "set_remote", "clone"):
+            # the user's own commands (flowstate data-git ...), never a tool: they send data
+            # off this computer or pull a repository into it (audit D1)
+            from .tools.git_ops import USER_ONLY
+            what = {"sync": ("push FlowState data", "sync"),
+                    "set_remote": ("set where FlowState data is pushed", "remote <url>"),
+                    "clone": ("clone a data repository into this computer", "clone <url>")}[action]
+            return {"error": "user_only", "message": USER_ONLY.format(what=what[0], cmd=what[1])}
         elif action == "history":
             return tools.git_history(args.get("limit", 20))
     

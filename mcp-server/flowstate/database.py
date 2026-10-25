@@ -60,7 +60,10 @@ SCHEMA_PATH = schema_path()
 def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
     """Get a database connection with row factory."""
     path = db_path or default_db_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    # a new database (and the folders made for it) starts owner-only (audit D9); SQLite gives
+    # its -wal / -shm files the same mode
+    from .privatefs import private_file
+    private_file(path)
     
     conn = dbconn.connect(str(path), timeout=5.0)
     conn.row_factory = sqlite3.Row

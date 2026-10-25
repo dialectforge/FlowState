@@ -57,6 +57,10 @@ _SESSION_ENV = {
     "FLOWSTATE_REVIEW_PORT": "0",   # the in-process review page (waiting.py): any free port
     "FLOWSTATE_UPDATE_CHECK": "0",  # the daily update check (updates.py): never asks GitHub
     "FLOWSTATE_CALL_TIMEOUT": TEST_CALL_TIMEOUT,   # see TEST_CALL_TIMEOUT
+    # in-process calls may use every tool (2.4.4 refuses a tool outside the profile, audit D1);
+    # tests of the default and core profiles set FLOWSTATE_TOOLS themselves. Servers the tests
+    # start (server_env) keep the default profile.
+    "FLOWSTATE_TOOLS": "full",
     "GIT_AUTHOR_NAME": "FlowState Tests", "GIT_AUTHOR_EMAIL": "tests@example.invalid",
     "GIT_COMMITTER_NAME": "FlowState Tests", "GIT_COMMITTER_EMAIL": "tests@example.invalid",
 }
@@ -229,3 +233,16 @@ def server_env(db: Path, **extra) -> dict:
                 "FLOWSTATE_GUARD_LOG": os.environ["FLOWSTATE_GUARD_LOG"]})
     env.update({k: str(v) for k, v in extra.items()})
     return env
+
+
+def approve_rules(db) -> list:
+    """Approve every hard rule an app asked for, as the user's own terminal would (2.4.4: an
+    app's rule waits in the review queue, audit D2). Returns the new rule ids."""
+    from flowstate import review, review_apply
+    out = []
+    for it in review.list_items(Path(db), None, "pending", 100)["items"]:
+        if it["kind"] == "rule":
+            r = review_apply.approve(Path(db), review.get_item(Path(db), it["id"]), {},
+                                     "I set this rule myself", "command-line", {})
+            out.append(r["record"]["id"])
+    return out

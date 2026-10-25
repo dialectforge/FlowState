@@ -111,7 +111,8 @@ def cmd_export_md(a) -> int:
         if out.exists() and not a.force:
             say(f"{out} exists; add --force to overwrite it.")
             return 1
-        out.write_text(text, encoding="utf-8")
+        from .privatefs import write_private
+        write_private(out, text)   # it holds the project's records: owner-only (audit D9)
         say(f"Wrote {out}.")
     else:
         print(text, end="")

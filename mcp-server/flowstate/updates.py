@@ -160,8 +160,9 @@ def read_state(path: Optional[Path] = None) -> dict:
 
 def write_state(changes: dict, path: Optional[Path] = None) -> dict:
     """Merge `changes` into update.json (atomic replace) and return the new state."""
+    from .privatefs import private_dir
     p = Path(path or state_file())
-    p.parent.mkdir(parents=True, exist_ok=True)
+    private_dir(p.parent)
     state = {**read_state(p), **changes}
     tmp = p.with_name(f"{p.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     tmp.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")

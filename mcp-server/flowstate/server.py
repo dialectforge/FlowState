@@ -57,7 +57,7 @@ server = Server("flowstate", version="2.4.4", instructions=guide.INSTRUCTIONS)
 
 
 from .tooldefs import ALL_TOOLS  # noqa: E402 - the public tools (surface.py maps their calls)
-from . import __version__, surface, tool_labels, updates, waiting  # noqa: E402
+from . import __version__, offsite, stored, surface, tool_labels, updates, waiting  # noqa: E402
 from .routing import route_tool  # noqa: E402
 
 
@@ -241,6 +241,11 @@ async def _call_internal(name: str, arguments: dict, shown: str = "") -> types.C
     if denied:
         log.info("refused %s for %s: %s", name, who, denied[0])
         return _error(*denied)
+    hidden = surface.outside_profile(shown or name, name, arguments or {}, tool_labels.profile()) \
+        if shown else None   # a call by name (call_tool); FlowState's own calls pass no name
+    if hidden:   # hidden is refused, not just unlisted (audit D1)
+        return _error("not_in_profile", surface.NOT_IN_PROFILE.format(
+            tool=hidden, profile=tool_labels.profile()))
     client = _client_name()
     ident = _identity(client, arguments or {})
     app = ident.app
@@ -286,6 +291,8 @@ async def _call_internal(name: str, arguments: dict, shown: str = "") -> types.C
         except Exception as e:  # noqa: BLE001
             out = _error("tool_failed", f"{type(e).__name__}: {e}")
             return out
+        if name not in CARD_TOOLS:   # stored text is data, not instructions (audit D6)
+            result = stored.defuse_all(stored.mark(name, result))
         out = _ok(result)
         return out
     finally:   # bookkeeping gets what is left of the time; past it, it finishes on its own
@@ -563,7 +570,8 @@ def _start_here(args: dict, client: str, meta: Optional[dict] = None) -> str:
         links.mark_looked(db_path, project["id"], client)
     except Exception as e:  # noqa: BLE001
         log.warning("could not record start_here time: %s", e)
-    warning = "\n".join(w for w in (backend.health, _relay_warning(), updates.brief_lines(__version__)) if w)
+    warning = "\n".join(w for w in (backend.health, _relay_warning(), updates.brief_lines(__version__),
+                                     _safe_call(offsite.key_line)) if w)
     return f"{warning}\n\n{text}" if warning else text
 
 
@@ -1110,6 +1118,9 @@ def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
         locked = approvals.user_only(item) and item["status"] == "pending"
         if locked and agent and (no := provenance.agent_refusal(backend.db_path, item, name)):
             return no   # a "did the user say this?" item: the user's alone
+        if locked and agent and item["kind"] == "rule":   # hard rules: the user's alone (D2)
+            from . import rules
+            return rules.agent_refusal(item)
         if locked and agent and name == "review_approve":   # only the user's own click or key
             return _user_only({"item_id": item["id"], "kind": item["kind"]}, item["id"], client)
         own = review.own_item_refusal(_own_text(item), identity.current(), user_request)
@@ -1250,7 +1261,7 @@ def main():
                     help="public mode: also accept the owner's LAN token")
     ap.add_argument("--tools", choices=["default", "core", "full", "all"], default=None,
                     help="which tools to list (also FLOWSTATE_TOOLS): default 12, core 6, "
-                         "full 18 (all = full); every tool name still answers")
+                         "full 18 (all = full); a tool outside the profile is refused")
     args = ap.parse_args()
     if args.tools:
         os.environ["FLOWSTATE_TOOLS"] = args.tools
@@ -1264,6 +1275,9 @@ def main():
         elif len(token) < 16:
             raise SystemExit("HTTP transport requires a bearer token of 16+ characters: set "
                              "FLOWSTATE_TOKEN, or store one with `flowstate token migrate --from <file>`")
+        from .remote_auth import lan_warning
+        if not args.public_url and lan_warning(args.host):
+            log.warning(lan_warning(args.host))
         run_http(args.host, args.port, token, db_path=db_path, public_url=args.public_url,
                  allow_master_token=args.allow_master_token)
     else:

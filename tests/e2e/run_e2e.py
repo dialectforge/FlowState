@@ -382,9 +382,16 @@ def s2_day(W):
 
     # rules, links, shared component
     r = cc1.call("manage_rules", action="add", project=P, rule="Never store customer card numbers in our database.")
-    R.check(2, "manage_rules add (user's hard rule)", "receipt" in r and not err(r), r)
-    W.rule_id = (r.get("rule") or {}).get("id")
+    R.check(2, "manage_rules add waits for the user (an app can't set a hard rule, audit D2)",
+            r.get("queued_for_review") and "receipt" in r and not err(r), r)
+    item = r.get("queued_for_review")
+    a = cursor.call("manage_review", action="approve", project=P, item_id=item,
+                    user_request="The user said: yes, add the card numbers rule")
+    R.check(2, "another app can't approve the hard rule for the user", a.get("error") == "user_only", a)
+    rc, out = W.cli_in_terminal(["approve", str(item)], ["y"])
+    R.check(2, "the user approves the rule in their own terminal", rc == 0, short(out, 300))
     r = cc1.call("manage_rules", action="list", project=P)
+    W.rule_id = next((x["id"] for x in r.get("rules", []) if "card numbers" in x.get("rule", "")), None)
     R.check(2, "manage_rules list shows the rule", "card numbers" in json.dumps(r), r)
     b = cursor.call("start_here", project=P, size="quick")
     R.check(2, "hard rule is shown first in the brief", "card numbers" in b.split("Open todos")[0], short(b, 300))
@@ -595,11 +602,24 @@ def s2_day(W):
     subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
     r = cc1.call("manage_data_git", action="status")
     R.check(2, "manage_data_git status before init says it isn't a repository yet", r.get("initialized") is False, r)
-    for act, extra in (("init", {}), ("set_remote", {"remote_url": str(bare)})):
+    r = cc1.call("manage_data_git", action="init")
+    R.check(2, "manage_data_git init (sandbox data folder)", not err(r), r)
+    for act, extra in (("set_remote", {"remote_url": str(bare)}), ("sync", {})):
         r = cc1.call("manage_data_git", action=act, **extra)
-        R.check(2, f"manage_data_git {act} (sandbox data folder, local bare remote)", not err(r), r)
-    r = cc1.call("manage_data_git", action="sync", commit_message="e2e sync")
-    if not R.check(2, "manage_data_git sync to a new, empty remote pushes the first commit", r.get("success") is True, r):
+        R.check(2, f"manage_data_git {act} from an app is refused: the user's own command (D1)",
+                r.get("error") == "user_only", r)
+    rc, out = W.cli_no_terminal("data-git", "remote", str(bare), "--unchecked", stdin="y\n")
+    R.check(2, "an agent's shell can't set the data-git remote (no terminal, piped y)", rc == 2, short(out, 200))
+    rc, out = W.cli_in_terminal(["data-git", "remote", str(bare), "--unchecked"], ["y"])
+    R.check(2, "the user sets the data-git remote in their terminal", rc == 0, short(out, 300))
+    rc, out = W.cli_in_terminal(["data-git", "sync", "-m", "e2e sync"], ["y"])
+    r = {"success": rc == 0, "output": short(out, 300)}
+    pushed = subprocess.run(["git", "ls-tree", "-r", "--name-only", "HEAD"], cwd=bare,
+                            capture_output=True, text=True).stdout.split()
+    R.check(2, "data-git pushes only the markdown export and README, never the database (D1)",
+            pushed and all(p in ("README.md", ".gitignore") or p.startswith(("export/", "projects/"))
+                           for p in pushed) and any(p.startswith("export/") for p in pushed), pushed)
+    if not R.check(2, "data-git sync to a new, empty remote pushes the first commit", r.get("success") is True, r):
         R.finding("low", "First data-git sync to a new empty remote always fails, and calls it a conflict",
                   "manage_data_git init; set_remote <a new empty repo>; sync -> {success:false, step:'pull', "
                   "error:\"couldn't find remote ref main\", conflict:true}. git_sync pulls before the first push, "
@@ -608,17 +628,20 @@ def s2_day(W):
     r = cc1.call("manage_data_git", action="history", limit=5)
     R.check(2, "manage_data_git history shows the local commit", "e2e sync" in json.dumps(r), r)
     r = cc1.call("manage_data_git", action="clone", remote_url=str(bare), local_path=str(W.root / "clone"))
-    R.check(2, "manage_data_git clone into an empty folder answers (no crash)", isinstance(r, dict), r)
-    r = cc1.call("manage_data_git", action="set_remote", remote_url="https://flowstate-e2e.invalid/bakery.git")
-    r = cc1.call("manage_data_git", action="sync", commit_message="offline sync")
-    if not R.check(2, "manage_data_git sync to an unreachable host does not claim it pushed",
+    R.check(2, "manage_data_git clone from an app is refused (D1)", r.get("error") == "user_only", r)
+    W.cli_in_terminal(["data-git", "remote", "https://flowstate-e2e.invalid/bakery.git", "--unchecked"], ["y"])
+    rc, out = W.cli_in_terminal(["data-git", "sync", "-m", "offline sync"], ["y"])
+    r = {"success": rc == 0, "pushed": "Pushed." in out, "output": short(out, 300)}
+    if not R.check(2, "data-git sync to an unreachable host does not claim it pushed",
                    not (r.get("success") is True and r.get("pushed")), r):
         R.finding("medium", "Data-git sync reports success and pushed=true when the remote can't be reached",
                   "manage_data_git set_remote https://flowstate-e2e.invalid/x.git; sync -> {success:true, "
                   "pushed:true}. git_sync treats any 'Could not resolve host' error from pull and push as fine. "
                   "Offline, the user is told their data was pushed when no off-site copy exists.")
     r = cc1.call("manage_rules", action="add", project=P, rule="Always ask before changing prices.")
-    rid = (r.get("rule") or {}).get("id")
+    W.cli_in_terminal(["approve", str(r.get("queued_for_review"))], ["y"])   # the user's OK (D2)
+    rid = next((x["id"] for x in cc1.call("manage_rules", action="list", project=P).get("rules", [])
+                if "changing prices" in x.get("rule", "")), None)
     r = cursor.call("manage_rules", action="remove", project=P, rule_id=rid)
     R.check(2, "manage_rules remove without the user's words is refused", err(r), r)
     r = cursor.call("manage_rules", action="remove", project=P, rule_id=rid,
@@ -2172,7 +2195,7 @@ def s15_without_terminal(W):
             (relay / f).unlink(missing_ok=True)
     R.check(15, "nothing in S15 was approved except by the user's own answer",
             W.count("review_items", f"id IN ({','.join(map(str, ids))}) AND status = 'approved' "
-                                    "AND decided_by NOT LIKE 'chat (%' AND decided_by NOT LIKE 'phone (%' "
+                                    "AND decided_by NOT LIKE 'chat (%' AND decided_by != 'phone' "   # no handle (D19)
                                     "AND decided_by != 'review-page'") == 0)
 
 

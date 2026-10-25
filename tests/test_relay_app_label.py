@@ -33,6 +33,16 @@ def http_calls(db, token, calls, client_name, relay=True):
         return c.post("/mcp", content=json.dumps(msg), headers=hh)
 
     out = []
+    from flowstate import remote_auth as RA
+    allowed = RA.lan_remote_tokens_allowed   # LAN calls from another computer: the user allowed
+    RA.lan_remote_tokens_allowed = lambda: True   # remote tokens there (lan-tokens on, audit D4)
+    try:
+        return _http_calls(db, token, calls, client_name, relay, rpc, out, create_http_app)
+    finally:
+        RA.lan_remote_tokens_allowed = allowed
+
+
+def _http_calls(db, token, calls, client_name, relay, rpc, out, create_http_app):
     with TestClient(create_http_app("t" * 32, db_path=db, relay=relay),
                     client=("203.0.113.9", 50123), base_url="http://127.0.0.1:8766") as c:
         r = rpc(c, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {},

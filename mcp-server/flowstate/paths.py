@@ -124,11 +124,12 @@ def save_config(data: dict) -> Path:
     """Write the whole settings file atomically (a temp file of its own, then replace). Use
     update_config to change one setting: it keeps the others."""
     import secrets
+    from .privatefs import private_dir, write_private
     p = config_file()
-    p.parent.mkdir(parents=True, exist_ok=True)
+    private_dir(p.parent)
     tmp = p.with_name(f"{p.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
     try:
-        tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        write_private(tmp, json.dumps(data, indent=2) + "\n")   # owner-only (audit D9)
         replace_file(tmp, p)
     finally:
         if tmp.exists():
@@ -180,8 +181,9 @@ def update_config(change) -> Path:
     """Change the settings: `change(cfg)` edits the dict in place, under the lock, on a strict
     read (a file that exists but can't be read raises ConfigUnreadable and is left as it is,
     so one typo can't wipe the other settings)."""
+    from .privatefs import private_dir
     p = config_file()
-    p.parent.mkdir(parents=True, exist_ok=True)
+    private_dir(p.parent)   # owner-only when FlowState makes it (audit D9)
     with _lock(p):
         cfg = _read_config(p)
         change(cfg)

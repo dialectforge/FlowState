@@ -76,7 +76,7 @@ SITE = "https://flowstatemcp.com"
 ACTION = "approve_review"
 REVIEW_ACTION = "open_review"   # the phone review list (review_phone.py): item 0
 START_ACTION = "start_review"   # the site's ticket for /review/start (review_phone.py): item 0
-USER_ONLY_KINDS = ("delete", "setting", "source")
+USER_ONLY_KINDS = ("delete", "setting", "source", "rule")
 
 # The flowstatemcp.com approval-grant public keys (ES256 / P-256 JWKs), pinned per release:
 # fsa-1 active, fsa-2 backup so the site can rotate without a forced update.
@@ -352,7 +352,7 @@ def user_only(item: Optional[dict]) -> bool:
     approvals were on, and every "did the user say this?" item (provenance.py)."""
     if not item or item.get("kind") not in USER_ONLY_KINDS:
         return False
-    if item["kind"] in ("setting", "source"):   # source: always, approvals on or off
+    if item["kind"] in ("setting", "source", "rule"):   # source, rule: always, approvals on or off
         return True
     try:
         return bool(json.loads(item.get("payload") or "{}").get("user_only"))
@@ -578,6 +578,10 @@ def describe(item: dict, project: str, db_path: Optional[Path] = None) -> str:
         title = title if len(title) <= 60 else title[:57] + "..."
         return (f'mark the {p.get("record_type") or "record"} "{title}" in {project} as '
                 f"something you said yourself (user_stated)")
+    if item["kind"] == "rule":
+        rule = " ".join(str(p.get("rule") or "").split())
+        rule = rule if len(rule) <= 120 else rule[:117] + "..."
+        return f'add the hard rule "{rule}" to {project} (every AI there is told to never break it)'
     if item["kind"] == "delete":
         if db_path is not None:
             try:
@@ -763,9 +767,19 @@ def _claims(grant: str, handle: Optional[str], now: Optional[datetime], keys: Op
     return claims
 
 
+def require_phone_on(db_path: Path) -> None:
+    """Every phone decision re-checks the setting (audit D13): `approvals phone off` also
+    closes phone pages that are already open."""
+    if not phone_on(db_path):
+        raise ApprovalError("phone_off", "Phone review is turned off on this FlowState, so "
+                                         "nothing was decided. Decide on the computer, or turn "
+                                         "it back on there: flowstate approvals phone on.")
+
+
 def verify_grant(db_path: Path, grant: str, item_id: int, handle: Optional[str] = None,
                  now: Optional[datetime] = None, keys: Optional[dict] = None) -> dict:
     """Check a phone grant for `item_id`. Returns its claims; raises ApprovalError."""
+    require_phone_on(db_path)
     claims = _claims(grant, handle, now, keys, ACTION, item_id)
     item, nonce = claims["item"], claims["nonce"]
     conn = _conn(db_path)
@@ -790,6 +804,7 @@ def verify_review_grant(db_path: Path, grant: str, handle: Optional[str] = None,
                         now: Optional[datetime] = None, keys: Optional[dict] = None) -> dict:
     """Check a phone grant that opens the waiting list (action open_review, item 0) and use up
     its one-use code. Returns its claims; raises ApprovalError."""
+    require_phone_on(db_path)
     claims = _claims(grant, handle, now, keys, REVIEW_ACTION, 0)
     if not use_review_nonce(db_path, claims["nonce"]):
         raise ApprovalError("grant_used", "This link was already used or is out of date. "

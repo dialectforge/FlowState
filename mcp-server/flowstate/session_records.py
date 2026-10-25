@@ -362,7 +362,7 @@ def _why_not(e: dict, action: str) -> str:
 def decide(db_path, item_id: int, record, action: str, client: str,
            path: Optional[str] = None) -> dict:
     """The user's Keep / Remove / Bring back on one record of a waiting session summary.
-    `client` labels who did it (the surface, e.g. "review-page", "phone (<handle>)");
+    `client` labels who did it (the surface, e.g. "review-page", "phone");
     `path` the approval_log path (default approvals.path_of(client)). Raises RecordError
     (also for the delete's and undo's own refusals, with their message)."""
     from . import approvals, deletes, history, review, safety

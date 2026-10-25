@@ -120,6 +120,31 @@ def translate(name: str, args: dict) -> tuple[str, dict]:
     return internal, args
 
 
+NOT_IN_PROFILE = ("{tool} isn't one of this FlowState's tools (tool profile: {profile}), so it "
+                  "was refused. Only the user can turn it on (FLOWSTATE_TOOLS=full in the app's "
+                  "FlowState settings).")
+
+
+def outside_profile(shown: str, internal: str, args: dict, profile: str) -> Optional[str]:
+    """The public tool a call belongs to when the current profile doesn't list it, else None.
+    Hidden is refused, not just unlisted (2.4.4, audit D1): an app calling manage_data_git,
+    or its older name git, by name in the default profile gets nothing. Only the specialist
+    tools (tool_labels.FULL_ONLY) are held back; core still answers the default tools, because
+    briefs and answers name them. Older calls that moved to a listed tool still work."""
+    from . import tool_labels
+    if profile == "full":
+        return None
+    if shown in tool_labels.FULL_ONLY:
+        return shown
+    action = (args or {}).get("action")
+    if (shown, action) in _MOVED or (internal, action) in _MOVED:
+        return None
+    for tool in tool_labels.FULL_ONLY:
+        if any(i == internal for i, _ in ROUTES[tool].values()):
+            return tool
+    return None
+
+
 def is_old_name(name: str) -> bool:
     return name in OLD_NAMES
 

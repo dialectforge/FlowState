@@ -30,7 +30,8 @@ def client_view() -> dict:
     return view
 
 
-def test_client_view_unchanged(backend):
+def test_client_view_unchanged(backend, monkeypatch):
+    monkeypatch.delenv("FLOWSTATE_TOOLS", raising=False)   # the default profile, as snapshotted
     want = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
     got = json.loads(json.dumps(client_view()))
     assert [t["name"] for t in got["tools"]] == [t["name"] for t in want["tools"]]

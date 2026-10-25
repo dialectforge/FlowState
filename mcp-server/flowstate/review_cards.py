@@ -113,7 +113,7 @@ def _words(it: dict, project: str, db_path: Path) -> dict:
                         "other. They fit together: the flag is dismissed. Neither decision is "
                         "changed.",
                 "approve_label": "They conflict", "reject_label": "They fit together"}
-    label = {"setting": "Review setting", "source": "Did you say this?",
+    label = {"setting": "Review setting", "source": "Did you say this?", "rule": "Hard rule",
              "delete": "Delete request"}.get(kind, kind.replace("_", " ").capitalize())
     return {"title": _sentence(approvals.describe(it, project, db_path)) + "?",
             "kind_label": label, "does": "", "approve_label": "Approve", "reject_label": "Reject"}

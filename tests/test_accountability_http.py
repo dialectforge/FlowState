@@ -90,6 +90,8 @@ def test_lan_key_without_workspace_uses_the_header(lan, seeded_db):
     _, key = _add_key(seeded_db, "Phone")
     _calls(lan.base, key, [("rules", {"action": "add", "project": "Alpha", "rule": "Be kind"})],
            headers={"X-FlowState-Workspace": "phone-ws"})
+    from conftest import approve_rules   # the app's rule waits for the user (audit D2)
+    approve_rules(seeded_db)
     assert _q(seeded_db, "SELECT app, model, machine, identity_source FROM project_rules") == \
         [("Self Named App", None, "phone-ws (signed in as Phone)", "app_key")]
 

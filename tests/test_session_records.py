@@ -389,7 +389,7 @@ def test_phone_list_record_taps_then_keep_all(backend, relay):
     [v] = [x for x in r.json()["items"] if x["id"] == item]
     [e] = [x for x in v["contents"]["entries"] if x["kind"] == "change"]
     assert e["state"] == "removed" and e["actions"] == ["restore"]
-    assert _decisions(db, item)[f"change:{cid}"]["by"] == "phone (testbox)"
+    assert _decisions(db, item)[f"change:{cid}"]["by"] == "phone"   # no handle (audit D19)
     r = c.post("/review/record", content=json.dumps({"token": token, "item_id": item,
                "record": f"change:{cid}", "action": "keep"}), headers=JSON_H)
     assert r.status_code == 409 and "already removed" in r.json()["message"]

@@ -15,7 +15,9 @@ def _calls(tmp_path):
     f.write_text("hello world\n", encoding="utf-8")
     A = {"project": "Alpha"}
     return [
-        ("manage_rules", {**A, "action": "add", "rule": "Never log card numbers."}, "rule #1"),
+        # an app's rule waits for the user (audit D2); the user approves it before the remove
+        ("manage_rules", {**A, "action": "add", "rule": "Never log card numbers."}, "review_item #"),
+        ("_user_approves_rules", {"action": None}, None),
         ("manage_links", {**A, "action": "add", "link_type": "uses", "target_project": "Beta Project"}, "link #"),
         ("manage_links", {**A, "action": "add", "link_type": "url", "url": "https://example.com/spec"}, "link #"),
         ("manage_files", {**A, "action": "attach", "file_path": str(f)}, "attachment #1"),
@@ -40,6 +42,10 @@ def test_every_write_names_what_it_saved(backend, tmp_path):
         async with create_connected_server_and_client_session(
                 backend.server, client_info=types.Implementation(name="Cursor", version="1")) as c:
             for name, args, want in _calls(tmp_path):
+                if name == "_user_approves_rules":
+                    from conftest import approve_rules
+                    approve_rules(backend.backend.db_path)
+                    continue
                 r = await c.call_tool(name, args)
                 body = json.loads(r.content[0].text)
                 out.append((name, args["action"], r.isError, body.get("receipt"), want, body))

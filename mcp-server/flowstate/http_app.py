@@ -40,7 +40,11 @@ def create_http_app(token: Optional[str], path: str = "/mcp", db_path: Optional[
     manager = StreamableHTTPSessionManager(app=S.server, json_response=False, stateless=False)
 
     async def health(request):
-        # Deliberately says nothing about the data; safe to expose through a tunnel.
+        # Deliberately says nothing about the data; safe to expose through a tunnel. Not
+        # through the relay: every relay address is public (certificate logs), so answering
+        # there would tell anyone whether that user's computer is on (audit D15).
+        if relay:
+            return JSONResponse({"error": "not found"}, status_code=404)
         return JSONResponse({"ok": True, "service": "flowstate"})
 
     from .approve_page import routes as approve_routes

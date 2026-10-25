@@ -153,7 +153,7 @@ class AuthStore:
     def set_passphrase(self, passphrase: str) -> None:
         if len(passphrase) < PASSPHRASE_MIN:
             raise ValueError(f"the passphrase must be at least {PASSPHRASE_MIN} characters")
-        salt = secrets.token_bytes(16)
+        salt = _new_salt()
         with self._conn() as c:
             c.execute("INSERT OR REPLACE INTO owner (id, salt, hash, set_at) VALUES (1, ?, ?, ?)",
                       (salt, _scrypt(passphrase, salt), time.time()))
@@ -180,6 +180,11 @@ class AuthStore:
         if not ok:
             with self._conn() as c:
                 c.execute("INSERT INTO failures (at) VALUES (?)", (time.time(),))
+        elif _log2n(row["salt"]) < SCRYPT_LOG2N:   # an older, lighter hash: upgrade it now
+            salt = _new_salt()
+            with self._conn() as c:
+                c.execute("UPDATE owner SET salt = ?, hash = ? WHERE id = 1 AND salt = ?",
+                          (salt, _scrypt(passphrase, salt), row["salt"]))
         return ok
 
     # -- names: who wrote what is matched by the sign-in's name (identity.same_sign_in), so a
@@ -394,8 +399,30 @@ class AuthStore:
                       (time.time(), client_id))
 
 
+# Passphrase hashing (2.4.4, audit D21): new and changed passphrases use scrypt N=2^17, r=8,
+# p=1 (OWASP's current advice); hashes from older versions used N=2^14 and still work, and are
+# re-hashed with the new settings at the next successful sign-in. The cost travels in the salt
+# column (no schema change): b"FSN" + one byte log2(N) + 16 random bytes; a plain 16-byte salt
+# is the old N=2^14.
+SCRYPT_LOG2N = 17
+_SALT_TAG = b"FSN"
+
+
+def _new_salt() -> bytes:
+    return _SALT_TAG + bytes([SCRYPT_LOG2N]) + secrets.token_bytes(16)
+
+
+def _log2n(salt: bytes) -> int:
+    salt = bytes(salt)
+    if len(salt) == 20 and salt[:3] == _SALT_TAG and 14 <= salt[3] <= 20:
+        return salt[3]
+    return 14
+
+
 def _scrypt(passphrase: str, salt: bytes) -> bytes:
-    return hashlib.scrypt(passphrase.encode(), salt=salt, n=2 ** 14, r=8, p=1, dklen=32)
+    n, r = 2 ** _log2n(salt), 8
+    return hashlib.scrypt(passphrase.encode(), salt=bytes(salt), n=n, r=r, p=1, dklen=32,
+                          maxmem=256 * n * r + (1 << 20))
 
 
 # ---------------------------------------------------------------- OAuth provider
@@ -717,6 +744,32 @@ def is_loopback(peer) -> bool:
     return (mapped or ip).is_loopback
 
 
+LAN_REMOTE_REFUSED = (
+    "This is a remote-access token (for the relay or tunnel), and the LAN listener is plain, "
+    "unencrypted HTTP, so FlowState doesn't accept it from another computer: anyone on the "
+    "network could copy it and use it over the internet. Use a LAN key (`flowstate keys "
+    "add`), or the user can allow it with `flowstate remote lan-tokens on`.")
+
+
+def lan_remote_tokens_allowed() -> bool:
+    """The user's own `flowstate remote lan-tokens on` (config.json "lan_remote_tokens")."""
+    from . import paths
+    try:
+        return paths.load_config().get("lan_remote_tokens") is True
+    except Exception:  # noqa: BLE001 - an unreadable settings file means the safe default
+        return False
+
+
+def lan_warning(host: str) -> Optional[str]:
+    """The start-up line for a LAN listener on anything but this computer (audit D4)."""
+    if host in ("localhost",) or is_loopback(host):
+        return None
+    return (f"LAN mode on {host}: this is plain HTTP, NOT encrypted. The token and every record "
+            f"cross the network readable by anyone on it. Use it only on a network you trust "
+            f"(not public Wi-Fi), with per-app LAN keys (flowstate keys add). Remote-access "
+            f"tokens are refused here unless you allow them (flowstate remote lan-tokens on).")
+
+
 class Gate:
     """Outermost layer: Host allow-list, rate limits, one access-log line per request
     (method, path without query, status, time, client, IP; never bodies or headers), and
@@ -795,6 +848,15 @@ class Gate:
                         challenge += f', resource_metadata="{self.rmd}", scope="{" ".join(SCOPES)}"'
                     await _json(send_wrapped, 401, {"error": "unauthorized"},
                                 [(b"www-authenticate", challenge.encode())])
+                    return
+                if (self.listener == "lan" and info.identity_source == "remote_token"
+                        and not is_loopback((scope.get("client") or ("",))[0])
+                        and not lan_remote_tokens_allowed()):
+                    # LAN traffic is plain HTTP: a remote token seen on the Wi-Fi would work
+                    # from anywhere through the relay or tunnel (audit D4)
+                    await _json(send_wrapped, 401, {"error": "remote_token_on_lan", "message":
+                                LAN_REMOTE_REFUSED},
+                                [(b"www-authenticate", b'Bearer error="invalid_token"')])
                     return
                 who = f"{info.client_id}({info.client_name})"
                 ok, wait = self.per_client.allow("client:" + info.client_id)

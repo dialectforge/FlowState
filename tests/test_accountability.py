@@ -90,10 +90,13 @@ def pre_012_db(tmp_path, monkeypatch):
     return db
 
 
+LATER = {"project_rules": ["set_by_user"]}   # added by later migrations (024)
+
+
 def _snapshot(db):
     out = {}
     for t in AFFECTED:
-        old_cols = [c for c in _cols(db, t) if c not in AFFECTED[t]]
+        old_cols = [c for c in _cols(db, t) if c not in AFFECTED[t] and c not in LATER.get(t, ())]
         out[t] = _q(db, f'SELECT {", ".join(old_cols)} FROM "{t}" ORDER BY rowid')
     return out
 
@@ -150,7 +153,8 @@ def test_recording_still_works_before_012(pre_012_db):
     """Writers check the columns, so a database 012 has not reached keeps working."""
     from flowstate import review, rules
     item = review.add_item(pre_012_db, 1, "todo", "still works", None, {}, "Cursor")
-    assert item and rules.add(pre_012_db, 1, "Keep it short", "Cursor")["rule"]["id"]
+    assert item and rules.add(pre_012_db, 1, "Keep it short", "Cursor")["queued_for_review"]
+    assert rules.add_by_user(pre_012_db, 1, "Keep it shorter")["rule"]["id"]
 
 
 # ---------------------------------------------------------------- identity: stdio
@@ -177,6 +181,8 @@ def test_stdio_machine_defaults_to_hostname_and_model_to_env(backend, seeded_db,
     monkeypatch.delenv("FLOWSTATE_WORKSPACE", raising=False)
     monkeypatch.setenv("FLOWSTATE_MODEL", "env-model")
     _call(backend, [("rules", {"action": "add", "project": "Alpha", "rule": "No force push"})])
+    from conftest import approve_rules   # the app's rule waits for the user (audit D2)
+    approve_rules(seeded_db)             # approved, it keeps the asking app's identity
     assert _q(seeded_db, "SELECT app, model, machine, identity_source FROM project_rules") == \
         [("Test App", "env-model", identity.clean(socket.gethostname()), "self_reported")]
     # the argument wins over the environment

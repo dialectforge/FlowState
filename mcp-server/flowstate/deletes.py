@@ -19,9 +19,9 @@ is refused (history.py): deleting again needs a new request.
 
 Retention: the copies are edit-history rows, kept as long as the database (FlowState never
 prunes record_history) and in every backup. So a delete is recoverable, not an erasure: the
-text stays in the database file. Not copied: the meaning-search cache (meaning_index), which
+text stays in the database file until the user runs `flowstate erase` (erase.py). Not copied: the meaning-search cache (meaning_index), which
 is rebuilt from the records. Left in place: rows that only name a record by type and id
-without a foreign key (record_meta, memory_fts, link_alerts.record_id); ids are never reused
+without a foreign key (record_meta, link_alerts.record_id; memory_fts rows go, 2.4.4); ids are never reused
 (AUTOINCREMENT), so they can't attach to another record, and undo finds them as they were.
 """
 
@@ -554,7 +554,8 @@ def delete_now(db_path: Path, project_id: int, rtype: str, rid, client: str = "u
     if d["with"]:
         what += " with " + ", ".join(f"{n} {k}" for k, n in d["with"].items())
     out["safety_copy"] = copy.name
-    out["note"] = f"Deleted {what} (safety copy taken). Undo: {out['undo']}"
+    out["note"] = f"Deleted {what} (safety copy taken). Undo: {out['undo']}" \
+        + _files_note(d["with"].get("attachments", 0), rtype, d["id"])
     return out
 
 
@@ -598,6 +599,7 @@ def _carry_out(db_path: Path, pid: int, rtype: str, rid: int, client: str,
         for (t, k) in gone:   # rows without a foreign key to it (links); the rest are gone
             conn.execute(f'DELETE FROM "{t}" WHERE "{history.row_key(conn, t)}" = ?', (k,))
         _verify(conn, gone, changed, before)
+        _unindex(conn, gone)
         edit_id = history.new_edit_id()
         at = history._now()
         for (t, k), old in list(gone.items()) + list(changed.items()):
@@ -614,12 +616,34 @@ def _carry_out(db_path: Path, pid: int, rtype: str, rid: int, client: str,
         raise
     finally:
         conn.close()
+    files = sum(1 for (t, _k) in gone if t == "attachments")
     return {"deleted": {"record_type": rtype, "id": rid, "title": title,
                         "with": now, "changed_rows": len(changed)},
             "edit_id": edit_id,
             "undo": undo_call(pname or str(pid), rtype, rid),
             "note": ("Deleted. Everything is kept in the edit history; the undo call above puts "
-                     "it all back.")}
+                     "it all back.") + _files_note(files, rtype, rid)}
+
+
+def _files_note(files: int, rtype: str, rid: int) -> str:
+    """Attached files stay on disk after a delete (audit D12); erase removes them."""
+    return (f" The {files} attached file(s) stay on disk in FlowState's projects folder; the "
+            f"user can remove them for good with `flowstate erase {rtype}:{rid}` in their "
+            f"terminal." if files else "")
+
+
+def _unindex(conn, gone: dict) -> None:
+    """Keyword-search rows (memory_fts) of the removed rows go too (audit D5): search must not
+    find deleted text. Undo doesn't need them; nothing current writes that index."""
+    from .erase import _FTS_TYPES
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'memory_fts'").fetchone():
+        return
+    for (t, k) in gone:
+        kinds = _FTS_TYPES.get(t)
+        if kinds:
+            conn.execute(f"DELETE FROM memory_fts WHERE content_type IN "
+                         f"({','.join('?' * len(kinds))}) AND content_id IN (?, ?)",
+                         (*kinds, str(k), k))
 
 
 def _verify(conn, gone: dict, changed: dict, before: dict) -> None:

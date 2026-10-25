@@ -441,7 +441,7 @@ def routes(db_path_fn):
         except approvals.ApprovalError as e:
             return refuse(e)
         from .popup import as_user
-        label = f"phone ({claims.get('handle')})"
+        label = "phone"   # never the relay handle: apps read decision labels (audit D19)
         keep = {"keep_a": "a", "keep_b": "b", "keep_both": "both"}.get(body["decision"])
         if body["decision"] == "approve" or keep:
             args = {"item_id": item_id, "confirm_name": body.get("confirm_name"),
@@ -472,6 +472,7 @@ def routes(db_path_fn):
             body = await _body(request)
             claims = await asyncio.to_thread(approvals.verify_grant, db, body["grant"], item_id)
             token = body.get("token")
+            await asyncio.to_thread(approvals.require_phone_on, db)   # off closes open pages
             if not isinstance(token, str) or request.cookies.get(COOKIE) != token \
                     or not await asyncio.to_thread(_open_page, db, body["grant"], item_id, token):
                 raise approvals.ApprovalError("bad_token", "This page's session doesn't match. "
@@ -481,7 +482,7 @@ def routes(db_path_fn):
         except approvals.ApprovalError as e:
             return refuse(e)
         res = await asyncio.to_thread(record_as_user, db, item_id, body["record"], body["action"],
-                                      f"phone ({claims.get('handle')})")
+                                      "phone")
         item = await asyncio.to_thread(view, db, item_id)
         if "error" in res:
             return answer({"error": res["error"], "message": res["message"], "item": item}, 409)

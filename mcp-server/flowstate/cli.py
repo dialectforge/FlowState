@@ -4,19 +4,19 @@
     flowstate backup            [--db FILE] [--dir DIR] [--offsite]
     flowstate restore BACKUP    [--to NEW_FILE] [--force]
     flowstate offsite setup     --repo OWNER/NAME [--branch NAME]
-    flowstate offsite status | push [--dry-run] | disable
+    flowstate offsite status | push [--dry-run] | disable | key   (encrypted: offsite_crypto.py)
     flowstate schedule-backups  [--time HH:MM] [--offsite] [--remove] [--dry-run]
     flowstate token status | migrate --from FILE
     flowstate scan-secrets      [--db FILE]
     flowstate remote            status | passphrase | add-client --name N [--read-only] |
                                 clients | rename OLD NEW | revoke --client ID |
-                                allow-redirect --name HOST
+                                allow-redirect --name HOST | lan-tokens [on|off]
     flowstate keys              add --name N [--read-only] [--workspace W] | list |
                                 revoke --id ID | --name N   (per-app LAN keys: app_keys.py)
     flowstate relay             enroll --code C | run | status | renew | enable | disable |
                                 forget | ct-check | ct-ack |
                                 chat-approvals [on|off]   (optional, off by default: relay/)
-    (Phase D commands: see cli_more.py)
+    (Phase D commands: see cli_more.py; data-git, erase, tighten: cli_data.py)
 
 Plain-language output; exit code 0 = OK, 1 = failed / refused. Never prints a token.
 """
@@ -29,11 +29,13 @@ from pathlib import Path
 
 from . import paths
 
+from . import cli_data
 from . import cli_more
 from . import cli_review
 
 COMMANDS = ("migrate", "backup", "restore", "offsite", "schedule-backups", "token",
-            "scan-secrets", "remote", "keys", "relay") + cli_more.COMMANDS + cli_review.COMMANDS
+            "scan-secrets", "remote", "keys", "relay") + cli_more.COMMANDS + cli_review.COMMANDS \
+    + cli_data.COMMANDS
 
 
 def say(msg: str) -> None:
@@ -104,13 +106,85 @@ def _push(db: Path, dry_run: bool) -> int:
         say(f"Off-site dry run: github.com/{r['repo']} is private. Nothing was pushed.")
     else:
         say(f"Off-site backup pushed to github.com/{r['repo']} branch {r['branch']} "
-            f"(private; files: {', '.join(r['files'])}).")
+            f"(private; encrypted on this computer; files: {', '.join(r['files'])}).")
+        if r.get("new_key"):
+            say("A new encryption key was made for it and kept in this computer's credential "
+                "store. Save its recovery code now: run `flowstate offsite key` in your own "
+                "terminal. Without it, a new computer can't read the off-site copy.")
     return 0
+
+
+def _show_recovery_code(key: bytes) -> bool:
+    """The recovery code goes to the user's own terminal only, never to stdout (an AI app
+    running setup for the user must not get it in its chat). False: no terminal here."""
+    from .cli_review import open_terminal
+    from .offsite_crypto import recovery_code
+    tty = open_terminal()
+    if tty is None:
+        return False
+    try:
+        tty.tell("Off-site recovery code (save it in your password manager; it is the only way "
+                 "to read the off-site copy on another computer):")
+        tty.tell("  " + recovery_code(key))
+    finally:
+        tty.close()
+    try:   # the brief stops reminding (server._offsite_key_line)
+        paths.update_config(lambda cfg: cfg.get("offsite") is not None
+                            and cfg["offsite"].__setitem__("recovery_code_shown", True))
+    except Exception:  # noqa: BLE001 - only a reminder
+        pass
+    return True
+
+
+def _decrypted(src: Path):
+    """An encrypted off-site copy (.fsenc): decrypted into a private file next to the restores,
+    with this computer's key or the recovery code typed in the terminal. None: refused."""
+    from . import offsite_crypto as OC
+    key = OC.get_key()
+    if key is None or OC.key_id(key) != OC.file_key_id(src):
+        from .cli_review import open_terminal
+        tty = open_terminal()
+        if tty is None:
+            say("Restore REFUSED: this copy is encrypted with a key this computer doesn't have. "
+                "Run the command in a terminal window and type its recovery code.")
+            return None
+        try:
+            code = tty.ask("Recovery code for this off-site copy: ")
+        finally:
+            tty.close()
+        try:
+            key = OC.key_from_code(code)
+        except OC.CryptoError as e:
+            say(f"Restore REFUSED: {e}")
+            return None
+    out = paths.backup_dir() / "restored" / f"decrypted-{datetime.now():%Y%m%d-%H%M%S}.db"
+    try:
+        OC.decrypt_file(src, out, key)
+    except OC.CryptoError as e:
+        say(f"Restore REFUSED: {e}")
+        return None
+    return out
 
 
 def cmd_restore(a) -> int:
     from .backup import BackupError, restore
     src = Path(a.backup).expanduser()
+    from .offsite_crypto import is_encrypted
+    plain = None
+    if is_encrypted(src):
+        plain = _decrypted(src)
+        if plain is None:
+            return 1
+        src = plain
+    try:
+        return _restore(a, src)
+    finally:
+        if plain is not None:
+            plain.unlink(missing_ok=True)
+
+
+def _restore(a, src: Path) -> int:
+    from .backup import BackupError, restore
     if a.to:
         target = Path(a.to).expanduser()
     else:
@@ -145,7 +219,28 @@ def cmd_offsite(a) -> int:
             say(f"Not set up: {e}")
             return 1
         say(f"Off-site backups will go to github.com/{repo} (private), branch "
-            f"{branch}. Saved in {p}. Push now with: flowstate backup --offsite")
+            f"{branch}, encrypted on this computer first. Saved in {p}. Push now with: "
+            f"flowstate backup --offsite")
+        from .offsite_crypto import CryptoError, get_or_create_key
+        try:
+            key, made = get_or_create_key()
+        except (CryptoError, Exception) as e:  # noqa: BLE001 - the push makes it later
+            say(f"(The encryption key will be made at the first push: {type(e).__name__}.)")
+            return 0
+        if not _show_recovery_code(key):
+            say("Your recovery code wasn't shown here (no terminal). Run `flowstate offsite key` "
+                "yourself in a terminal window and save it.")
+        return 0
+    if a.action == "key":
+        from .offsite_crypto import get_key
+        key = get_key()
+        if key is None:
+            say("No off-site key yet; it is made at setup or the first push.")
+            return 1
+        if not _show_recovery_code(key):
+            say("Refused: the recovery code is shown only in a terminal window (piped output "
+                "doesn't count). Run it yourself in a terminal.")
+            return 2
         return 0
     if a.action == "disable":
         try:
@@ -157,8 +252,8 @@ def cmd_offsite(a) -> int:
         return 0
     if a.action == "status":
         cfg = _offsite_cfg()
-        say(f"Off-site: github.com/{cfg['repo']} branch {cfg.get('branch')}" if cfg.get("repo")
-            else "Off-site backup: not set up.")
+        say(f"Off-site: github.com/{cfg['repo']} branch {cfg.get('branch')} (encrypted)"
+            if cfg.get("repo") else "Off-site backup: not set up.")
         return 0
     return _push(_db(a), dry_run=a.dry_run)
 
@@ -297,9 +392,10 @@ def cmd_remote(a) -> int:
             say(f"Not added: {e}")
             return 1
         if p is not None:
-            p.write_text(token + "\n", encoding="utf-8")
-            say(f"App '{a.name}' added as {cid} ({' '.join(scopes)}). Token written to {p}; "
-                f"paste it into the app, then delete the file.")
+            from .privatefs import write_private
+            write_private(p, token + "\n")   # owner-only (audit D10)
+            say(f"App '{a.name}' added as {cid} ({' '.join(scopes)}). Token written to {p} "
+                f"(readable by your account only); paste it into the app, then delete the file.")
         else:
             say(f"App '{a.name}' added as {cid} ({' '.join(scopes)}).")
             say("Its token is shown ONCE below. Paste it into the app as the header "
@@ -346,6 +442,24 @@ def cmd_remote(a) -> int:
         say(f"{a.client_id}: access revoked; its tokens stop working now." if ok
             else f"{a.client_id}: no such active app.")
         return 0 if ok else 1
+    if a.action == "lan-tokens":   # audit D4: remote tokens over plain LAN HTTP
+        want = (a.names or ["status"])[0]
+        now = RA.lan_remote_tokens_allowed()
+        if want not in ("on", "off"):
+            say(f"Remote-access tokens on the LAN listener from other computers: "
+                f"{'allowed' if now else 'refused (the default)'}. LAN traffic is plain HTTP, "
+                f"not encrypted. flowstate remote lan-tokens on|off")
+            return 0
+        if want == "on":
+            from .cli_data import _confirm
+            rc = _confirm("Accept remote-access tokens on the plain-HTTP LAN listener? Anyone "
+                          "on your network could copy one and use it over the internet.",
+                          "allowing remote tokens on the LAN")
+            if rc:
+                return rc
+        paths.update_config(lambda cfg: cfg.__setitem__("lan_remote_tokens", want == "on"))
+        say(f"Remote-access tokens on the LAN listener: {'allowed' if want == 'on' else 'refused'}.")
+        return 0
     if a.action == "allow-redirect":
         host = (a.name or "").strip().lower()
         if not host or "/" in host or ":" in host:
@@ -406,8 +520,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="allow replacing an existing file (it is backed up first)")
     p.set_defaults(fn=cmd_restore)
 
-    p = sub.add_parser("offsite", help="optional backup to a PRIVATE GitHub repo")
-    p.add_argument("action", choices=["setup", "status", "push", "disable"])
+    p = sub.add_parser("offsite", help="optional ENCRYPTED backup to a PRIVATE GitHub repo; key: show the recovery code")
+    p.add_argument("action", choices=["setup", "status", "push", "disable", "key"])
     p.add_argument("--repo", help="OWNER/NAME (setup)")
     p.add_argument("--branch", help="branch for backups (default flowstate-backup)")
     p.add_argument("--db")
@@ -437,7 +551,7 @@ def build_parser() -> argparse.ArgumentParser:
                        description="rename OLD NEW: give a token or OAuth app a new name; the "
                                    "same token keeps working (OLD may be its id)")
     p.add_argument("action", choices=["status", "passphrase", "add-client", "clients", "rename",
-                                      "revoke", "allow-redirect"])
+                                      "revoke", "allow-redirect", "lan-tokens"])
     p.add_argument("names", nargs="*", metavar="NAME",
                    help="rename: the app's current name (or id), then its new name")
     p.add_argument("--db", help="rename: the database whose pause switch to carry over")
@@ -454,6 +568,7 @@ def build_parser() -> argparse.ArgumentParser:
     relay_cli.register(sub)
     cli_more.register(sub)
     cli_review.register(sub)
+    cli_data.register(sub)
     return ap
 
 

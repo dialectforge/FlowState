@@ -23,7 +23,7 @@ def approve(db_path: Path, item: dict, args: dict, user_request: str, client: st
     decision was made for a disagreement's own log (the card: "card"). Raises ReviewError,
     deletes.DeleteError, safety.SafetyError."""
     from . import cleanup, conflict_cards, conflicts, deletes, history, provenance, \
-        review_mode, safety
+        handoffs, review_mode, rules, safety
     from . import server as S
 
     def apply(item: dict, payload: dict):   # a source tag is the queuing app's say-so
@@ -66,7 +66,10 @@ def approve(db_path: Path, item: dict, args: dict, user_request: str, client: st
                           others={"cleanup": apply_cleanup, "edit": apply_edit,
                                   "delete": apply_delete, "conflict": apply_conflict,
                                   "setting": apply_setting, "disagreement": apply_disagreement,
-                                  "source": lambda it, _e: provenance.confirm(db_path, it)},
+                                  "source": lambda it, _e: provenance.confirm(db_path, it),
+                                  "handoff": lambda it, _e: handoffs.apply_queued(db_path, it),
+                                  "rule": lambda it, _e: rules.confirm(
+                                      db_path, it, path or _path_of(client))},
                           path=path or _path_of(client))
 
 

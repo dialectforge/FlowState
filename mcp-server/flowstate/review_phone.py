@@ -34,7 +34,7 @@ per-item /approve links don't use /review/start and are unchanged.
                          Remove / Bring back (session_records.py), the same session and token
   POST /review/decide    {token, item_id, decision, confirm_name?, reason?}: the session cookie
                          and its token; Approve or Reject through the user-only path
-                         (popup.as_user, label "phone (<handle>)"), logged in approval_log
+                         (popup.as_user, label "phone", never the handle), logged in approval_log
 
 Same headers as /approve: strict CSP (no inline script or style), frame-ancestors 'none',
 X-Frame-Options DENY, no-store, no referrer. POSTs must be JSON, from this origin.
@@ -397,6 +397,7 @@ def routes(db_path_fn):
         try:
             body = await _body(request)
             sess = sessions.check(request.cookies.get(COOKIE), body.get("token"))
+            await asyncio.to_thread(approvals.require_phone_on, db)   # off closes open pages
             item_id = body.get("item_id")
             if not isinstance(item_id, int) or isinstance(item_id, bool) \
                     or body.get("decision") not in ("approve", "reject", "keep_a", "keep_b",
@@ -405,7 +406,7 @@ def routes(db_path_fn):
         except approvals.ApprovalError as e:
             return refuse(e)
         from .popup import as_user
-        label = f"phone ({sess['handle']})"
+        label = "phone"   # never the relay handle: apps read decision labels (audit D19)
         keep = {"keep_a": "a", "keep_b": "b", "keep_both": "both"}.get(body["decision"])
         if body["decision"] == "approve" or keep:
             args = {"item_id": item_id, "confirm_name": body.get("confirm_name"),
@@ -438,6 +439,7 @@ def routes(db_path_fn):
         try:
             body = await _body(request)
             sess = sessions.check(request.cookies.get(COOKIE), body.get("token"))
+            await asyncio.to_thread(approvals.require_phone_on, db)   # off closes open pages
             item_id = body.get("item_id")
             if not isinstance(item_id, int) or isinstance(item_id, bool) \
                     or not isinstance(body.get("record"), str) or not isinstance(body.get("action"), str):
@@ -446,7 +448,7 @@ def routes(db_path_fn):
             return refuse(e)
         from .approve_page import record_as_user
         res = await asyncio.to_thread(record_as_user, db, item_id, body["record"], body["action"],
-                                      f"phone ({sess['handle']})")
+                                      "phone")
         listing = await asyncio.to_thread(items, db)
         total = await asyncio.to_thread(_total, db)
         if "error" in res:

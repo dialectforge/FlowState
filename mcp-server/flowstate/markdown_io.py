@@ -22,6 +22,7 @@ from typing import Optional
 from . import dbconn
 from . import history, links, priority, review, secrets_scan
 
+_TAG_START = re.compile(r"<(?=[A-Za-z/!?])")
 MARK = re.compile(r"\s*<!--\s*fs:([a-z]+):(\d+)\s*-->\s*$")
 SECTIONS = {"todos": "todo", "problems": "problem", "decisions": "decision",
             "changes": "change", "learnings": "learning"}
@@ -41,6 +42,14 @@ def _flat(s: Optional[str]) -> str:
     return " ".join((s or "").split())
 
 
+def _out(s: Optional[str]) -> str:
+    """Record text as it goes into an export: one line, with live-image / HTML / script forms
+    broken (stored.defuse), so opening the file in a markdown viewer loads nothing from an
+    address a record names (audit D20). Import treats the defused text as unchanged."""
+    from .stored import defuse
+    return _TAG_START.sub("‹", defuse(_flat(s)))   # any tag or comment, ours included
+
+
 def export(db_path: Path, project_id: int) -> str:
     conn = _conn(db_path)
     try:
@@ -54,36 +63,36 @@ def export(db_path: Path, project_id: int) -> str:
                f"`flowstate import-md --project \"{p['name']}\" <this file>`. Changes and new lines go to "
                "the review queue; nothing is deleted._", ""]
         if p["description"]:
-            out += [_flat(p["description"]), ""]
+            out += [_out(p["description"]), ""]
         out.append("## Todos")
         for t in conn.execute("""SELECT id, title, priority, status FROM todos WHERE project_id = ?
                                  AND (status IS NULL OR status != 'cancelled') ORDER BY
                                  CASE WHEN status = 'done' THEN 1 ELSE 0 END, id""", (project_id,)):
             box = "x" if t["status"] == "done" else " "
-            out.append(f"- [{box}] {_flat(t['title'])} ({priority.label(t['priority'])}) <!-- fs:todo:{t['id']} -->")
+            out.append(f"- [{box}] {_out(t['title'])} ({priority.label(t['priority'])}) <!-- fs:todo:{t['id']} -->")
         out += ["", "## Problems"]
         for r in conn.execute("""SELECT p.id, p.title, p.status FROM problems p JOIN components c
                                  ON c.id = p.component_id WHERE c.project_id = ? AND
                                  (p.status IS NULL OR p.status NOT IN ('solved', 'wont_fix'))
                                  ORDER BY p.id""", (project_id,)):
-            out.append(f"- {_flat(r['title'])} <!-- fs:problem:{r['id']} -->")
+            out.append(f"- {_out(r['title'])} <!-- fs:problem:{r['id']} -->")
         out += ["", "## Decisions"]
         replaced = links.superseded_decisions(conn)
         for d in conn.execute("""SELECT id, created_at, key_decisions, user_prompt_summary FROM conversations
                                  WHERE project_id = ? AND key_decisions IS NOT NULL ORDER BY id""", (project_id,)):
-            text = links.label(conn, "decision", d["id"])
+            text = _out(links.label(conn, "decision", d["id"]))
             note = f" (replaced by #{replaced[d['id']][0]})" if d["id"] in replaced else ""
             out.append(f"- {(d['created_at'] or '')[:10]}: {text}{note} <!-- fs:decision:{d['id']} -->")
         out += ["", "## Changes"]
         for ch in conn.execute("""SELECT ch.id, ch.created_at, c.name comp, ch.field_name FROM changes ch
                                   JOIN components c ON c.id = ch.component_id WHERE c.project_id = ?
                                   ORDER BY ch.id DESC LIMIT 100""", (project_id,)):
-            out.append(f"- {(ch['created_at'] or '')[:10]} {_flat(ch['comp'])}: {_flat(ch['field_name'])} "
+            out.append(f"- {(ch['created_at'] or '')[:10]} {_out(ch['comp'])}: {_out(ch['field_name'])} "
                        f"<!-- fs:change:{ch['id']} -->")
         out += ["", "## Learnings"]
         for l in conn.execute("SELECT id, category, insight FROM learnings WHERE project_id = ? ORDER BY id",
                               (project_id,)):
-            out.append(f"- [{l['category'] or 'other'}] {_flat(l['insight'])} <!-- fs:learning:{l['id']} -->")
+            out.append(f"- [{l['category'] or 'other'}] {_out(l['insight'])} <!-- fs:learning:{l['id']} -->")
         if links.available(conn):
             rows = conn.execute("""SELECT * FROM record_links WHERE (from_project_id = ? OR to_project_id = ?)
                                    AND removed_at IS NULL AND link_type NOT IN ('about') ORDER BY id""",
@@ -171,7 +180,7 @@ def import_text(db_path: Path, project_id: int, text: str, source: str = "markdo
             col = {"todo": "title", "problem": "title", "learning": "insight"}[rkind]
             row = conn.execute(f"SELECT * FROM {table} WHERE id = ?", (rid,)).fetchone()
             new = {}
-            if _flat(row[col]) != _flat(it["text"]):
+            if _flat(it["text"]) not in (_flat(row[col]), _out(row[col])):
                 new[col] = it["text"][:500]
             if rkind == "todo" and it["done"] is not None:
                 is_done = row["status"] == "done"

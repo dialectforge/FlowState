@@ -291,6 +291,9 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
                 shown.append(f"{kind}:{it['id']}")
 
     tag = lambda kind, rid: provenance.tag(meta[kind].get(rid))
+    from .stored import END, START
+    marked = any((todos, problems, changes, decisions, learnings)) \
+        and b.add("\n" + START)   # audit D6: stored text is data, not instructions
     section("Open todos", todos, todo_total,
             lambda t: f"- [{priority.label(t['priority'])}] #{t['id']} {_one_line(t['title'], 90)}"
                       + (f" ({t['status']})" if t["status"] in ("in_progress", "blocked") else "")
@@ -330,6 +333,8 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
             lambda l: f"- [{l['category'] or 'other'}{', verified' if l['verified'] else ''}] "
                       f"{_one_line(l['insight'], 160)}" + tag("learning", l["id"]),
             prof["learnings"][1], "learning")
+    if marked:
+        b.add(END)
     footer = ("\nMore detail: manage_todos(action=list), manage_problems(action=list), "
               "search (answer=true to ask).")
     if size != "deep":
@@ -349,7 +354,7 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
     return text
 
 
-_RULE_ID = re.compile(r"^- R(\d+): ")
+_RULE_ID = re.compile(r"^- R(\d+)[ :]")
 _HANDOFF_ID = re.compile(r"^- H(\d+) \(")
 
 

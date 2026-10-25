@@ -427,7 +427,7 @@ def test_phone_list_session_cookie_and_decisions(backend, relay):
                headers=JSON_H)
     assert r.status_code == 200 and status(db, b) == "rejected"
     assert log(db) == [(a, "phone", "approved"), (b, "phone", "rejected")]
-    assert _q(db, "SELECT decided_by FROM review_items WHERE id = ?", a) == [("phone (testbox)",)]
+    assert _q(db, "SELECT decided_by FROM review_items WHERE id = ?", a) == [("phone",)]   # no handle (audit D19)
 
 
 def test_phone_session_expires(backend, relay, monkeypatch):
