@@ -9,8 +9,10 @@ from datetime import datetime
 from . import utils
 
 def _run_git_command(args: list[str], cwd: Optional[Path] = None,
-                     env: Optional[dict] = None) -> tuple[bool, str, str]:
-    """Run a git command and return (success, stdout, stderr)."""
+                     env: Optional[dict] = None, input_text: Optional[str] = None) -> tuple[bool, str, str]:
+    """Run a git command and return (success, stdout, stderr). `input_text`: what git reads on
+    its stdin (else nothing)."""
+    feed = {"input": input_text} if input_text is not None else {"stdin": subprocess.DEVNULL}
     try:
         result = subprocess.run(
             ["git"] + args,
@@ -21,7 +23,7 @@ def _run_git_command(args: list[str], cwd: Optional[Path] = None,
             # Never hand git the server's stdin: in a stdio server that is the MCP pipe, and on
             # Windows a child touching a pipe another thread is reading blocks until the next
             # message arrives (every data-git call then timed out).
-            stdin=subprocess.DEVNULL,
+            **feed,
             # never wait on a password prompt nobody can see: fail instead
             env={**os.environ, "GIT_TERMINAL_PROMPT": "0", **(env or {})}
         )
@@ -212,14 +214,24 @@ def write_gitignore() -> None:
         return
     if path.is_symlink() or not path.is_file():
         raise UnsafePath(".gitignore")
-    current = path.read_text(encoding="utf-8", errors="replace")
+    text = gitignore_text(path.read_text(encoding="utf-8", errors="replace"))
+    if text is not None:
+        safe_write(path, text)
+
+
+def gitignore_text(current: Optional[str]) -> Optional[str]:
+    """FlowState's .gitignore made from `current` (None: there is none): FlowState's list when
+    there is none, else `current` with the list added at its end when a line it needs is
+    missing. None when `current` already has every line."""
+    if current is None:
+        return GITIGNORE
     have = {ln.strip() for ln in current.splitlines()}
     need = _required_ignore_lines()
     if all(ln in have for ln in need):
-        return
+        return None
     sep = "" if current.endswith("\n") or not current else "\n"
-    safe_write(path, current + sep + "\n# Added by FlowState: the files it never commits "
-               "(FlowState also checks every commit).\n" + "\n".join(need) + "\n")
+    return (current + sep + "\n# Added by FlowState: the files it never commits "
+            "(FlowState also checks every commit).\n" + "\n".join(need) + "\n")
 
 
 # ------------------------------------------------- what may be in the repository (audit N-F12, N-F14)
@@ -692,13 +704,20 @@ def git_migrate(checker=None, db_path: Optional[Path] = None) -> dict:
         env = {"GIT_INDEX_FILE": str(idx)}
         try:
             idx.unlink(missing_ok=True)
+            # -f: this index is FlowState's own, freshly read from `base`; without it git compares
+            # it with the files on disk and refuses when this computer is behind (task 57, N1)
             steps = [["read-tree", base]] + [
-                ["rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", *drop[i:i + 100]]
+                ["rm", "-r", "-q", "-f", "--cached", "--ignore-unmatch", "--", *drop[i:i + 100]]
                 for i in range(0, len(drop), 100)]
             for args in steps:
                 ok, _o, err = _run_git_command(args, env=env)
                 if not ok:
                     return {"success": False, "pushed": False, "error": f"git failed: {_last_line(err)}"}
+            # FlowState's .gitignore goes into the same commit, so an older FlowState that pulls
+            # it doesn't commit its database again (task 57, N2)
+            why = _commit_gitignore(base, env)
+            if why:
+                return {"success": False, "pushed": False, "error": f"git failed: {why}"}
             ok, tree, err = _run_git_command(["write-tree"], env=env)
             if not ok:
                 return {"success": False, "pushed": False, "error": f"git failed: {_last_line(err)}"}
@@ -727,6 +746,26 @@ def git_migrate(checker=None, db_path: Optional[Path] = None) -> dict:
             return out
         out["pushed"] = True
     return out
+
+
+def _commit_gitignore(base: str, env: dict) -> Optional[str]:
+    """Put FlowState's .gitignore (base's own lines kept, FlowState's list added if a line is
+    missing) into the index `env` names. None when done or nothing was needed, else git's error."""
+    ok, kind, _e = _run_git_command(["cat-file", "-t", f"{base}:.gitignore"])
+    current = None
+    if ok and kind.strip() == "blob":
+        ok, current, err = _run_git_command(["cat-file", "blob", f"{base}:.gitignore"])
+        if not ok:
+            return _last_line(err)
+    text = gitignore_text(current)
+    if text is None:
+        return None
+    ok, sha, err = _run_git_command(["hash-object", "-w", "--stdin"], input_text=text)
+    if not ok:
+        return _last_line(err)
+    ok, _o, err = _run_git_command(["update-index", "--add", "--cacheinfo",
+                                    f"100644,{sha.strip()},.gitignore"], env=env)
+    return None if ok else _last_line(err)
 
 
 def _last_line(text: str) -> str:

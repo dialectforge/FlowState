@@ -118,7 +118,7 @@ def test_migrate_once_every_machine_is_updated(tmp_path, remote):
     r = on(b, git_ops.git_migrate)
     assert r["success"] and r["pushed"] and r["untracked"] == ["flowstate.db"], r
     assert (b / "flowstate.db").read_text() == "B-live"
-    assert _tip_files(remote) == {"projects/note.md"}
+    assert _tip_files(remote) == {"projects/note.md", ".gitignore"}   # task 57, N2
     assert on(b, git_ops.git_sync, "B")["success"]
     # A (updated too) is told to migrate; that only untracks here, then syncs as usual
     r = on(a, git_ops.git_sync, "A")
@@ -295,3 +295,59 @@ def test_attach_refuses_a_project_name_that_leads_outside(tmp_path):
     assert not (tmp_path / "escape.flowstate").exists()
     assert not list(tmp_path.glob("*.flowstate"))
     assert (db.parent / "projects" / "fine-name.flowstate" / "attachments" / "spec.txt").exists()
+
+
+# ---------------------------------------------------------------- task 57: N1, N2
+def test_migrate_works_on_a_computer_that_is_behind_the_remote(tmp_path, remote):
+    """N1: the remote moved on since this computer last synced (a 2.4.3 peer pushed its
+    database and a note). The migrate commit is built in FlowState's own index; git used to
+    compare that index with the files on disk and refuse ("use -f to force removal")."""
+    a, b = _legacy_pair(tmp_path, remote)
+    (b / "flowstate.db").write_text("B-v2")          # B still runs 2.4.3 and syncs
+    (b / "projects" / "from-b.md").write_text("B's note")
+    old_sync(b)
+    (a / "flowstate.db").write_text("A-live")        # A, updated, is behind
+    on(a, git_ops.git_set_remote, str(remote), allow_unchecked=True)
+    r = on(a, git_ops.git_migrate)
+    assert r["success"] and r["pushed"] and r["untracked"] == ["flowstate.db"], r
+    assert (a / "flowstate.db").read_text() == "A-live"             # nothing lost here
+    assert (a / "projects" / "from-b.md").read_text() == "B's note"  # B's work restored
+    assert "flowstate.db" not in _tip_files(remote)
+    # B is updated next and migrates too (behind A's migrate commit): no error, nothing lost
+    (b / "flowstate.db").write_text("B-live")
+    on(b, git_ops.git_set_remote, str(remote), allow_unchecked=True)
+    r = on(b, git_ops.git_migrate)
+    assert r["success"], r
+    assert on(b, git_ops.git_sync, "B")["success"]
+    assert on(a, git_ops.git_sync, "A")["success"]
+    assert (a / "flowstate.db").read_text() == "A-live" and (b / "flowstate.db").read_text() == "B-live"
+    assert (b / "projects" / "from-b.md").read_text() == "B's note"
+
+
+def test_the_migrate_commit_carries_flowstates_gitignore(tmp_path, remote):
+    """N2: a 2.4.3 computer that pulls the migrate commit gets the .gitignore with it, so its
+    next sync (git add .) can't commit its database again."""
+    a, b = _legacy_pair(tmp_path, remote)
+    (a / ".gitignore").unlink(missing_ok=True)
+    on(a, git_ops.git_set_remote, str(remote), allow_unchecked=True)
+    r = on(a, git_ops.git_migrate)
+    assert r["success"] and r["pushed"], r
+    assert ".gitignore" in _tip_files(remote)
+    ignore = _git("show", "main:.gitignore", cwd=remote)
+    assert "*.db" in ignore.split()
+    old_sync(b)                                       # B still runs 2.4.3
+    (b / "flowstate.db").write_text("B made a new one")
+    (b / "projects" / "b.md").write_text("more")
+    old_sync(b)
+    assert not [p for p in _tip_files(remote) if p.endswith(".db")]
+    assert "projects/b.md" in _tip_files(remote)
+
+
+def test_the_migrate_commit_keeps_the_repositorys_own_gitignore_lines(tmp_path, remote):
+    a, b = _legacy_pair(tmp_path, remote)
+    (b / ".gitignore").write_text("my-notes/\n")
+    old_sync(b)
+    on(a, git_ops.git_set_remote, str(remote), allow_unchecked=True)
+    assert on(a, git_ops.git_migrate)["success"]
+    lines = _git("show", "main:.gitignore", cwd=remote).splitlines()
+    assert lines[0] == "my-notes/" and "*.db" in lines
