@@ -38,7 +38,7 @@ from . import legacy_args
 from . import links
 from . import review
 from . import review_apply, review_cards, review_mode
-from . import safety
+from . import privatefs, safety
 from . import saves
 from . import tasks
 from . import extras, priority
@@ -85,8 +85,7 @@ def init_backend(db_path: Optional[Path] = None) -> None:
     path = Path(db_path) if db_path else default_db_path()
     backend.db_path, backend.error, backend.tracker = path, None, None
     backend.migration_error = None
-    from .privatefs import auto_tighten
-    auto_tighten(path)   # owner-only what an older version left readable (N-F31); never raises
+    privatefs.auto_tighten(path)   # owner-only what an older version left readable; never raises
     try:
         db = Database(path)
         conn = sqlite3.connect(str(path), timeout=5.0)
@@ -395,7 +394,6 @@ def handle_call(name: str, args: dict, client: str = "unknown", meta: Optional[d
 
 
 CARD_TOOLS = ("show_conflict_card", "resolve_conflict_card", "show_review_card", "resolve_review_card")
-
 
 
 def _one_commit(name: str, args: dict) -> bool:
@@ -807,8 +805,7 @@ def _review_mode(args: dict, client: str) -> Any:
     if args.get("action") == "set":
         who, _scopes = _caller()
         try:
-            # turning review off waits for the user where approvals are on for any project it
-            # affects (install-wide off reaches every project without its own mode)
+            # turning review off waits for the user if approvals are on for any project it reaches
             if review_mode.off_needs_user(backend.db_path, args.get("mode"), pid,
                                           bool(args.get("clear"))):
                 item = review_mode.queue_if_off(backend.db_path, args.get("mode"), args.get("kinds"),
