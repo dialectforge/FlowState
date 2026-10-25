@@ -340,19 +340,25 @@ def dismiss(db_path: Path, item_id: int, client: Optional[str] = None) -> dict:
 
 
 # ---------------------------------------------------------------- the brief
-def brief_line(conn, pid: int) -> Optional[str]:
-    """ "Possible conflicts: D31 vs D12, ..." (open pairs, newest first, at most BRIEF_MAX),
-    or None when there are none."""
+def open_pairs(conn, pid: int) -> list:
+    """Open pairs (new_id, old_id, confirmed_at), newest first: status open and neither side
+    replaced by a supersedes link. The brief's line and its unsettled tags both use this."""
     if not available(conn):
-        return None
+        return []
     gone = ("NOT EXISTS (SELECT 1 FROM record_links s WHERE s.to_type='decision' AND "
             "s.to_id={} AND s.link_type='supersedes' AND s.removed_at IS NULL)")
-    rows = conn.execute(
+    return conn.execute(
         f"""SELECT c.new_id, c.old_id, c.confirmed_at FROM decision_conflicts c
             JOIN conversations n ON n.id = c.new_id JOIN conversations o ON o.id = c.old_id
             WHERE c.project_id = ? AND c.status = 'open'
               AND {gone.format('c.new_id')} AND {gone.format('c.old_id')}
             ORDER BY c.new_id DESC, c.old_id DESC""", (pid,)).fetchall()
+
+
+def brief_line(conn, pid: int) -> Optional[str]:
+    """ "Possible conflicts: D31 vs D12, ..." (open pairs, newest first, at most BRIEF_MAX),
+    or None when there are none."""
+    rows = open_pairs(conn, pid)
     if not rows:
         return None
     shown = ", ".join(f"D{r['new_id']} vs D{r['old_id']}"

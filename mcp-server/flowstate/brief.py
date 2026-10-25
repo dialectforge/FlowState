@@ -176,6 +176,12 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
         replaced = links.superseded_decisions(conn)
         replaces = {new: old for old, (new, _since) in replaced.items()}
         decisions = [d for d in decisions if d["id"] not in replaced][:n_dec]
+        # An open possible conflict: neither side is settled. The newer one stays, tagged;
+        # the older one's text is left out (one pointer per older one, which search reaches).
+        disputed, against = {}, {}   # older id -> newer ids; newer id -> older ids
+        for r in conflicts.open_pairs(conn, pid):
+            disputed.setdefault(r["old_id"], []).append(r["new_id"])
+            against.setdefault(r["new_id"], []).append(r["old_id"])
         linked = links.brief_lines(conn, pid) if prof["linked"] else []
         alerts = links.alert_lines(conn, pid)
         conflict_line = conflicts.brief_line(conn, pid)
@@ -281,7 +287,8 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
             line = fmt(it)
             if b.used + len(line) + 1 > stop or not b.add(line):
                 break
-            shown.append(f"{kind}:{it['id']}")
+            if not it.get("_left_out"):
+                shown.append(f"{kind}:{it['id']}")
 
     tag = lambda kind, rid: provenance.tag(meta[kind].get(rid))
     section("Open todos", todos, todo_total,
@@ -299,10 +306,26 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
                       + (f" - {_one_line(c['reason'] or c['new_value'], 90)}" if (c['reason'] or c['new_value']) else "")
                       + tag("change", c["id"]),
             prof["changes"][1], "change")
-    section("Recent decisions", decisions, len(decisions),
-            lambda d: f"- {(d['created_at'] or '')[:10]} #{d['id']} {_one_line(_first_decision(d), 140)}"
+    listed, pointed = {d["id"] for d in decisions}, set()
+    for d in decisions:
+        day = (d["created_at"] or "")[:10]
+        if d["id"] in disputed:
+            pointed.add(d["id"])
+            d["_left_out"] = True
+            d["_line"] = (f"- {day} #{d['id']} in dispute with {_ids(disputed[d['id']])}, "
+                          f"text left out: {_lookup(d['id'])}")
+            continue
+        extra = ""
+        if d["id"] in against:
+            far = [o for o in against[d["id"]] if o not in listed and o not in pointed]
+            pointed.update(far[:1])   # one pointer per line; the Possible conflicts line has all
+            extra = (f" (unsettled: may conflict with {_ids(against[d['id']])}"
+                     + "".join(f"; #{o} in dispute: {_lookup(o)}" for o in far[:1]) + ")")
+        d["_line"] = (f"- {day} #{d['id']} {_one_line(_first_decision(d), 100 if extra else 140)}"
                       + (f" (replaces #{replaces[d['id']]})" if d["id"] in replaces else "")
-                      + tag("decision", d["id"]), prof["decisions"][1], "decision")
+                      + extra + tag("decision", d["id"]))
+    section("Recent decisions", decisions, len(decisions), lambda d: d["_line"],
+            prof["decisions"][1], "decision")
     section("Key learnings", learnings, len(learnings),
             lambda l: f"- [{l['category'] or 'other'}{', verified' if l['verified'] else ''}] "
                       f"{_one_line(l['insight'], 160)}" + tag("learning", l["id"]),
@@ -328,6 +351,16 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
 
 _RULE_ID = re.compile(r"^- R(\d+): ")
 _HANDOFF_ID = re.compile(r"^- H(\d+) \(")
+
+
+def _ids(ids: list) -> str:
+    """#12, #9 (+2 more): at most two, so a tag stays short."""
+    more = f" (+{len(ids) - 2} more)" if len(ids) > 2 else ""
+    return ", ".join(f"#{i}" for i in ids[:2]) + more
+
+
+def _lookup(rid: int) -> str:
+    return f'search(query="D{rid}")'
 
 
 def _note(shown: list, kind: str, m) -> None:

@@ -34,7 +34,7 @@ LOG_WORK_DESCRIPTION = (
 SEARCH_DESCRIPTION = (
     "Find stored todos, decisions, changes, learnings, problems and solutions. query: ranked "
     "matches. query + answer=true: a short quoted answer with record ids, or says FlowState "
-    "has nothing. No query: the newest records. Read-only. Overview: start_here. "
+    "has nothing. query=\"D12\": decision 12 in full. No query: the newest records. Read-only. Overview: start_here. "
     "Returns {results, count} or {answer, sources}."
 )
 

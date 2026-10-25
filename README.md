@@ -34,6 +34,12 @@ finish a claimed todo; they just get a warning, and `manage_history(action="who"
 A decision that reads like a current one (and doesn't say it replaces it) is still saved, but
 flagged as a *possible* conflict (`D31 vs D12` in the brief) for the agent and then you to settle
 in the review queue; FlowState matches words (and meaning, if the local model is installed), it doesn't judge.
+While such a pair is open, the brief's "Recent decisions" keeps the newer one, tagged
+`(unsettled: may conflict with #12)`, and leaves the older one's text out, so an AI skimming
+the list doesn't follow it as settled. In its place (or on the newer line, if the older one is
+too old for the list) is a short pointer, `#12 in dispute with #31, text left out:
+search(query="D12")`, which shows the full text in one step. Once you keep both, dismiss it, or
+one replaces the other, the brief looks as before.
 When two entries clearly disagree, FlowState also queues a disagreement card: claim A and claim B,
 who wrote each, and up to two short evidence snippets. You keep the older, the newer, or both, or
 dismiss the card. The one you don't keep is marked superseded, not deleted. An agent flags a pair

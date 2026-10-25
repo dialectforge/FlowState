@@ -24,6 +24,18 @@
   --reset` (or the page's "Back to" button) clears it on the relay too, also if the agent was
   stopped at the time (its next hello clears it). A relay or site that doesn't know the name
   ignores it and nothing else changes (docs/relay-protocol.md 3.1). The Settings row says so.
+- **Unsettled decisions in the brief.** A superseded decision already dropped out of "Recent
+  decisions", but an open possible conflict (`Possible conflicts: D31 vs D12`) left both
+  decisions there as plain current ones, and an AI skimming the list could follow the older one.
+  While the pair is open, the newer decision now stays, tagged `(unsettled: may conflict with
+  #12)`, and the older one's text is left out. In its place is one short pointer, `#12 in
+  dispute with #31, text left out: search(query="D12")`; if the older one isn't recent enough
+  for the list, the pointer goes on the newer line instead. An older decision in several open
+  pairs gets one pointer. The check is a guess, so the old text stays one step away:
+  `search(query="D12")` (or `"decision 12"`) now returns that decision in full. Keep both,
+  dismissed, resolved or replaced pairs show exactly as before, the "Possible conflicts" line
+  stays, and the tags fit inside the decisions section's usual room (the newer line's text is
+  shortened a little to make space), so no other section loses lines.
 - **Session summaries show what the session saved.** A summary waiting for review used to say
   only "saved 1 change; also problem solved", so Keep / Don't keep was a blind choice. Now every
   place that shows one (the local review page, the tunnel review page, the phone list, the

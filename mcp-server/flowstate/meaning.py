@@ -271,6 +271,17 @@ def meaning_hits(conn, emb, recs: list[dict], query: str, limit: int) -> list[tu
     return scored[:limit]
 
 
+_DECISION_ID = re.compile(r"^(?:d|decision\s*#?)\s*(\d+)$", re.I)
+
+
+def _by_id(recs: list, query: str) -> Optional[dict]:
+    m = _DECISION_ID.match(query)
+    if not m:
+        return None
+    rid = int(m.group(1))
+    return next((r for r in recs if r["type"] == "decision" and r["id"] == rid), None)
+
+
 def search(db_path: Path, query: str, project_id: Optional[int] = None, kinds=None,
            limit: int = 10, mode: str = "auto") -> dict:
     """mode: auto (meaning + keywords if the model is installed, else keywords), keyword,
@@ -282,6 +293,14 @@ def search(db_path: Path, query: str, project_id: Optional[int] = None, kinds=No
     try:
         names = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM projects")}
         recs = records(conn, project_id, kinds)
+        exact = _by_id(recs, query)
+        if exact:   # "D12" / "decision 12": that decision itself (the brief points here for one in dispute)
+            r = exact
+            return {"query": query, "mode": "id", "count": 1, "results": [
+                {"content_type": r["type"], "content_id": r["id"], "project_id": r["project_id"],
+                 "project": names.get(r["project_id"]), "title": r["title"][:1000],
+                 "snippet": r["body"][:1000], **({"status": r["status"]} if r.get("status") else {}),
+                 "matched_by": "id"}]}
         kw = keyword_hits(recs, query, limit * 3) if mode != "meaning" else []
         emb = embedder() if mode != "keyword" else None
         note = None
