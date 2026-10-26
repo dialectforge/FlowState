@@ -682,7 +682,8 @@ protocol is in [docs/relay-protocol.md](docs/relay-protocol.md).
 - **Answers are extractive** (`search` with `answer=true`): it quotes the best-matching sentences of your records; it doesn't write new answers.
 - **Tested mainly on Windows and macOS.** Linux should work but is less tested.
 - **Remote access is optional and takes setup**: your own domain on Cloudflare, `cloudflared`
-  on your computer, and an owner passphrase. The helper launch scripts in `scripts/windows/` are
+  2026.10.2 or later on your computer (older versions still trust compromised eMudhra
+  certificates: https://blog.cloudflare.com/emudhra-certificate-compromise), and an owner passphrase. The helper launch scripts in `scripts/windows/` are
   Windows-only. FlowState supports OAuth dynamic client registration but not client ID metadata
   documents (CIMD) yet.
 - **The secret scanner is pattern-based**: it can refuse harmless text (for example a 64-character

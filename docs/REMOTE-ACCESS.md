@@ -158,6 +158,9 @@ Below, `<venv python> -m flowstate ...` can also be written `flowstate ...` with
 2. **Install cloudflared** from Cloudflare's official download page
    (https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/).
    Check the published checksum before you install it.
+   Use cloudflared 2026.10.2 or later (check with `cloudflared --version`). Older versions
+   still trust compromised eMudhra certificates; see Cloudflare's notice:
+   https://blog.cloudflare.com/emudhra-certificate-compromise
 3. **Create the tunnel** (opens a browser to log in to Cloudflare; pick your domain):
    ```
    cloudflared tunnel login

@@ -32,6 +32,10 @@ Most setups need nothing. Check these after updating:
   review items about it (made from it, naming it, or its disagreement card). Other review items
   lose only a whole sentence quoted from it (5 words and 30 characters or more), never a short
   shared phrase such as a component's name.
+- **Remote access: update cloudflared to 2026.10.2 or later** (`cloudflared --version`). Older
+  versions still trust compromised eMudhra certificates
+  (https://blog.cloudflare.com/emudhra-certificate-compromise). `flowstate remote status` now
+  mentions it if yours is older. FlowState doesn't ship or update cloudflared.
 
 ### Changes
 
