@@ -597,6 +597,11 @@ Files and the off-site copy
 - On a drive where chmod is accepted but changes nothing, FlowState warns instead of saying it
   made files owner-only at every start. The warning is once per drive; a Windows access-list
   failure (USB drive) warns too.
+- `flowstate tighten` lists a file as "owner-only now" only when it worked. Otherwise it prints
+  `NOT changed: <file>: <why>` and exits 1. On Windows the reason is now the real one: a file
+  owned by another account (named, such as Administrators: run it from an administrator window
+  or `takeown /f` the file first), a FAT / exFAT drive, or icacls's own message, instead of
+  always "this drive doesn't support file permissions".
 - An empty off-site key file or Keychain item now says so and what to do, instead of "try
   again"; it is never replaced. Two first-time pushes at the same moment make one key (Windows).
   `flowstate offsite setup` exits 1 when the key can't be read, and `restore` no longer says
