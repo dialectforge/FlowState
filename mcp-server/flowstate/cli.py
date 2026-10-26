@@ -412,6 +412,10 @@ def cmd_remote(a) -> int:
         live = [c for c in store.list_clients() if not c["revoked_at"]]
         say(f"Apps with access: {len(live)} (see `flowstate remote clients`)")
         say("OAuth redirect hosts allowed: " + ", ".join(RA.redirect_hosts()))
+        from .cloudflared_check import note
+        cf = note()   # only when an older cloudflared is installed; never blocks
+        if cf:
+            say(cf)
         return 0
     if a.action == "passphrase":
         import getpass
