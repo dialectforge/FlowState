@@ -243,12 +243,18 @@ def cmd_tighten(a) -> int:
             say(f"No folder {d}; nothing was changed.")
             return 1
     changed = privatefs.tighten_existing(db, dry_run=a.dry_run, dirs=dirs)
-    if not changed:
+    if not changed and not changed.failed:
         say("Nothing to change: FlowState's files are already owner-only (or this system "
             "doesn't use those permission bits).")
         return 0
     for p in changed:
         say(("would make owner-only: " if a.dry_run else "owner-only now: ") + str(p))
+    for p, why in changed.failed:   # never counted as changed (task 61)
+        say(f"NOT changed: {p}: {why}")
+    if changed.failed:
+        say(f"{len(changed.failed)} of FlowState's files and folders could not be made "
+            f"owner-only (see above); they may be readable by other users of this computer.")
+        return 1
     return 0
 
 

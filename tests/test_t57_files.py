@@ -110,6 +110,7 @@ def test_icacls_failure_warns(monkeypatch, caplog, tmp_path):
     caplog.set_level(logging.WARNING, logger="flowstate.privatefs")
     monkeypatch.setattr(privatefs, "_warned", set())
     monkeypatch.setattr(privatefs, "_account", lambda: "*S-1-5-21-1")
+    monkeypatch.setattr(privatefs, "_volume", lambda p: ("FAT32", False))   # task 61: a real FAT drive
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 5, b"", b""))
     assert privatefs._icacls(tmp_path, True) is False
     assert any("file permissions" in r.getMessage() for r in caplog.records)

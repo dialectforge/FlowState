@@ -15,9 +15,12 @@ Existing files: `flowstate tighten` makes FlowState's own owner-only; on macOS /
 server and `flowstate backup` also do it for the database, backups and FlowState's folders
 (auto_tighten: an older version left them readable by others). A drive that doesn't keep
 permissions (USB, exFAT, many SMB shares) never stops a file being made: FlowState says once
-that it may be readable by other users of this computer (re-audit N-F7).
+that it may be readable by other users of this computer (re-audit N-F7). `flowstate tighten`
+lists what it could not change and why (task 61: another account's file, such a drive, or the
+system's own message), never as changed.
 """
 
+import errno
 import logging
 import os
 import re
@@ -62,19 +65,53 @@ def warn_no_permissions(path: Union[str, Path], err: BaseException = None) -> No
                 f" ({type(err).__name__})" if err else "")
 
 
+NO_PERMISSIONS = "this drive doesn't support file permissions"
+
+
 def _chmod(path: Union[str, Path], mode: int) -> bool:
     """chmod that never raises: False (and the warning, once) when the drive refuses it, or
     accepts it and changes nothing (some SMB mounts: the mode reads back as before, so
     FlowState doesn't claim the file is owner-only; task 56 Low)."""
+    why = _chmod_why(path, mode)
+    if why and why != NO_PERMISSIONS:
+        log.warning("could not make %s owner-only: %s", Path(path).name, why)
+    return not why
+
+
+def _chmod_why(path: Union[str, Path], mode: int) -> str:
+    """chmod that never raises: "" when it worked, else why not (task 61): owned by another
+    account, a drive without permissions (with the warning, once), or the system's own error."""
     try:
         os.chmod(path, mode)
         if stat.S_IMODE(os.stat(path).st_mode) & 0o077 & ~mode:
             warn_no_permissions(path)
-            return False
-        return True
+            return NO_PERMISSIONS
+        return ""
     except OSError as e:
-        warn_no_permissions(path, e)
-        return False
+        owner = _posix_owner(path)
+        if owner is not None:
+            return (f"not allowed: it is owned by another account ({owner}); ask that account or "
+                    f"an administrator to change it (`sudo chown`), then run `flowstate tighten` "
+                    f"again")
+        if e.errno in (errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP):   # exFAT, SMB (N-F7)
+            warn_no_permissions(path, e)
+            return NO_PERMISSIONS
+        return e.strerror or type(e).__name__
+
+
+def _posix_owner(path) -> Union[str, None]:
+    """The account that owns `path` when it isn't this one (macOS / Linux), else None."""
+    try:
+        uid = os.stat(path).st_uid
+        if not hasattr(os, "geteuid") or uid == os.geteuid():
+            return None
+        try:
+            import pwd
+            return pwd.getpwuid(uid).pw_name
+        except (ImportError, KeyError):
+            return f"user id {uid}"
+    except OSError:
+        return None
 
 
 def _windows() -> bool:
@@ -106,21 +143,108 @@ def _account() -> str:
 
 def _icacls(path: Path, folder: bool) -> bool:
     """Windows: only this account and SYSTEM may use `path` (inherited entries removed)."""
+    why = _icacls_why(path, folder)
+    if why and not why.startswith(NO_PERMISSIONS):
+        log.warning("could not make %s owner-only: %s", path.name, why)
+    return not why
+
+
+def _icacls_why(path: Path, folder: bool) -> str:
+    """`_icacls` that says why not (task 61): "" when it worked. Access denied (the file is
+    another account's, e.g. made from an administrator window), a drive without access lists
+    (FAT, exFAT, a share without them; with the warning, once), or icacls's own message."""
     user = _account()
     if not user:
-        return False
+        return "could not find this account's name to give it access"
     inherit = "(OI)(CI)" if folder else ""
     cmd = ["icacls", str(path), "/inheritance:r", "/grant:r", f"{user}:{inherit}F",
            f"*S-1-5-18:{inherit}F", "/q"]
     try:
         r = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, timeout=20,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        if r.returncode != 0:   # a USB / FAT drive has no access lists: say so (task 56 Info)
-            warn_no_permissions(path)
-        return r.returncode == 0
     except (OSError, subprocess.SubprocessError) as e:
-        log.warning("could not make %s owner-only: %s", path.name, type(e).__name__)
-        return False
+        return f"icacls could not run ({type(e).__name__})"
+    if r.returncode == 0:
+        return ""
+    vol = _volume(path)
+    if vol is not None and not vol[1]:   # FAT / exFAT / a share without access lists
+        warn_no_permissions(path)
+        return f"{NO_PERMISSIONS} ({vol[0]})" if vol[0] else NO_PERMISSIONS
+    out = _text(r.stdout) + "\n" + _text(r.stderr)
+    if r.returncode == 5 or "access is denied" in out.lower():   # ERROR_ACCESS_DENIED
+        owner = _owner(path)
+        mine = owner is not None and (owner[0] and "*" + owner[0] == user
+                                      or owner[1].lower() == user.lower())
+        what = "folder" if folder else "file"
+        if owner is None:
+            who = (f"this account may not change the {what}'s permissions (it is probably owned "
+                   f"by another account, such as Administrators)")
+        elif mine:
+            who = f"this account may not change the {what}'s permissions"
+        else:
+            who = f"the {what} is owned by another account ({owner[1] or owner[0]})"
+        return (f"access denied: {who}. Run `flowstate tighten` from an administrator window, "
+                f'or take ownership first (takeown /f "{path}") and run it again')
+    line = next((ln.strip() for ln in out.splitlines() if ln.strip()
+                 and not ln.strip().lower().startswith("successfully processed")), "")
+    return f"icacls failed: {line[:200]}" if line else f"icacls failed (exit code {r.returncode})"
+
+
+def _text(b) -> str:
+    if isinstance(b, str):
+        return b
+    if not b:
+        return ""
+    try:
+        return b.decode("oem")   # icacls writes the console code page (Windows only codec)
+    except (LookupError, UnicodeDecodeError):
+        return b.decode("utf-8", "replace")
+
+
+def _volume(path: Path):
+    """Windows: (file system name, keeps access lists) for `path`'s drive, None if unknown."""
+    try:
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        root = ctypes.create_unicode_buffer(261)
+        if not k32.GetVolumePathNameW(str(path), root, 261):
+            return None
+        name, flags = ctypes.create_unicode_buffer(261), ctypes.c_ulong()
+        if not k32.GetVolumeInformationW(root.value, None, 0, None, None, ctypes.byref(flags),
+                                         name, 261):
+            return None
+        return name.value, bool(flags.value & 0x8)   # FILE_PERSISTENT_ACLS
+    except Exception:  # noqa: BLE001 - not Windows, or no ctypes: unknown
+        return None
+
+
+def _owner(path: Path):
+    """Windows: (SID, DOMAIN\\name) of `path`'s owner, None if it can't be read."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        adv = ctypes.windll.advapi32
+        sid, sd = ctypes.c_void_p(), ctypes.c_void_p()
+        if adv.GetNamedSecurityInfoW(str(path), 1, 1, ctypes.byref(sid), None, None, None,
+                                     ctypes.byref(sd)):   # SE_FILE_OBJECT, OWNER_SECURITY_INFO
+            return None
+        try:
+            text = wintypes.LPWSTR()
+            sid_s = text.value if adv.ConvertSidToStringSidW(sid, ctypes.byref(text)) else ""
+            if text:
+                ctypes.windll.kernel32.LocalFree(text)
+            name, dom = ctypes.create_unicode_buffer(256), ctypes.create_unicode_buffer(256)
+            n, d, use = wintypes.DWORD(256), wintypes.DWORD(256), wintypes.DWORD()
+            if adv.LookupAccountSidW(None, sid, name, ctypes.byref(n), dom, ctypes.byref(d),
+                                     ctypes.byref(use)):
+                who = f"{dom.value}\\{name.value}" if dom.value else name.value
+            else:
+                who = ""
+        finally:
+            ctypes.windll.kernel32.LocalFree(sd)
+        return (sid_s, who) if sid_s or who else None
+    except Exception:  # noqa: BLE001 - not Windows, or no ctypes: unknown
+        return None
 
 
 def lock(path: Union[str, Path]) -> None:
@@ -288,29 +412,44 @@ def _backup_folder(b: Path, deep: bool, own: bool) -> list:
     return out
 
 
-def tighten_existing(db_path: Path, dry_run: bool = False, deep: bool = True, dirs=()) -> list:
+class Tightened(list):
+    """What `tighten_existing` changed (or would change), a list as before; `.failed` holds
+    (path, why) for each one it could not change (task 61: never counted as changed)."""
+
+    def __init__(self):
+        super().__init__()
+        self.failed = []
+
+
+def tighten_existing(db_path: Path, dry_run: bool = False, deep: bool = True,
+                     dirs=()) -> Tightened:
     """`flowstate tighten`: make FlowState's own existing files and folders owner-only (the
     database and its -wal / -shm, backups and restores, the data, backup and settings folders
     when they are FlowState's own, settings files, projects/ and the off-site staging folder).
-    Never your home or a folder FlowState didn't name. Returns what changed (or would change).
-    A drive that refuses permissions is skipped (with the warning, once)."""
+    Never your home or a folder FlowState didn't name. Returns what changed (or would change);
+    `.failed` lists what could not be changed and why (a drive that refuses permissions: with
+    the warning, once)."""
     cands = _candidates(db_path, deep, dirs)
-    out = []
+    out = Tightened()
     for p in dict.fromkeys(cands):
         try:
             if not p.exists() or p.is_symlink():
                 continue
             if _windows():
                 if p.is_dir() or p.parent not in cands:
-                    out.append(p)
-                    if not dry_run:
-                        _icacls(p, p.is_dir())
+                    why = "" if dry_run else _icacls_why(p, p.is_dir())
+                else:
+                    continue
+            elif stat.S_IMODE(os.stat(p).st_mode) & 0o077:
+                why = "" if dry_run else _chmod_why(p, DIR_MODE if p.is_dir() else FILE_MODE)
+            else:
                 continue
-            if stat.S_IMODE(os.stat(p).st_mode) & 0o077:
-                if dry_run or _chmod(p, DIR_MODE if p.is_dir() else FILE_MODE):
-                    out.append(p)
-        except OSError:
-            continue
+            if why:
+                out.failed.append((p, why))
+            else:
+                out.append(p)
+        except OSError as e:
+            out.failed.append((p, e.strerror or type(e).__name__))
     return out
 
 
@@ -330,4 +469,8 @@ def auto_tighten(db_path: Path, dirs=()) -> list:
     if changed:
         log.warning("made %d of FlowState's files and folders owner-only (an older version had "
                     "left them readable by other users of this computer)", len(changed))
+    failed = [p for p, why in changed.failed if not why.startswith(NO_PERMISSIONS)]   # warned already
+    if failed:
+        log.warning("could not make %d of FlowState's files and folders owner-only; "
+                    "`flowstate tighten` says why", len(failed))
     return changed
