@@ -109,6 +109,16 @@ def test_cards_through_the_relay(world, seeded_db, monkeypatch):
     assert not CARD_TOOLS & set(host.tools())
     listed = host.call("manage_review", {"action": "list", "project": "Alpha"})
     assert "show_card" not in listed and listed["conflict_cards"][0]["review_item_id"] == dis
+    # task 65b: the first card it would get is offered to the user instead (review page / phone)
+    assert "Allow tap cards in claude-ai (signed in as Relay test app)?" in listed["cards_off"]
+    offer = [i for i in review.list_items(seeded_db, None)["items"] if i["kind"] == "card_offer"]
+    assert len(offer) == 1
+    from flowstate import server as S
+    no = S._review_decide("review_reject", offer[0]["project_id"],
+                          {"item_id": offer[0]["id"], "reason": "no", "user_request": "No"},
+                          "review-page")
+    assert no["rejected"] == offer[0]["id"]
+    listed = host.call("manage_review", {"action": "list", "project": "Alpha"})   # not again
     assert 'flowstate approvals cards add --sign-in "relay test app"' in listed["cards_off"]
     assert "cards_off" not in cursor.call("manage_review", {"action": "list"})   # no MCP Apps
     refused = host.call("resolve_conflict_card", {"item_id": dis, "keep": "a", "project": "Alpha",

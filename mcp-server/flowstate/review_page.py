@@ -490,6 +490,26 @@ class Page:
                   f"{'added' if op == 'add' else 'removed'} {name}")
         return f"{'Added' if op == 'add' else 'Removed'} {name}."
 
+    def set_card_offers(self, form: dict, sess: str) -> str:
+        """Offers of the cards to apps on a network sign-in (card_offer.py): on / off for every
+        app, or offer one sign-in again (after a No, or after its cards were taken away)."""
+        from . import card_offer
+        if self.settings != "edit":
+            return READ_ONLY
+        state = form.get("state")
+        if state in ("on", "off"):
+            old = "on" if card_offer.offers_on(self.db_path) else "off"
+            card_offer.set_offers(self.db_path, state == "on", self.client)
+            self._log(card_offer.OFFERS, old, state)
+            return f"Card offers are {state}."
+        name = approvals.clean_client_name(form.get("name", ""))
+        if state != "again" or not name:
+            raise ValueError("state")
+        before = card_offer.offered(self.db_path)
+        card_offer.mark_offered(self.db_path, name, False, self.client)
+        self._log(card_offer.OFFERED, ", ".join(sorted(before)), f"offer again: {name}")
+        return f"{name} is offered the cards again the next time it would show one."
+
     def _set_signin(self, what: str, name: str, op: str) -> str:
         """The sign-in part of the popup / card list (approvals.signins): a key's, token's or
         OAuth app's own name, never matched against the name an app sends (task 57)."""
@@ -657,6 +677,10 @@ class Page:
                     out.append(f"""<p><strong>{_e(it['summary'])}</strong></p><p class="meta">{_e(it['details'])}</p>
 <form method="post" action="{self.base}/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
 <button>Approve: {"remove" if '"action": "remove"' in (it.get("payload") or "") else "add"} this rule</button></form>""")
+                elif it["kind"] == "card_offer":   # "Allow tap cards in <app>?": yes or no
+                    out.append(f"""<p><strong>{_e(it['summary'])}</strong></p><p class="meta">{_e(it['details'])}</p>
+<form method="post" action="{self.base}/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
+<button>Allow</button></form>""")
                 elif it["kind"] == "source":   # "did you say this?": nothing to edit
                     out.append(f"""<p><strong>{_e(it['summary'])}</strong></p><p class="meta">{_e(it['details'])}</p>
 <form method="post" action="{self.base}/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
@@ -690,6 +714,8 @@ class Page:
                       if it["kind"] == "session_summary" else
                       '<input type="text" name="reason" placeholder="Reason for dismissing"><button>Dismiss</button>'
                       if it["kind"] == "disagreement" else
+                      '<input type="hidden" name="reason" value="not allowed on the review page"><button>No</button>'
+                      if it["kind"] == "card_offer" else
                       '<input type="text" name="reason" placeholder="Reason for rejecting"><button>Reject</button>')
                 out.append(f"""
 <form method="post" action="{self.base}/reject">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
@@ -797,6 +823,7 @@ class Page:
         if scope.startswith("app:"):
             return f"Pause {scope[4:]}"
         return {"phone_approvals": "Phone approval links", "popup_clients": "Popup apps",
+                "card_offers": "Card offers", "card_offered": "Card offers asked",
                 "card_clients": "Review card apps", "popup_signins": "Popup sign-ins",
                 "card_signins": "Review card sign-ins",
                 "config:self_update": "Updates by flowstate update",
@@ -956,6 +983,27 @@ class Page:
             add_form(action, "the app"),
             "Each tap carries a one-use code only the card gets; an app never decides what it "
             "queued itself on its own card."))
+        from . import card_offer
+        asked = sorted(card_offer.offered(db))
+        action = f"{self.base}/settings/card-offers"
+        again = "".join(
+            f"<li>sign-in: {_e(n)}" + (f"<form method='post' action='{action}'>{hidden}"
+                                       f"<input type='hidden' name='state' value='again'><input "
+                                       f"type='hidden' name='name' value='{_e(n)}'><button>Offer "
+                                       f"again</button></form>" if edit else "") + "</li>"
+            for n in asked)
+        out.append(self._row(
+            "Offer the cards to apps on a sign-in",
+            "When an app that connects over the network (the relay, your tunnel, a LAN key) can "
+            "draw the review cards but isn't on the list above, FlowState asks you once, in the "
+            "review queue: \"Allow tap cards in &lt;app&gt;?\". Allow puts its sign-in on the list; "
+            "No keeps the text. Each sign-in is asked once; after a No, or after you remove it "
+            "above, it isn't asked again unless you offer it again here.",
+            f"<b>{'on' if card_offer.offers_on(db) else 'off'}</b>."
+            + (f" Already asked:<ul>{again}</ul>" if again else ""),
+            self._buttons(action, hidden, (("on", "Turn on", True), ("off", "Turn off", False))),
+            "In a terminal: <code>flowstate approvals cards offers on|off</code>, "
+            "<code>flowstate approvals cards offer-again NAME</code>."))
         no_relay = "" if relay else "Only used with the FlowState relay (not set up here)."
         out.append(self._row(
             "Phone approval links",
@@ -1211,6 +1259,7 @@ def create_app(page: Page):
           for name, fn in (("approvals", page.set_approvals), ("relay-chat", page.set_relay_chat),
                            ("phone", page.set_phone), ("popup", page.set_popup),
                            ("cards", page.set_cards),
+                           ("card-offers", page.set_card_offers),
                            ("self-update", page.set_self_update),
                            ("name", page.set_display_name),
                            ("update-check", page.set_update_check),

@@ -86,7 +86,7 @@ SITE = "https://flowstatemcp.com"
 ACTION = "approve_review"
 REVIEW_ACTION = "open_review"   # the phone review list (review_phone.py): item 0
 START_ACTION = "start_review"   # the site's ticket for /review/start (review_phone.py): item 0
-USER_ONLY_KINDS = ("delete", "setting", "source", "rule")
+USER_ONLY_KINDS = ("delete", "setting", "source", "rule", "card_offer")
 
 # The flowstatemcp.com approval-grant public keys (ES256 / P-256 JWKs), pinned per release:
 # fsa-1 active, fsa-2 backup so the site can rotate without a forced update.
@@ -367,7 +367,12 @@ def signins(db_path: Optional[Path], what: str) -> set:
 
 
 def change_signins(db_path: Path, what: str, name: str, add: bool, who: str = "command-line") -> set:
-    return _change_list(db_path, (), f"{what}_signins", name, add, who)
+    """Add or remove a sign-in. A card sign-in taken off the list is also marked as offered
+    (card_offer.py), so FlowState doesn't offer the cards to it again by itself."""
+    out = _change_list(db_path, (), f"{what}_signins", name, add, who)
+    if what == "card" and not add:
+        _change_list(db_path, (), "card_offered", name, True, who)
+    return out
 
 
 def _signin_listed(db_path: Optional[Path], what: str, credential: Optional[str],
@@ -416,7 +421,7 @@ def user_only(item: Optional[dict]) -> bool:
     approvals were on, and every "did the user say this?" item (provenance.py)."""
     if not item or item.get("kind") not in USER_ONLY_KINDS:
         return False
-    if item["kind"] in ("setting", "source", "rule"):   # source, rule: always, approvals on or off
+    if item["kind"] in ("setting", "source", "rule", "card_offer"):   # always, approvals on or off
         return True
     try:
         return bool(json.loads(item.get("payload") or "{}").get("user_only"))
@@ -719,6 +724,9 @@ def describe(item: dict, project: str, db_path: Optional[Path] = None) -> str:
     if item["kind"] == "cleanup":
         from . import cleanup
         return cleanup.ask(p, project, db_path)
+    if item["kind"] == "card_offer":
+        from . import card_offer
+        return card_offer.describe(item)
     if item["kind"] == "setting":
         where = "the whole install" if p.get("scope") == "install" else project
         return f"turn review off for {where}"

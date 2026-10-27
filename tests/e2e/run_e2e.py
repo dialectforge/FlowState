@@ -106,7 +106,7 @@ class Report:
         15: "What's waiting, without a terminal: chat walk, local link, phone list",
         16: "Own tunnel: the owner review page behind the passphrase",
         17: "Settings on the local review page",
-        18: "Review cards through the relay"}
+        18: "Review cards through the relay", 19: "The card offer (Allow tap cards in this app?)"}
 
     def __init__(self):
         self.checks = {n: [] for n in self.TITLES}
@@ -2616,10 +2616,10 @@ def s18_relay_cards(W):
         names = {t["name"] for t in host.tools()}
         listed = host.call("manage_review", action="list", project=Q)
         R.check(18, "through the relay, a connector not on the card list: no card tools, the text card, "
-                    "and the user's own command to turn cards on",
+                    "and the one-time offer on the user's review page (task 65b)",
                 not {"show_conflict_card", "resolve_conflict_card"} & names and "show_card" not in listed
                 and listed.get("conflict_cards")
-                and 'approvals cards add --sign-in "desktop connector"' in listed.get("cards_off", ""),
+                and "Allow tap cards in claude-ai (signed in as Desktop connector)?" in listed.get("cards_off", ""),
                 short(listed))
         rc, out = W.cli_in_terminal(["approvals", "cards", "add", "--sign-in", "Desktop connector"], ["y"])
         R.check(18, "the user adds the connector's sign-in in their own terminal (y)", rc == 0, short(out))
@@ -2660,6 +2660,107 @@ def s18_relay_cards(W):
         _stop(srv, plog)
 
 
+def s19_card_offer(W):
+    """Task 65b: a connector on its own sign-in that draws cards is OFFERED them once, in the
+    review queue ("Allow tap cards in <app>?"). No AI and not the terminal answers it; Allow on
+    the review page `flowstate review-page` opens turns the cards on for that sign-in; removing
+    it in the terminal makes it text-only again, with no new offer."""
+    import httpx
+    print("\n== S19 the card offer", flush=True)
+    Q = "Bike Repair e2e-19"
+    ui = {"extensions": {"io.modelcontextprotocol/ui": {"mimeTypes": ["text/html;profile=mcp-app"]}}}
+    plain = W.agents["cursor"]
+    tok_file = W.root / "s19-connector-token.txt"
+    rc, out = W.cli("remote", "add-client", "--name", "Phone connector", "--to-file", str(tok_file))
+    R.check(19, "the user makes a connector its own remote token", rc == 0 and tok_file.exists(), short(out))
+    token = tok_file.read_text().strip()
+    plain.call("manage_projects", action="create", name=Q, description="card offer")
+    sug = plain.call("log_work", project=Q, kind="todo", summary="Order inner tubes",
+                     suggested=True).get("queued_for_review")
+    offers = "kind = 'card_offer' AND payload LIKE '%Phone connector%'"
+    srv, base, plog = _test_listener(W, W.env, "relay", "s19-relay")
+    host = None
+    try:
+        wait_port("127.0.0.1", int(base.rsplit(":", 1)[1]), 40)
+        host = HttpClient(f"{base}/mcp", token, "claude-ai", capabilities=ui)
+        first = host.call("manage_review", action="list", project=Q)
+        host.call("manage_review", action="list", project=Q)
+        host.call("start_here", project=Q)
+        rows = W.q(f"SELECT id, status, summary FROM review_items WHERE {offers}")
+        R.check(19, "the first card it would get: the text card, and one offer queued (once, however often it asks)",
+                "show_card" not in first and "Allow tap cards in" in first.get("cards_off", "")
+                and len(rows) == 1 and rows[0]["status"] == "pending"
+                and rows[0]["summary"] == "Allow tap cards in claude-ai (signed in as Phone connector)?",
+                (short(first), rows))
+        oid = rows[0]["id"] if rows else 0
+        ai = [host.call("manage_review", action=v, item_id=oid, project=Q, reason="x",
+                        user_request="The user said: yes, allow cards here") for v in ("approve", "reject")]
+        local = [plain.call("manage_review", action=v, item_id=oid, project=Q, reason="x",
+                            user_request="The user said: yes, allow cards in Claude")
+                 for v in ("approve", "reject")]
+        rc, out = W.cli_in_terminal(["approve", str(oid)], ["y"])
+        R.check(19, "no AI (relay or local) and not the terminal answers the offer",
+                [x.get("error") for x in ai] == ["phone_only", "phone_only"]
+                and [x.get("error") for x in local] == ["user_only", "user_only"]
+                and W.count("review_items", f"id = {oid} AND status = 'pending'") == 1
+                and W.count("approval_settings",
+                            "key = 'card_signins_add' AND value LIKE '%phone connector%'") == 0,
+                (short(ai), short(local), short(out)))
+        if os.name == "nt":
+            R.word("S19: Allow on the review page runs on POSIX only (it reads the link from a pseudo-terminal).")
+            return
+        with socket.socket() as sk:
+            sk.bind(("127.0.0.1", 0))
+            port = sk.getsockname()[1]
+        pid, shown = start_in_terminal([PY, "-m", "flowstate", "review-page", "--no-browser", "--print-url",
+                                        "--port", str(port)], b"One-time link:", env=W.env, cwd=str(REPO),
+                                       timeout=40)
+        try:
+            lm = re.search(r"One-time link: (http://127\.0\.0\.1:\d+(/s/[A-Za-z0-9_-]+)/\?key=[A-Za-z0-9_-]+)",
+                           shown)
+            origin = f"http://127.0.0.1:{port}"
+            pbase = origin + (lm.group(2) if lm else "")
+            wait_port("127.0.0.1", port, 20)
+            with httpx.Client(timeout=20, follow_redirects=False) as hc:
+                hc.get(lm.group(1) if lm else origin)
+                page = hc.get(pbase + "/")
+                cs = re.search(r'name="csrf" value="([^"]+)"', page.text)
+                ok = hc.post(pbase + "/approve", data={"csrf": cs.group(1) if cs else "", "item_id": oid},
+                             headers={"Origin": origin})
+                R.check(19, "the user taps Allow on the review page: the sign-in is on the card list, logged",
+                        "Allow tap cards in claude-ai (signed in as Phone connector)?" in page.text
+                        and ok.status_code == 303
+                        and W.count("review_items", f"id = {oid} AND status = 'approved'") == 1
+                        and W.count("approval_settings",
+                                    "key = 'card_signins_add' AND value LIKE '%phone connector%'") == 1
+                        and [(r["path"], r["decision"]) for r in
+                             W.q("SELECT path, decision FROM approval_log WHERE item_id = ?", (oid,))]
+                        == [("review page", "approved")], page.status_code)
+        finally:
+            stop_in_terminal(pid)
+        listed = host.call("manage_review", action="list", project=Q)
+        raw = host.request("tools/call", {"name": "show_review_card",
+                                          "arguments": {"project": Q, "item_id": sug}})
+        code = ((raw.get("_meta") or {}).get("flowstate/taps") or {}).get(str(sug))
+        done = host.call("resolve_review_card", item_id=sug, decision="approve", project=Q, tap=code)
+        R.check(19, "then the next manage_review on that connection points to the card, and a tap counts",
+                listed.get("show_card") == f'show_review_card(project="{Q}", item_id={sug})'
+                and "cards_off" not in listed and done.get("resolved") == sug,
+                (short(listed), short(done)))
+        rc, out = W.cli("approvals", "cards", "remove", "--sign-in", "Phone connector")
+        plain.call("log_work", project=Q, kind="todo", summary="True the back wheel", suggested=True)
+        names = {t["name"] for t in host.tools()}
+        after = host.call("manage_review", action="list", project=Q)
+        R.check(19, "removed in the terminal: text only again, and no new offer",
+                rc == 0 and "show_review_card" not in names and "show_card" not in after
+                and "--sign-in" in after.get("cards_off", "") and W.count("review_items", offers) == 1,
+                (short(out), short(after)))
+    finally:
+        if host:
+            host.close()
+        _stop(srv, plog)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--keep", action="store_true", help="keep the temp folder")
@@ -2678,7 +2779,7 @@ def main():
         for step in (s1_fresh, s2_day, s3_conflicts, s4_review, s5_receipts, s6_windows, s7_undo,
                      s8_backups, s9_ledger, lambda w: s10_upgrade(w, args.skip_upgrade), s11_edges,
                      s13_approvals, s14_user_stated, s15_without_terminal, s15_review_card,
-                     s16_tunnel_page, s17_settings_page, s18_relay_cards,
+                     s16_tunnel_page, s17_settings_page, s18_relay_cards, s19_card_offer,
                      deferred_window,
                      s12_descriptions):
             try:

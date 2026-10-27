@@ -338,12 +338,26 @@ def show_call(project: str, item_ids: list) -> str:
 def pointer(project: Optional[str], item_ids: list) -> dict:
     """{show_card, card_note} for answers that surface a disagreement, on MCP Apps hosts only
     (elsewhere there is no card to show and the text is the card)."""
-    if not item_ids or not project or not client_has_ui():
+    if not item_ids or not project:
         return {}
+    if not client_has_ui():
+        return offered(project)
     call = show_call(project, item_ids)
     return {"show_card": call,
             "card_note": f"This app can show the disagreement as a card the user taps (Keep A, "
                          f"Keep B or Keep both): call {call} now. Don't choose for them."}
+
+
+def offered(project) -> dict:
+    """An app on a network sign-in that draws cards but isn't allowed them yet: the one-time
+    offer to the user (card_offer.py), and what to tell them. {} for every other app."""
+    from . import card_offer
+    from .server import backend
+    try:
+        off = card_offer.offer(backend.db_path, project)
+    except Exception:  # noqa: BLE001 - an offer must never fail the answer
+        return {}
+    return {"cards_off": card_offer.note(off)} if off else {}
 
 
 def _answer(cards: list, project: Optional[str] = None) -> dict:
@@ -772,12 +786,14 @@ def brief_line(conn, pid: int) -> Optional[str]:
 
 def brief_hint(conn, pid: int, project: str) -> Optional[str]:
     """On MCP Apps hosts, when a card is open: the call that shows it."""
-    if not available(conn) or not client_has_ui():
+    if not available(conn):
         return None
     ids = [r[0] for r in conn.execute("""SELECT review_item_id FROM conflict_cards WHERE project_id = ?
                                          AND status = 'open' AND review_item_id IS NOT NULL""", (pid,))]
     if not ids:
         return None
+    if not client_has_ui():
+        return offered(pid).get("cards_off")
     return (f"Disagreement card waiting: call {show_call(project, ids)} so the user can tap "
             f"Keep A, Keep B or Keep both.")
 
@@ -1027,6 +1043,15 @@ def declares_ui(caps) -> bool:
     return isinstance(ext, dict) and UI_EXT in ext
 
 
+def ui_declared() -> bool:
+    """This connection says it shows MCP Apps (its own claim; client_has_ui decides)."""
+    try:
+        from .server import server
+        return declares_ui(server.request_context.session.client_params.capabilities)
+    except Exception:  # noqa: BLE001 - no session, or a client that sent no extensions
+        return False
+
+
 def client_has_ui() -> bool:
     """Does this connection get the cards? It says it shows MCP Apps, and it is on the user's
     card list (approvals.card_clients): the flag alone is the app's own claim. Which name is
@@ -1054,12 +1079,14 @@ CARDS_OFF = ("This app can draw FlowState's in-chat review cards, but the user h
              "want to tap Approve / Reject in this chat; don't run it for them.")
 
 
-def cards_off() -> Optional[str]:
+def cards_off(project=None) -> Optional[str]:
     """For an app that says it shows MCP Apps but isn't on the user's card list (task 65): how
     the user turns the cards on for it, the user's own step (no tool does it). Over the network
     that is the sign-in's own name (card_trust.py), never the name the app sends; the shared
     LAN token and HTTP calls without a sign-in get none (no cards there at all). None when the
-    app gets the cards, doesn't show MCP Apps, or outside a request."""
+    app gets the cards, doesn't show MCP Apps, or outside a request. With `project`, a
+    network sign-in is first offered the cards on the user's review page (card_offer.py, task
+    65b): then the answer says that instead."""
     try:
         from .server import server
         caps = server.request_context.session.client_params.capabilities
@@ -1067,6 +1094,10 @@ def cards_off() -> Optional[str]:
         return None
     if not declares_ui(caps) or client_has_ui():
         return None
+    if project is not None:
+        off = offered(project).get("cards_off")
+        if off:
+            return off
     from . import approvals, card_trust
     try:
         who = card_trust.caller()

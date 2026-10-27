@@ -117,7 +117,7 @@ def _words(it: dict, project: str, db_path: Path) -> dict:
                         "changed.",
                 "approve_label": "They conflict", "reject_label": "They fit together"}
     label = {"setting": "Review setting", "source": "Did you say this?", "rule": "Hard rule",
-             "delete": "Delete request"}.get(kind, kind.replace("_", " ").capitalize())
+             "delete": "Delete request", "card_offer": "Allow cards?"}.get(kind, kind.replace("_", " ").capitalize())
     return {"title": _sentence(approvals.describe(it, project, db_path)) + "?",
             "kind_label": label, "does": "", "approve_label": "Approve", "reject_label": "Reject"}
 
@@ -227,8 +227,11 @@ def show_call(project: str, item_ids: list) -> str:
 def pointer(project: Optional[str], item_ids: list) -> dict:
     """{show_card, card_note} for answers that list waiting non-disagreement items, on MCP Apps
     hosts only (elsewhere the text is all there is)."""
-    if not item_ids or not project or not client_has_ui():
+    if not item_ids or not project:
         return {}
+    if not client_has_ui():   # a network sign-in not allowed yet: offered once (card_offer.py)
+        from . import conflict_cards
+        return conflict_cards.offered(project)
     call = show_call(project, item_ids)
     return {"show_card": call,
             "card_note": f"This app can show what's waiting as cards the user taps (Approve or "
@@ -240,6 +243,8 @@ def both(conflict: dict, rest: dict) -> dict:
     """Both kinds wait: both calls, one short note."""
     if not (conflict and rest):
         return conflict or rest
+    if "show_card" not in conflict or "show_card" not in rest:   # no cards here: the offer note
+        return {**rest, **conflict}
     calls = [conflict["show_card"], rest["show_card"]]
     return {"show_card": calls,
             "card_note": f"This app can show these as cards the user taps: call {calls[0]} for the "
@@ -250,10 +255,15 @@ def brief_hint(conn, pid: int, project: str, card_hint: Optional[str] = None) ->
     """On MCP Apps hosts, when non-disagreement items wait in the project: how many, and the
     call that shows them as cards. `card_hint` is the disagreement card's own hint
     (conflict_cards.brief_hint); when both wait, one line names both calls."""
-    if not client_has_ui() or not review.available(conn):
+    if not review.available(conn):
         return card_hint
     n = conn.execute("SELECT COUNT(*) FROM review_items WHERE project_id = ? AND status = 'pending' "
                      "AND kind != 'disagreement'", (pid,)).fetchone()[0]
+    if not client_has_ui():   # card_hint is then the offer note (card_offer.py), if any
+        if card_hint or not n:
+            return card_hint
+        from . import conflict_cards
+        return conflict_cards.offered(pid).get("cards_off")
     if not n:
         return card_hint
     items = f"{n} item{'s' if n != 1 else ''}"

@@ -140,7 +140,11 @@ def test_stdio_claude_code_still_gets_popups_with_its_label(backend, relay_dir):
 
 def test_only_the_terminal_and_the_local_page_change_the_sign_in_lists():
     from test_relay_chat_approvals import _callers
-    assert _callers(r"change_signins\(", "approvals.py") == ["cli_review.py", "review_page.py"]
+    # (task 65b) and the user's own Allow on an offer, which only the review page and the phone
+    # pages decide (card_offer.refusal, checked in _review_decide before anything else)
+    assert _callers(r"change_signins\(", "approvals.py") == ["card_offer.py", "cli_review.py",
+                                                              "review_page.py"]
+    assert _callers(r"card_offer\.apply\(", "card_offer.py") == ["review_apply.py"]
 
 
 # ---------------------------------------------------------------- the card list's two parts

@@ -22,7 +22,7 @@ def approve(db_path: Path, item: dict, args: dict, user_request: str, client: st
     `done` collects extra answer fields (safety_copy, note, deleted). `path` names how the
     decision was made for a disagreement's own log (the card: "card"). Raises ReviewError,
     deletes.DeleteError, safety.SafetyError."""
-    from . import cleanup, conflict_cards, conflicts, deletes, history, provenance, \
+    from . import card_offer, cleanup, conflict_cards, conflicts, deletes, history, provenance, \
         handoffs, review_mode, rules, safety
     from . import server as S
 
@@ -68,6 +68,7 @@ def approve(db_path: Path, item: dict, args: dict, user_request: str, client: st
                                   "setting": apply_setting, "disagreement": apply_disagreement,
                                   "source": lambda it, _e: provenance.confirm(db_path, it),
                                   "handoff": lambda it, _e: handoffs.apply_queued(db_path, it),
+                                  "card_offer": lambda it, _e: card_offer.apply(db_path, it, client),
                                   "rule": lambda it, _e: rules.confirm(
                                       db_path, it, path or _path_of(client))},
                           path=path or _path_of(client))

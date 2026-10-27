@@ -28,7 +28,7 @@ from . import activity
 from . import approvals
 from . import claims
 from . import cleanup
-from . import card_trust, conflicts, conflict_cards
+from . import card_offer, card_trust, conflicts, conflict_cards
 from . import connections
 from . import deletes
 from . import history
@@ -42,7 +42,7 @@ from . import privatefs, safety
 from . import saves
 from . import tasks
 from . import extras, priority
-from . import provenance
+from . import provenance, rules
 from . import receipts
 from . import secrets_scan
 from .autosession import AutoSessions, ensure_schema
@@ -1123,10 +1123,10 @@ def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
             return {"error": "record_not_found", "message": f"No review item with id {args['item_id']}."}
         agent = identity.current() is not None   # None: command line, review page, popup, phone
         locked = approvals.user_only(item) and item["status"] == "pending"
-        if locked and agent and (no := provenance.agent_refusal(backend.db_path, item, name)):
-            return no   # a "did the user say this?" item: the user's alone
+        if (no := card_offer.refusal(item, client, agent)) or (   # "Allow tap cards?": pages only
+                locked and agent and (no := provenance.agent_refusal(backend.db_path, item, name))):
+            return no   # or a "did the user say this?" item: the user's alone
         if locked and agent and item["kind"] == "rule":   # hard rules: the user's alone (D2)
-            from . import rules
             return rules.agent_refusal(item)
         if locked and agent and name == "review_approve":   # only the user's own click or key
             return _user_only({"item_id": item["id"], "kind": item["kind"]}, item["id"], client)

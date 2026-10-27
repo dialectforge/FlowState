@@ -310,6 +310,30 @@ def cmd_approvals(a) -> int:
         approvals.log_setting(db, "phone_approvals", old, arg)
         say(f"Phone approval links are {arg}.")
         return 0
+    if what == "cards" and arg in ("offers", "offer-again"):   # card_offer.py (task 65b)
+        from . import card_offer
+        if arg == "offers":
+            if a.name not in ("on", "off", None):
+                say("Use: flowstate approvals cards offers [on|off]")
+                return 2
+            old = "on" if card_offer.offers_on(db) else "off"
+            if a.name:
+                card_offer.set_offers(db, a.name == "on")
+                approvals.log_setting(db, card_offer.OFFERS, old, a.name)
+            say(f"Card offers are {a.name or old}. Already asked (not offered again): "
+                + term.safe(", ".join(sorted(card_offer.offered(db))) or "none"))
+            return 0
+        name = approvals.clean_client_name(a.name)
+        if not name:
+            say("Use: flowstate approvals cards offer-again NAME (the sign-in's own name)")
+            return 2
+        before = card_offer.offered(db)
+        card_offer.mark_offered(db, name, False)
+        approvals.log_setting(db, card_offer.OFFERED, ", ".join(sorted(before)),
+                              f"offer again: {name}")
+        say(f"{term.safe(name)} is offered the cards again the next time it would show one "
+            f"(on your review page and phone; you decide there).")
+        return 0
     if what in ("popup", "cards"):
         popup = what == "popup"
         signin = bool(getattr(a, "sign_in", False))
@@ -423,7 +447,8 @@ def register(sub) -> None:
     p.set_defaults(fn=cmd_reject)
     p = sub.add_parser("approvals", help="user-only approvals: status, on, off (off asks you to confirm)")
     p.add_argument("what", nargs="?", default="status", choices=["status", "on", "off", "phone", "popup", "cards"])
-    p.add_argument("arg", nargs="?", help="phone: on|off; popup / cards: add|remove")
+    p.add_argument("arg", nargs="?", help="phone: on|off; popup / cards: add|remove; cards: "
+                   "offers [on|off] (offer cards to network sign-ins once), offer-again NAME")
     p.add_argument("name", nargs="?", help="popup / cards: the app's MCP client name (an app this "
                    "computer starts); with --sign-in, a key's, token's or OAuth app's own name")
     p.add_argument("--sign-in", dest="sign_in", action="store_true",

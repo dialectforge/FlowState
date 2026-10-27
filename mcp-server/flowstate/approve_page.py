@@ -324,6 +324,9 @@ def view(db_path, item_id: int) -> dict:
         card = conflict_cards.phone_card(db_path, item)
         question = (card or {}).get("headline") or "Two AIs disagree."
         summary, details = "", ""
+    elif item["kind"] == "card_offer":   # FlowState's own offer (card_offer.py), not an app's ask
+        question = item["summary"] + " Approve allows it: its taps on the cards count as yours. " \
+            "Reject keeps the text, and it isn't asked again."
     else:
         question = f"{app} wants to {ask}."
     keep = item["kind"] == "session_summary"
