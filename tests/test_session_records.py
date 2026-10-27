@@ -117,6 +117,26 @@ def test_a_removed_record_comes_back_with_manage_history_undo_too(backend):
     assert _entries(db, item)[f"change:{cid}"]["state"] == ""      # back, undecided again
 
 
+def test_undoing_the_users_remove_later_is_not_changed_since(backend):
+    """The undo of the user's own Remove (manage_history, not Bring back) only puts the record
+    back as the session left it: it isn't "changed since", even in a later second than the
+    session's end (the test above passed only when all of it fell in one second)."""
+    S, db = backend, backend.backend.db_path
+    item, pid, cid = _work(S, db)
+    sid = review.get_item(db, item)["session_id"]
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE sessions SET ended_at = datetime(ended_at, '-1 hour') WHERE id = ?", (sid,))
+    conn.commit()
+    conn.close()
+    session_records.decide(db, item, f"change:{cid}", "remove", "review-page")
+    res = call(S, "manage_history", {"action": "undo", "project": "Alpha", "record_type": "change",
+                                     "record_id": cid})
+    assert "error" not in res, res
+    e = _entries(db, item)[f"change:{cid}"]
+    assert e["state"] == "" and e["actions"] == ["keep", "remove"]
+    assert "Kept" in session_records.decide(db, item, f"change:{cid}", "keep", "review-page")["message"]
+
+
 def test_remove_then_keep_all_leaves_it_removed_and_edit_before_keep_still_works(backend):
     """The review page: Remove one, edit the line, Keep all. The edited text is the session's
     record plus which record was removed; the other record is marked kept."""

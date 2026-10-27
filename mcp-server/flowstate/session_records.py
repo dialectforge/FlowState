@@ -244,13 +244,18 @@ def busy(item_or_payload) -> bool:
                for d in rd.values())
 
 
-def _changed_since(conn, table: str, rid: int, ended: str, own: set) -> bool:
+def _changed_since(conn, table: str, rid: int, ended: str, own: set,
+                   users: set = frozenset()) -> bool:
+    """Did anyone but this session and the user's decisions here edit the row after `ended`?
+    An undo of one of the user's decisions (manage_history undo of their Remove) only puts the
+    row back as the session left it, so it doesn't count either."""
     if not ended:
         return False
-    for r in conn.execute("SELECT edit_id, tool FROM record_history WHERE table_name = ? AND "
-                          "record_id = ? AND created_at > ?", (table, rid, ended)):
+    for r in conn.execute("SELECT edit_id, tool, undo_of FROM record_history WHERE table_name = ? "
+                          "AND record_id = ? AND created_at > ?", (table, rid, ended)):
         tool = r[1] or ""
-        if r[0] in own or tool.startswith(("create/", "approve/")):
+        if r[0] in own or tool.startswith(("create/", "approve/")) \
+                or (tool == "history/undo" and r[2] in users):
             continue
         return True
     return False
@@ -281,7 +286,8 @@ def annotate(conn, item: dict, entries: list) -> None:
     mine = own_edits(conn, item) if has_hist else set()
     # the session's own writes (its last one may land after `ended`, its start) and the
     # user's own decisions here don't count as "changed since"
-    own = mine | {e for d in decided.values() if isinstance(d, dict) for e in d.get("edits") or []}
+    users = {e for d in decided.values() if isinstance(d, dict) for e in d.get("edits") or []}
+    own = mine | users
     ledger = _ledger_refs(conn, item) if has_hist else {}
     for e in entries:
         k = key(e["kind"], e["id"])
@@ -323,7 +329,7 @@ def annotate(conn, item: dict, entries: list) -> None:
         if state not in ("removed", "removing"):
             if e["gone"]:
                 state = "gone"
-            elif table and has_hist and _changed_since(conn, table, e["id"], ended, own):
+            elif table and has_hist and _changed_since(conn, table, e["id"], ended, own, users):
                 state = "changed"
             elif state == "kept":
                 actions = ["remove"] if created else []

@@ -318,6 +318,9 @@ Most setups need nothing. Check these after updating:
     already there reads "already there", and a record the session deleted reads "deleted";
   - the session's own last update, saved a moment after its last call began, no longer shows
     as "changed since this session";
+  - a record you removed and that was then brought back with `manage_history` undo (instead of
+    Bring back) no longer shows as "changed since this session" with no buttons: it is
+    undecided again, with Keep and Remove;
   - Keep all now records how it was decided (card, agent, review page, phone, terminal).
 - **Smaller fixes:** the cards show dates in your own time zone; the terminal's `approvals phone`,
   `approvals popup` and `update check` changes are logged like the page's (and popup names are
