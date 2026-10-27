@@ -101,7 +101,12 @@ claude.ai or ChatGPT work through Cloudflare Access Managed OAuth; whether the p
    without a workspace) for a LAN key, "lan (signed in as <token name>)" for a remote token on
    the LAN, "tunnel (signed in as ...)" / "relay (signed in as ...)" on the tunnel and the
    relay. An app that sends no name is recorded as the key's or token's name on the LAN, and
-   as "Tunnel (unknown app)" / "Relay (unknown app)" on the tunnel and the relay. Pages, cards
+   as "Tunnel (unknown app)" / "Relay (unknown app)" on the tunnel and the relay. In-chat
+   review cards come to an app on the tunnel or the relay only once you add its sign-in's own
+   name with `flowstate approvals cards add --sign-in "<name>"` (or the review page's
+   Settings); see docs/APPROVALS.md. The relay only carries the encrypted bytes, so the card,
+   its one-use tap code and your tap go from the app to your own FlowState, which checks the
+   code. Pages, cards
    and the brief show both names when they differ, e.g. "Grok Bot (via my-laptop-app)", and
    one name when they are the same; pausing either name stops its writes, and a different name
    on the same key or token still counts as the same app (it can't decide its own review items

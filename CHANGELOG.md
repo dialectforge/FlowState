@@ -643,6 +643,19 @@ Brief and defusing
   ending in `*` matches every app name that starts with it, for apps this computer starts
   only, never for a key, token or sign-in. Remove it with
   `flowstate approvals cards remove "local-agent-mode-*"` if you don't want cards there.
+- The cards now work through the relay too (the FlowStateMCP connector in Claude Desktop or
+  claude.ai). As before, a connector gets them only after you add its sign-in's own name:
+  `flowstate approvals cards add --sign-in "<name>"` on your computer (it asks for your `y`),
+  or the tick on the review page's Settings. When an app could show cards but you haven't
+  turned them on, the AI's answer now gives you that exact command (`cards_off`) instead of
+  saying nothing. Once on, your tap goes through the relay to your own FlowState, which checks
+  the card's one-use code (15 minutes, once, for that card and that sign-in); the relay only
+  carries the encrypted bytes and can't see or keep it. A card tap now counts through the relay
+  the same as on your computer or your own tunnel. Before, it was refused unless chat
+  approvals were on. The AI's own approve / reject in the chat still follows that setting (off
+  by default: phone only), and items only you decide (deletes and turning review off with
+  approvals on, "did you say this?" checks) still have no buttons on a card.
+- Apps without card support still get the text card and your phone or review-page link.
 
 ## 2.4.3 - 2026-10-23
 

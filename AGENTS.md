@@ -389,7 +389,10 @@ don't show server instructions:
    same links. In apps that draw MCP Apps cards, a list or walk answer with waiting items also
    has `show_card` naming `show_review_card(project=..., item_id=...)` (and `show_conflict_card`
    for disagreements; a list when both wait): call it and the user taps Approve or Reject on
-   the card. It only shows; the tap is theirs. There the brief also says how many items wait
+   the card. It only shows; the tap is theirs. An app that says it shows cards but isn't on
+   the user's card list gets `cards_off` instead: the command the user runs to turn cards on
+   for it (over the network, by its sign-in's name). Pass it on once; don't run it for them.
+   There the brief also says how many items wait
    and names `show_review_card(project=...)` (one line naming both calls when a disagreement
    waits too); apps without cards don't get that line.
 7. The **review mode** (`off`, `auto_only` default, `types`, `everything`; shown in the brief)

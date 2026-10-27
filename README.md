@@ -387,9 +387,13 @@ you have turned approvals on.
    Disagreements keep their own card (Keep A / Keep B / Keep both). Items only you decide
    (with approvals on: an AI's deletes and turning review off; and every "did you say this?"
    check) show on a card without buttons, with your phone or review-page link. Through the
-   relay, taps follow the same rule as chat approvals: off (the default) means the card
-   refuses and says where you decide it. In apps without MCP Apps nothing changes: the AI shows
-   the plain list.
+   relay (the FlowStateMCP connector in Claude Desktop or claude.ai) the cards work once you
+   add the connector's sign-in to your card list: `flowstate approvals cards add --sign-in
+   "<its name>"` on your computer, or the review page's Settings (the AI's answer names the
+   exact command when the connector could show cards but you haven't turned them on). Your
+   taps then count as on your computer; the AI's own approve / reject in the chat still
+   follows the chat-approvals setting (off by default). In apps without MCP Apps nothing
+   changes: the AI shows the plain list.
    **Session summaries: Keep all, or Keep / Remove one record.** A session summary lists the
    records the session saved. They were saved when the AI wrote them, so each one has its own
    **Keep** (marks it reviewed) and **Remove** (takes it back) on the review page, the tunnel

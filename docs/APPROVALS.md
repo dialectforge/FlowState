@@ -162,9 +162,12 @@ chat by default. What the code enforces (`waiting.phone_only`, called first in
   `resolve_conflict_card` instead. That tool is app-only (`_meta.ui.visibility` is `["app"]`,
   so it is left off the model's tool list unless the host advertises MCP Apps) and it refuses
   `user_request`, `message`, `text` and `reason`. A client that doesn't advertise MCP Apps
-  can't show the card, so the tool refuses it (`not_a_card_tap`); through the relay it
-  follows the same chat-approvals setting (off: `phone_only`, telling the user to decide on
-  their phone from their saved link). Its audit
+  can't show the card, so the tool refuses it (`not_a_card_tap`). Through the relay a tap
+  with the card's code counts as it does on this computer or the tunnel (since task 65): the
+  card is only there for a connector whose sign-in the user put on the card list, so the
+  chat-approvals setting (which gates the AI's own `manage_review` approve / reject) doesn't
+  apply to the card's buttons. Until the user adds it, an app that says it shows cards gets the
+  text card plus `cards_off`: the command the user runs to turn cards on for that sign-in. Its audit
   path is `card`. The review page
   and the phone page audit as `review page`; an agent quoting the user audits as `chat`. A
   card closed because a decision was replaced, or because the user said the old possible-conflict
