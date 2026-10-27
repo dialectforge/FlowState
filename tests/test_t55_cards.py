@@ -141,7 +141,9 @@ def test_the_built_in_default_is_only_for_stdio(backend, claims_ui):
     assert not CARD_TOOLS & names(S, "claude-ai")
 
 
-def test_relay_card_taps_use_the_sign_in_and_stay_phone_only(backend, claims_ui):
+def test_relay_card_taps_use_the_sign_in_and_count_with_the_cards_code(backend, claims_ui):
+    """Task 65: the card list (the sign-in the user added) is the gate through the relay too;
+    a tap with the card's code then counts, chat approvals or not."""
     S, db = backend, backend.backend.db_path
     token, listener = CALLERS["relay remote token"]
     approvals.change_signins(db, "card", "Phone app", True)
@@ -152,7 +154,9 @@ def test_relay_card_taps_use_the_sign_in_and_stay_phone_only(backend, claims_ui)
     _r, body = net_call(S, "resolve_review_card", {"item_id": item, "decision": "approve",
                                                    "project": "Alpha", "tap": codes(r)[str(item)]},
                         "claude-ai", token, listener)
-    assert body["error"] == "phone_only" and status(db, item) == "pending"   # chat approvals off
+    assert body["resolved"] == item and status(db, item) == "approved", body   # chat approvals off
+    assert _q(db, "SELECT client FROM approval_log WHERE item_id = ?", item) == \
+        [("card (claude-ai, signed in as Phone app)",)]
 
 
 def test_stdio_claude_ai_still_taps(backend, claims_ui):

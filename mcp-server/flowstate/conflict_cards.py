@@ -5,8 +5,10 @@ saved on the same component as a similar current decision opens a card too (the 
 pairs the possible-conflict check already trusts; nothing fuzzier). The user keeps the
 older, the newer, or both, or dismisses the card. The loser is marked superseded, not
 deleted. Chat approvals still gate the model-visible review tools. The in-chat card's
-buttons call resolve_conflict_card, which is app-only, refused for clients without MCP Apps,
-and phone only through the relay unless chat approvals are on.
+buttons call resolve_conflict_card, which is app-only, refused for clients without MCP Apps
+or off the user's card list, and needs the card's one-use code. Through the relay a tap counts
+like one on this computer or the tunnel (task 65): the connector's sign-in must be on the
+card list the user made, so chat approvals (the AI's own approve / reject) don't apply to it.
 
 A card is one question: opening it closes the pending possible-conflict item on the same two
 decisions (merged into the card), so the user is not asked twice.
@@ -588,9 +590,10 @@ def resolve_card(db_path: Path, args: dict, client: str) -> dict:
 
 def _resolve(db_path: Path, args: dict, client: str) -> dict:
     """The in-chat card's button. Not a chat sentence: user_request, message, text and reason
-    are refused, and so is a client that can't show MCP Apps (no card there to tap). Through
-    the relay with chat approvals off (the default) it is phone only, like manage_review.
-    The tap must carry the card's one-use code (card_taps.py), and the app that queued the
+    are refused, and so is a client that can't show MCP Apps or isn't on the user's card list
+    (no card there to tap). Through the relay too (task 65): only a sign-in the user put on the
+    card list gets the card, and chat approvals are for the AI's manage_review, not for a tap
+    with the card's code. The tap must carry the card's one-use code (card_taps.py), and the app that queued the
     disagreement can't decide it on its own card. Otherwise the user's own words aren't
     needed; the path is recorded as card."""
     for key in ("user_request", "message", "text", "reason"):
@@ -605,10 +608,6 @@ def _resolve(db_path: Path, args: dict, client: str) -> dict:
     if not client_has_ui():   # no MCP Apps host, no card: the call can only be the model's
         return {"error": "not_a_card_tap", "message": "This app can't show the disagreement "
                 "card. The user decides it on the review page or their phone."}
-    from . import waiting
-    no = waiting.phone_only(db_path, args["item_id"])   # relay: the same phone-only rule
-    if no:
-        return no
     try:
         item_id = int(args["item_id"])
     except (TypeError, ValueError):
@@ -1046,6 +1045,41 @@ def client_has_ui() -> bool:
         return card_trust.allowed(backend.db_path, card_trust.caller())
     except Exception:  # noqa: BLE001 - no list readable: no cards
         return False
+
+
+CARDS_OFF = ("This app can draw FlowState's in-chat review cards, but the user hasn't turned "
+             "them on for it, so the text is the card here. Only the user can turn them on, on "
+             "the computer where FlowState runs: `{cmd}` in a terminal, or the review page's "
+             "Settings (\"Apps that may show review cards\"{tick}). Tell the user once if they "
+             "want to tap Approve / Reject in this chat; don't run it for them.")
+
+
+def cards_off() -> Optional[str]:
+    """For an app that says it shows MCP Apps but isn't on the user's card list (task 65): how
+    the user turns the cards on for it, the user's own step (no tool does it). Over the network
+    that is the sign-in's own name (card_trust.py), never the name the app sends; the shared
+    LAN token and HTTP calls without a sign-in get none (no cards there at all). None when the
+    app gets the cards, doesn't show MCP Apps, or outside a request."""
+    try:
+        from .server import server
+        caps = server.request_context.session.client_params.capabilities
+    except Exception:  # noqa: BLE001
+        return None
+    if not declares_ui(caps) or client_has_ui():
+        return None
+    from . import approvals, card_trust
+    try:
+        who = card_trust.caller()
+    except Exception:  # noqa: BLE001
+        return None
+    if who is None:
+        return None
+    name = re.sub(r'["`$\\]', "", approvals.clean_client_name(who.credential or who.sent))
+    if not name or name == "unknown":
+        return None
+    sign_in = who.credential is not None
+    cmd = f'flowstate approvals cards add {"--sign-in " if sign_in else ""}"{name}"'
+    return CARDS_OFF.format(cmd=cmd, tick=", with the sign-in tick" if sign_in else "")
 
 
 def tap_refusal(args: dict, item_id: int, card: str, client: str) -> Optional[dict]:

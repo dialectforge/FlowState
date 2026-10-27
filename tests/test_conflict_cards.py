@@ -360,7 +360,7 @@ def test_card_tap_resolves_and_refuses_chat_text(backend, seeded_db, monkeypatch
     assert rows(seeded_db, "SELECT status FROM review_items WHERE id = ?", item)[0][0] == "approved"
 
 
-def test_card_tap_needs_an_mcp_apps_client_and_is_phone_only_through_the_relay(
+def test_card_tap_needs_an_mcp_apps_client_and_its_code_through_the_relay(
         backend, seeded_db, relay, monkeypatch):
     S = backend
     a = decide(S, "Use JWT tokens for API auth", app="Claude")["record"]["id"]
@@ -372,11 +372,10 @@ def test_card_tap_needs_an_mcp_apps_client_and_is_phone_only_through_the_relay(
     _r, body = call(S, "resolve_conflict_card", tap)   # no MCP Apps: no card to tap
     assert body["error"] == "not_a_card_tap"
     monkeypatch.setattr(conflict_cards, "client_has_ui", lambda: True)
-    _r, body = call(S, "resolve_conflict_card", tap)   # relay, chat approvals off
-    assert body["error"] == "phone_only"
-    assert "testbox" not in json.dumps(body) and approvals.PHONE_ELSEWHERE in json.dumps(body)
+    _r, body = call(S, "resolve_conflict_card", tap, app="Claude Desktop")   # relay, no code
+    assert body["error"] == "not_a_card_tap"
     assert rows(seeded_db, "SELECT status FROM review_items WHERE id = ?", item)[0][0] == "pending"
-    approvals.set_relay_chat(seeded_db, True)
+    # task 65: a tap with the card's code counts through the relay too (chat approvals off)
     assert ok(call(S, "resolve_conflict_card", {**tap, "tap": tap_code(item)},
                    app="Claude Desktop"))["resolved"] == item
 

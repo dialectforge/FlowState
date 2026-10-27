@@ -387,7 +387,12 @@ def _card_pointer(items: list, review: bool = True) -> dict:
     dis = first([it for it in waiting if it.get("kind") == "disagreement"], conflict_cards.pointer)
     rest = first([it for it in waiting if it.get("kind") != "disagreement"],
                  review_cards.pointer) if review else {}
-    return review_cards.both(dis, rest)
+    out = review_cards.both(dis, rest)
+    if not out and waiting:   # an app that shows cards, not on the card list: how to turn them on
+        off = conflict_cards.cards_off()
+        if off:
+            out = {"cards_off": off}
+    return out
 
 
 def _safe_card(db_path: Path, it: dict):
@@ -733,7 +738,7 @@ async def walk(result: dict, session, client: str) -> dict:
         return _plain_answer(result, ways, "This app answered FlowState's box at once, faster "
                                            "than a person could, so no box was shown.", local)
     left = await asyncio.to_thread(S._safe_call, _pending_total, db, plan.get("project_id"))
-    for k in ("items", "showing", "next_page", "show_card", "card_note"):
+    for k in ("items", "showing", "next_page", "show_card", "card_note", "cards_off"):
         result.pop(k, None)
     result.update(plan.get("boxed_pointer") or {})   # the boxes asked the rest: cards only for disagreements
     result["walked"] = done

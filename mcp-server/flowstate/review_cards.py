@@ -14,8 +14,10 @@ buttons). The safety rules are the disagreement card's:
 
   - resolve_review_card refuses chat text (user_request, message, text, reason; only the card's
     own reject_reason is taken) and clients without MCP Apps (not_a_card_tap);
-  - through the relay with chat approvals off (the default) a tap is phone only
-    (waiting.phone_only);
+  - only apps on the user's card list get the cards and their tap tool (card_trust.py); over
+    the relay that is the connector's own sign-in name, added by the user. A tap with the
+    card's one-use code then counts as on this computer or the tunnel (task 65): chat approvals
+    (default phone only) gate the AI's manage_review approve / reject, not the card's buttons;
   - an item only the user decides (approvals.user_only: a delete or turning review off queued
     with approvals on, every "did you say this?" check), and every delete, is shown without
     buttons, with the phone or review-page link, and refused if resolve is called anyway;
@@ -368,8 +370,8 @@ def _resolve(db_path: Path, args: dict, pid: Optional[int], client: str,
              decide: Callable[[dict, str, str], dict]) -> dict:
     """A tap on Approve or Reject. `decide(item, decision, reason)` runs the same approve /
     reject as manage_review (review_apply.for_card). Not a chat sentence, not
-    for clients without MCP Apps, phone only through the relay unless chat approvals are on,
-    never for an item only the user decides elsewhere. Logged with path "card"."""
+    for clients without MCP Apps or off the card list, never for an item only the user decides
+    elsewhere. Logged with path "card"."""
     for key in ("user_request", "message", "text", "reason"):
         if args.get(key) not in (None, ""):
             return {"error": "not_a_card_tap", "message": NOT_TAP}
@@ -394,9 +396,6 @@ def _resolve(db_path: Path, args: dict, pid: Optional[int], client: str,
         item_id = int(args["item_id"])
     except (TypeError, ValueError):
         return {"error": "bad_request", "message": "item_id must be a number."}
-    no = waiting.phone_only(db_path, item_id)   # relay: the same phone-only rule
-    if no:
-        return no
     it = waiting._item_view(db_path, item_id)
     if not it or (pid is not None and it["project_id"] != pid):
         return {"error": "record_not_found", "message": f"No review item #{item_id}"

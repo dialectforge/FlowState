@@ -320,14 +320,19 @@ def relay(tmp_path, monkeypatch):
     return key
 
 
-def test_card_record_taps_through_the_relay_follow_chat_approvals(backend, relay, ui, monkeypatch):
+def test_card_record_taps_through_the_relay_keep_the_delete_rules(backend, relay, ui, monkeypatch):
+    """Task 65: a coded tap through the relay counts without chat approvals (the card is only
+    there for a sign-in the user put on the card list), but Remove still follows the delete
+    rules: a relay sign-in (OAuth app or remote token) may not delete."""
+    from flowstate import server
     S, db = backend, backend.backend.db_path
     item, pid, cid = _work(S, db)
     monkeypatch.setattr(popup, "listener", lambda: "relay")
+    monkeypatch.setattr(server, "_caller", lambda: ("oauth-app", ["flowstate:read", "flowstate:write"]))
     out = _tap(S, item, "remove_record", f"change:{cid}")
-    assert out["error"] == "phone_only"                              # off by default
+    assert out["error"] == "not_allowed_remotely"
     assert _q(db, "SELECT id FROM changes WHERE id = ?", cid) == [(cid,)] and not _decisions(db, item)
-    approvals.set_relay_chat(db, True)
+    assert not approvals.relay_chat_on(db)
     out = _tap(S, item, "keep_record", f"change:{cid}")
     assert out["now"] == "kept"
 

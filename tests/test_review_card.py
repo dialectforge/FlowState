@@ -287,16 +287,20 @@ def test_already_decided_and_wrong_project(backend, seeded_db, ui):
     assert tap(S, 99999, "approve")[1]["error"] == "record_not_found"
 
 
-def test_relay_taps_are_phone_only_unless_chat_approvals_are_on(backend, seeded_db, relay, ui):
+def test_relay_taps_count_on_a_trusted_card_and_the_ai_stays_phone_only(backend, seeded_db, relay,
+                                                                        ui):
+    """Task 65: through the relay a tap with the card's code counts (the card is only there
+    for a sign-in the user put on the card list); the AI's own approve stays phone only."""
     S = backend
     item = suggest(S, "Use SQS for jobs")
-    _r, body = tap(S, item, "approve")
+    _r, body = call(S, "manage_review", {"action": "approve", "item_id": item, "project": "Alpha",
+                                         "user_request": "The user said: yes, approve that one"},
+                    app="Claude Code")
     assert body["error"] == "phone_only"
     blob = json.dumps(body)
     # no phone link with the relay handle to an app elsewhere (task 54, D19)
     assert "testbox" not in blob and approvals.PHONE_ELSEWHERE in blob and "127.0.0.1" not in blob
     assert status(seeded_db, item) == "pending"
-    approvals.set_relay_chat(seeded_db, True)
     assert ok(tap(S, item, "approve"))["resolved"] == item
     assert rows(seeded_db, "SELECT path FROM approval_log WHERE item_id = ?", item) == [("card",)]
 

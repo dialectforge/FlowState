@@ -122,3 +122,39 @@ def test_the_pattern_never_trusts_a_network_sign_in(backend):
     assert not approvals.card_allowed_credential(db, "claude-ai", "oauth_client")
     approvals.change_signins(db, "card", "local-agent-mode-*", True)
     assert not approvals.card_allowed_credential(db, COWORK, "oauth_client")
+
+
+@pytest.fixture
+def relay_on(tmp_path, monkeypatch):
+    """The relay is set up on this computer, with phone links (the pinned keys of the tests)."""
+    from fsa_test_keys import make_key
+    from flowstate.relay.store import RelayStore
+    monkeypatch.setenv("FLOWSTATE_RELAY_DIR", str(tmp_path / "relay"))
+    RelayStore().save_enrollment("testbox", "fake-device-token-for-tests")
+    _key, jwk = make_key()
+    monkeypatch.setattr(approvals, "FSA_PUBLIC_KEYS", {"fsa-1": jwk, "fsa-2": None})
+
+
+def test_an_app_without_cards_gets_the_text_and_the_phone_link(backend, seeded_db, relay_on):
+    S = backend
+    item = disagreement(S)
+    listed = ok(call(S, "manage_review", {"action": "list"}, app="Cursor"))   # no MCP Apps
+    assert "show_card" not in listed and "cards_off" not in listed
+    assert listed["conflict_cards"][0]["review_item_id"] == item
+    assert "API sessions" in listed["conflict_cards"][0]["text"]
+    assert listed["phone"].startswith("https://flowstatemcp.com/review/")   # this computer
+    r, _ = call(S, "show_conflict_card", {"project": "Alpha", "item_id": item}, app="Cursor")
+    assert not (r.meta or {}).get(card_taps.META_KEY)                     # no tap codes
+
+
+def test_an_unlisted_app_that_shows_cards_is_told_how_the_user_turns_them_on(backend, seeded_db,
+                                                                             claims_ui):
+    S = backend
+    disagreement(S)
+    listed = ok(call(S, "manage_review", {"action": "list"}, app="My Host"))
+    assert "show_card" not in listed
+    assert 'flowstate approvals cards add "my host"' in listed["cards_off"]
+    assert "don't run it for them" in listed["cards_off"]
+    assert "cards_off" not in ok(call(S, "manage_review", {"action": "list"}))   # listed: cards
+    odd = ok(call(S, "manage_review", {"action": "list"}, app='x"; rm -rf ~ `y`'))
+    assert '"; rm' not in odd["cards_off"] and "`y`" not in odd["cards_off"]

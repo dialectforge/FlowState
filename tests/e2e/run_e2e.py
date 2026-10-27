@@ -105,7 +105,8 @@ class Report:
         14: "Only the user turns a guess into user_stated",
         15: "What's waiting, without a terminal: chat walk, local link, phone list",
         16: "Own tunnel: the owner review page behind the passphrase",
-        17: "Settings on the local review page"}
+        17: "Settings on the local review page",
+        18: "Review cards through the relay"}
 
     def __init__(self):
         self.checks = {n: [] for n in self.TITLES}
@@ -2575,6 +2576,90 @@ def git(*a):
     return subprocess.run(["git", "-C", str(REPO), *a], capture_output=True, text=True).stdout.strip()
 
 
+def s18_relay_cards(W):
+    """Task 65: the in-chat cards through the relay. FlowState's HTTP app as the relay agent
+    builds it (relay=True), a connector signed in with its own remote token that says it shows
+    MCP Apps. Until the user puts that sign-in on the card list (in their own terminal) it gets
+    the text and how to turn cards on; then the card, and a tap with the card's code counts once,
+    while the AI's own manage_review approve stays phone only."""
+    print("\n== S18 review cards through the relay", flush=True)
+    Q = "Corner Cafe e2e-18"
+    ui = {"extensions": {"io.modelcontextprotocol/ui": {"mimeTypes": ["text/html;profile=mcp-app"]}}}
+    plain = W.agents["cursor"]
+    cowork = StdioClient(W.env, "local-agent-mode-flowstate", version="1.0.0", capabilities=ui,
+                         log_path=W.logs / "s18-cowork.log")
+    W.started.append(cowork.proc)
+    try:
+        names = {t["name"] for t in cowork.tools()}
+    finally:
+        cowork.close()
+    R.check(18, "Claude Desktop's Cowork mode on stdio (local-agent-mode-flowstate) gets the card tools "
+                "again (2.4.4 before task 65: text only)",
+            {"show_conflict_card", "resolve_conflict_card", "show_review_card"} <= names, sorted(names))
+    tok_file = W.root / "s18-connector-token.txt"
+    rc, out = W.cli("remote", "add-client", "--name", "Desktop connector", "--to-file", str(tok_file))
+    R.check(18, "the user makes the connector its own remote token", rc == 0 and tok_file.exists(), short(out))
+    token = tok_file.read_text().strip()
+    made = plain.call("manage_projects", action="create", name=Q, description="relay cards")
+    R.check(18, "a project for the relay cards", not err(made), short(made))
+    a = plain.call("log_work", project=Q, kind="decision", summary="Open at 7 on weekdays")["record"]["id"]
+    b = plain.call("log_work", project=Q, kind="decision", summary="Open at 8 on weekdays")["record"]["id"]
+    dis = plain.call("manage_links", action="flag_conflict", project=Q, topic="opening hours",
+                     item_id=a, target_id=b).get("flagged")
+    sug = plain.call("log_work", project=Q, kind="todo", summary="Descale the kettle",
+                     suggested=True).get("queued_for_review")
+    srv, base, plog = _test_listener(W, W.env, "relay", "s18-relay")
+    host = None
+    try:
+        wait_port("127.0.0.1", int(base.rsplit(":", 1)[1]), 40)
+        host = HttpClient(f"{base}/mcp", token, "claude-ai", capabilities=ui)
+        names = {t["name"] for t in host.tools()}
+        listed = host.call("manage_review", action="list", project=Q)
+        R.check(18, "through the relay, a connector not on the card list: no card tools, the text card, "
+                    "and the user's own command to turn cards on",
+                not {"show_conflict_card", "resolve_conflict_card"} & names and "show_card" not in listed
+                and listed.get("conflict_cards")
+                and 'approvals cards add --sign-in "desktop connector"' in listed.get("cards_off", ""),
+                short(listed))
+        rc, out = W.cli_in_terminal(["approvals", "cards", "add", "--sign-in", "Desktop connector"], ["y"])
+        R.check(18, "the user adds the connector's sign-in in their own terminal (y)", rc == 0, short(out))
+        tools = {t["name"]: t for t in host.tools()}
+        vis = ((tools.get("resolve_conflict_card") or {}).get("_meta") or {}).get("ui", {}).get("visibility")
+        page = host.request("resources/read", {"uri": "ui://flowstate/conflict-card.html"})
+        R.check(18, "then the card tools are listed (resolve app-only) and the card page reads over HTTP",
+                {"show_conflict_card", "show_review_card", "resolve_review_card"} <= set(tools)
+                and vis == ["app"] and "<!DOCTYPE html>" in page["contents"][0]["text"], sorted(tools))
+        ai = host.call("manage_review", action="approve", item_id=sug, project=Q,
+                       user_request="The user said: approve the kettle todo")
+        R.check(18, "the AI's own approve through the relay stays phone only",
+                ai.get("error") == "phone_only"
+                and W.count("review_items", f"id = {sug} AND status = 'pending'") == 1, short(ai))
+        raw = host.request("tools/call", {"name": "show_conflict_card",
+                                          "arguments": {"project": Q, "item_id": dis}})
+        code = ((raw.get("_meta") or {}).get("flowstate/taps") or {}).get(str(dis))
+        seen = json.dumps(raw.get("content")) + json.dumps(raw.get("structuredContent"))
+        R.check(18, "the card's data and its one-use code come back through the relay, the code only in _meta",
+                bool(code) and code not in seen and (raw.get("structuredContent") or {}).get("cards"),
+                short(raw))
+        bare = host.call("resolve_conflict_card", item_id=dis, keep="a", project=Q)
+        R.check(18, "a tap without the card's code (the model calling the hidden tool) is refused",
+                bare.get("error") == "not_a_card_tap", short(bare))
+        done = host.call("resolve_conflict_card", item_id=dis, keep="a", project=Q, tap=code)
+        again = host.call("resolve_conflict_card", item_id=dis, keep="b", project=Q, tap=code)
+        R.check(18, "a tap with the code decides it once; the same code again is refused",
+                done.get("resolved") == dis and again.get("error") in ("not_a_card_tap", "already_resolved")
+                and W.count("review_items", f"id = {dis} AND status = 'approved'") == 1,
+                (short(done), short(again)))
+        rows = W.q("SELECT path, client FROM approval_log WHERE item_id = ?", (dis,))
+        R.check(18, "the tap is logged as a card tap by the connector's sign-in",
+                [(r["path"], r["client"]) for r in rows] ==
+                [("card", "card (claude-ai, signed in as Desktop connector)")], rows)
+    finally:
+        if host:
+            host.close()
+        _stop(srv, plog)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--keep", action="store_true", help="keep the temp folder")
@@ -2593,7 +2678,7 @@ def main():
         for step in (s1_fresh, s2_day, s3_conflicts, s4_review, s5_receipts, s6_windows, s7_undo,
                      s8_backups, s9_ledger, lambda w: s10_upgrade(w, args.skip_upgrade), s11_edges,
                      s13_approvals, s14_user_stated, s15_without_terminal, s15_review_card,
-                     s16_tunnel_page, s17_settings_page,
+                     s16_tunnel_page, s17_settings_page, s18_relay_cards,
                      deferred_window,
                      s12_descriptions):
             try:
