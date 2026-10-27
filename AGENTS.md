@@ -131,7 +131,7 @@ All commands run with the venv Python: `<venv python> -m flowstate <command>`.
 | data-git (user) | `flowstate data-git status\|init\|remote URL [--unchecked]\|sync\|clone URL\|migrate`; remote / sync / clone / migrate ask for the user's `y`; only the markdown export and attachments are committed. A repository made by 2.4.3 or older: update every computer that syncs it, then run `migrate` once on each |
 | file permissions (user) | `flowstate tighten [--dry-run] [--dir DIR]`: make FlowState's existing files owner-only (`--dir`, repeatable: also a backups folder chosen with `backup --dir`) |
 | LAN remote tokens (user) | `flowstate remote lan-tokens [on\|off]` (off by default: remote tokens are refused on the plain-HTTP LAN listener from other computers) |
-| approvals (user) | `flowstate approvals` shows them; `approvals on [--project P]`: an AI's deletes and turning review off wait for the user (popup, phone link, terminal); `approvals off` asks for `y` on the terminal; `approvals phone on\|off`; `approvals popup add\|remove [--sign-in] NAME`; `approvals cards add\|remove [--sign-in] NAME` (apps whose in-chat card taps count; starts with `claude-ai` and `local-agent-mode-*`, which cover Claude Desktop's chat and Cowork mode on this computer only; for an app on a key, token or OAuth sign-in, use `--sign-in` with that sign-in's own name; popups go only to apps on this computer: stdio by app name, the LAN listener by sign-in name); adding an app asks for `y` |
+| approvals (user) | `flowstate approvals` shows them; `approvals on [--project P]`: an AI's deletes and turning review off wait for the user (popup, phone link, terminal); `approvals off` asks for `y` on the terminal; `approvals phone on\|off`; `approvals popup add\|remove [--sign-in] NAME`; `approvals cards add\|remove [--sign-in] NAME` (apps whose in-chat card taps count; an app on a network sign-in is also offered them once in the review queue, decided only on the review / phone pages: `approvals cards offers on\|off`, `approvals cards offer-again NAME`; starts with `claude-ai` and `local-agent-mode-*`, which cover Claude Desktop's chat and Cowork mode on this computer only; for an app on a key, token or OAuth sign-in, use `--sign-in` with that sign-in's own name; popups go only to apps on this computer: stdio by app name, the LAN listener by sign-in name); adding an app asks for `y` |
 | update FlowState (only when the user asks) | `flowstate update --dry-run` (the plan; changes nothing), then `flowstate update --yes --user-said "<the user's words>"` (or without `--yes`: the user types `y` in their terminal); `flowstate update --rollback`. Signed releases only; see README "Upgrading" |
 | update check | `flowstate update check` shows it; `update check on\|off\|now` (once a day from `start_here`, asks GitHub for the newest release; sends nothing about you) |
 | this FlowState's name (user) | `flowstate name` shows it; `flowstate name "New name"` (1-40 characters) / `flowstate name --reset` (back to "Main FlowState"); also on the `flowstate review-page` Settings. Only a label for the user's own pages and (once the user sets one; never the default) flowstatemcp.com; the relay address stays the same |
@@ -392,6 +392,9 @@ don't show server instructions:
    the card. It only shows; the tap is theirs. An app that says it shows cards but isn't on
    the user's card list gets `cards_off` instead: the command the user runs to turn cards on
    for it (over the network, by its sign-in's name). Pass it on once; don't run it for them.
+   Over the network, the first such answer instead queues one review item "Allow tap cards in
+   <app>?" (kind `card_offer`), and `cards_off` says so: only the user answers it, on the
+   review page or their phone review page; every tool refuses it (`user_only`).
    There the brief also says how many items wait
    and names `show_review_card(project=...)` (one line naming both calls when a disagreement
    waits too); apps without cards don't get that line.
@@ -547,7 +550,8 @@ The same guidance is available as the MCP prompt `flowstate-start`.
   `who.py`, `claims.py`, `conflicts.py`, `backup.py`, `offsite.py`, `scheduler.py`, `cli.py`, `cli_more.py`,
   `cli_review.py` (the user's `review` / `approve` / `reject` / `approvals`), `approvals.py` (opt-in
   user-only approvals, phone grants, pinned `FSA_PUBLIC_KEYS`), `popup.py` (MCP elicitation),
-  `approve_page.py` (the phone page at `/approve/<item>`), `conflict_cards.py` / `conflict_card_ui.py`
+  `approve_page.py` (the phone page at `/approve/<item>`), `card_offer.py` (the one-time "Allow tap cards in
+  <app>?" review item for an app on a network sign-in; decided only on the review / phone pages), `conflict_cards.py` / `conflict_card_ui.py`
   (the disagreement card) and `review_cards.py` / `review_card_ui.py` (the review card, MCP Apps),
   `review_apply.py` (what approving or rejecting each kind does, for `manage_review` and the card), `review_phone.py` (the phone review list at
   `/review`), `waiting.py` (the chat walk, the local review link and the page started on first need), `connections.py`, `http_app.py`,

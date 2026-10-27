@@ -103,7 +103,9 @@ claude.ai or ChatGPT work through Cloudflare Access Managed OAuth; whether the p
    relay. An app that sends no name is recorded as the key's or token's name on the LAN, and
    as "Tunnel (unknown app)" / "Relay (unknown app)" on the tunnel and the relay. In-chat
    review cards come to an app on the tunnel or the relay only once you add its sign-in's own
-   name with `flowstate approvals cards add --sign-in "<name>"` (or the review page's
+   name with `flowstate approvals cards add --sign-in "<name>"`, or tap Allow on the one-time
+   "Allow tap cards in <app>?" item FlowState puts in your review queue the first time the app
+   could show a card (or the review page's
    Settings); see docs/APPROVALS.md. The relay only carries the encrypted bytes, so the card,
    its one-use tap code and your tap go from the app to your own FlowState, which checks the
    code. Pages, cards

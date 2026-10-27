@@ -388,9 +388,10 @@ you have turned approvals on.
    (with approvals on: an AI's deletes and turning review off; and every "did you say this?"
    check) show on a card without buttons, with your phone or review-page link. Through the
    relay (the FlowStateMCP connector in Claude Desktop or claude.ai) the cards work once you
-   add the connector's sign-in to your card list: `flowstate approvals cards add --sign-in
-   "<its name>"` on your computer, or the review page's Settings (the AI's answer names the
-   exact command when the connector could show cards but you haven't turned them on). Your
+   allow them: the first time the connector could show you a card, FlowState asks you once on
+   your review page and your phone review page, "Allow tap cards in <app>?"; tap Allow there
+   (only you can; no AI can answer it). Or add the connector's sign-in yourself:
+   `flowstate approvals cards add --sign-in "<its name>"`, or the review page's Settings. Your
    taps then count as on your computer; the AI's own approve / reject in the chat still
    follows the chat-approvals setting (off by default). In apps without MCP Apps nothing
    changes: the AI shows the plain list.

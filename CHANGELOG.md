@@ -17,10 +17,11 @@ Most setups need nothing. Check these after updating:
     `flowstate approve <id>` on the computer where FlowState runs. The shared LAN token never
     gets popups either.
 - **In-chat cards for claude.ai through your tunnel or the relay** (or any app that signs in
-  over the network): run `flowstate approvals cards add --sign-in "<name>"`, with the OAuth
-  app's or token's own name (`flowstate remote clients` lists them). The built-in `claude-ai`
-  entry covers Claude Desktop on this computer only. Through the relay, a card tap also needs
-  `flowstate relay chat-approvals on` (off by default: phone only).
+  over the network): the first time such an app could show you a card, FlowState asks you once
+  on your review page and your phone review page: "Allow tap cards in <app>?". Tap Allow there.
+  (Or, as before, run `flowstate approvals cards add --sign-in "<name>"`, with the OAuth app's
+  or token's own name; `flowstate remote clients` lists them.) The built-in `claude-ai` entry
+  covers Claude Desktop on this computer only.
 - **Data-git: update every computer to 2.4.4 first**, then run `flowstate data-git migrate` once
   on each. A computer still on 2.4.3 that pulls a migrated repository can lose its database.
   From 2.4.4 data-git shares the markdown exports, not the database, and when two computers
@@ -656,6 +657,25 @@ Brief and defusing
   by default: phone only), and items only you decide (deletes and turning review off with
   approvals on, "did you say this?" checks) still have no buttons on a card.
 - Apps without card support still get the text card and your phone or review-page link.
+- **Cards are offered, not set up by hand.** The first time an app that signs in over the
+  network (the FlowStateMCP connector through the relay, claude.ai through your tunnel, a LAN
+  key) could show you a card but isn't on your card list, it gets the text card as before, and
+  one item waits in your review queue: "Allow tap cards in <app>?", with the app's name and the
+  sign-in it used.
+  - Only you answer it, and only on the review page or your phone review page. No AI can
+    approve or reject it, with chat approvals on or off; nor can a card tap, a popup, the chat
+    walk or `flowstate approve`.
+  - **Allow** puts that sign-in's own name on the card list (the same list as
+    `flowstate approvals cards add --sign-in` and Settings), never the name the app gives
+    itself. Its next answer shows the card, and your taps count.
+  - **No** keeps the text. Each sign-in is asked once: not again while it waits, after a No,
+    or after you take the cards away again (Settings, or
+    `flowstate approvals cards remove --sign-in "<name>"`).
+  - To ask one again: Settings ("Offer the cards to apps on a sign-in", Offer again) or
+    `flowstate approvals cards offer-again "<name>"`. To stop offers altogether:
+    `flowstate approvals cards offers off`, or the same row in Settings.
+  - Every answer is logged with your other approvals, and the change with your other settings
+    changes.
 
 ## 2.4.3 - 2026-10-23
 

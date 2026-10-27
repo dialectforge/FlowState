@@ -167,7 +167,19 @@ chat by default. What the code enforces (`waiting.phone_only`, called first in
   card is only there for a connector whose sign-in the user put on the card list, so the
   chat-approvals setting (which gates the AI's own `manage_review` approve / reject) doesn't
   apply to the card's buttons. Until the user adds it, an app that says it shows cards gets the
-  text card plus `cards_off`: the command the user runs to turn cards on for that sign-in. Its audit
+  text card plus `cards_off`: the command the user runs to turn cards on for that sign-in.
+  Since task 65b the first such answer also queues the **card offer**, a review item of kind
+  `card_offer`: "Allow tap cards in <app> (signed in as <sign-in>)?". It is user-only and
+  narrower than the other user-only items: only the review page (this computer's, or the
+  tunnel review page) and the phone pages decide it; every AI tool (chat approvals on or off),
+  the chat walk, popups, card taps and `flowstate approve` are refused (`card_offer.refusal`,
+  checked first in `_review_decide`). Allow adds the sign-in name FlowState stored in the item
+  (never the name the app sends) to the card sign-in list; both the decision (approval_log) and
+  the list change (settings log) are logged. One offer per sign-in: it goes on an "already
+  offered" list when queued, and a sign-in removed from the card list is put there too, so a
+  No or a revoke is final until the user offers it again (Settings, or
+  `flowstate approvals cards offer-again NAME`); `flowstate approvals cards offers off` stops
+  new offers. Its audit
   path is `card`. The review page
   and the phone page audit as `review page`; an agent quoting the user audits as `chat`. A
   card closed because a decision was replaced, or because the user said the old possible-conflict
