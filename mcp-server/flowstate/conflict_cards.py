@@ -1018,6 +1018,16 @@ def show(db_path: Path, args: dict, pid: Optional[int]) -> dict:
     return out
 
 
+def declares_ui(caps) -> bool:
+    """The client's capabilities name the MCP Apps extension: kept as an extra field by the
+    MCP SDK today, as a named `extensions` field should a later SDK add one."""
+    extra = getattr(caps, "model_extra", None) or {}
+    ext = extra.get("extensions") or getattr(caps, "extensions", None) or {}
+    if not isinstance(ext, dict):
+        ext = getattr(ext, "model_extra", None) or getattr(ext, "__dict__", {}) or {}
+    return isinstance(ext, dict) and UI_EXT in ext
+
+
 def client_has_ui() -> bool:
     """Does this connection get the cards? It says it shows MCP Apps, and it is on the user's
     card list (approvals.card_clients): the flag alone is the app's own claim. Which name is
@@ -1029,9 +1039,7 @@ def client_has_ui() -> bool:
         caps = server.request_context.session.client_params.capabilities
     except Exception:  # noqa: BLE001 - no session, or a client that sent no extensions
         return False
-    extra = getattr(caps, "model_extra", None) or {}
-    ext = extra.get("extensions") or {}
-    if not (isinstance(ext, dict) and UI_EXT in ext):
+    if not declares_ui(caps):
         return False
     from . import card_trust
     try:

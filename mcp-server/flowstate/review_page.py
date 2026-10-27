@@ -949,7 +949,7 @@ class Page:
             "Apps that may show review cards in the chat",
             "These apps get the in-chat cards with Approve, Reject, Keep and Remove buttons. A "
             "tap counts as yours, so only add an app that draws the cards itself (claude-ai is "
-            "Claude Desktop on this computer). An app that connects over the network is matched "
+            "Claude Desktop's chat on this computer, local-agent-mode-* its Cowork mode). An app that connects over the network is matched "
             "by the name of its key, token or OAuth sign-in, never by the name it sends: add "
             "that name with the tick below. Other apps get the text and your review page link.",
             f"<ul>{items}</ul>" if items else "<b>no apps</b>.",

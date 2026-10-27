@@ -58,13 +58,16 @@ POPUP_CLIENTS = ("claude-code", "cursor", "cursor-vscode", "visual studio code",
                  "visual studio code - insiders", "vscode")
 # Apps known to draw the in-chat cards (MCP Apps) in a frame the model can't read or click,
 # and to keep app-only tools from the model. `flowstate approvals cards add|remove NAME`
-# changes this per install. claude-ai is Claude Desktop (the MCP client name it sends on
-# stdio). An app on a key, token or OAuth sign-in is matched by that sign-in's own name, and
+# changes this per install. claude-ai is Claude Desktop's chat (the MCP client name it sends
+# on stdio); Claude Desktop's Cowork (agent) mode sends "local-agent-mode-<server name>", e.g.
+# local-agent-mode-flowstate (task 65): an entry ending in "*" matches every name it starts
+# (card_allowed; stdio only, never a sign-in). An app on a key, token or OAuth sign-in is matched by that sign-in's own name, and
 # only one the user added to the separate sign-in list (`approvals cards add --sign-in NAME`;
 # card_allowed_credential, card_trust.py), so an app name on this list never trusts a network
 # sign-in that happens to have the same name (task 57). Popups the same: `approvals popup add
 # --sign-in NAME`, and only for a LAN app on this computer (popup.no_box).
-CARD_CLIENTS = ("claude-ai",)
+CARD_CLIENTS = ("claude-ai", "local-agent-mode-*")
+WILDCARD_MIN = 4   # an entry ending in "*" needs this many characters before it
 SIGN_IN_LISTS = ("popup_signins", "card_signins")
 # Never a popup for these, whatever they declare: claude.ai, Claude Desktop / mobile and the
 # Anthropic connector proxy don't show one (and the proxy drops the connection).
@@ -341,7 +344,20 @@ def card_allowed(db_path: Optional[Path], client_name: str) -> bool:
     """May this connection get the in-chat cards (and their app-only tap tools)? Only apps on
     the card list: the MCP Apps flag an app sends is its own claim, like a popup's."""
     name = clean_client_name(client_name)
-    return bool(name) and name in card_clients(db_path)
+    return bool(name) and name_listed(name, card_clients(db_path))
+
+
+def name_listed(name: str, listed) -> bool:
+    """`name` (cleaned) is on the list: the same name, or an entry ending in "*" (at least
+    WILDCARD_MIN characters before it) that the name starts with and goes beyond."""
+    for entry in listed:
+        if entry == name:
+            return True
+        if entry.endswith("*") and len(entry) > WILDCARD_MIN:
+            stem = entry[:-1]
+            if "*" not in stem and len(name) > len(stem) and name.startswith(stem):
+                return True
+    return False
 
 
 def signins(db_path: Optional[Path], what: str) -> set:

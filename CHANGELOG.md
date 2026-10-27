@@ -633,6 +633,17 @@ Brief and defusing
   inside the brief's "records" section, and links hidden with entities encoded twice are broken
   too.
 
+### In-chat cards in Claude Desktop again, and through the relay (task 65)
+
+- Claude Desktop shows the tap-to-decide review and disagreement cards again. Since the card
+  safety checks earlier in 2.4.4, only apps on the card list got cards, and the list only had
+  `claude-ai`, the name Claude Desktop's chat sends. Claude Desktop's Cowork (agent) mode sends
+  a different name, `local-agent-mode-` plus the server's name (`local-agent-mode-flowstate`),
+  so it got only the text. The card list now starts with `local-agent-mode-*` too: a name
+  ending in `*` matches every app name that starts with it, for apps this computer starts
+  only, never for a key, token or sign-in. Remove it with
+  `flowstate approvals cards remove "local-agent-mode-*"` if you don't want cards there.
+
 ## 2.4.3 - 2026-10-23
 
 - No new dependencies. One additive database migration (023: three new tables for
