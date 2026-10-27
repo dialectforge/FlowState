@@ -547,7 +547,8 @@ The same guidance is available as the MCP prompt `flowstate-start`.
   `approve_page.py` (the phone page at `/approve/<item>`), `conflict_cards.py` / `conflict_card_ui.py`
   (the disagreement card) and `review_cards.py` / `review_card_ui.py` (the review card, MCP Apps),
   `review_apply.py` (what approving or rejecting each kind does, for `manage_review` and the card), `review_phone.py` (the phone review list at
-  `/review`), `waiting.py` (the chat walk, the local review link and the page started on first need), `connections.py`, `http_app.py`; the optional
+  `/review`), `waiting.py` (the chat walk, the local review link and the page started on first need), `connections.py`, `http_app.py`,
+  `cloudflared_check.py` (the cloudflared version note in `remote status`); the optional
   relay agent in `relay/`, wire protocol in `docs/relay-protocol.md`). Schema:
   `database/schema.sql` (base; the code reads its copy `mcp-server/flowstate/schema.sql`, which ships
   in the package; keep the two the same, a test checks) plus numbered migrations in `mcp-server/flowstate/migrations/`
