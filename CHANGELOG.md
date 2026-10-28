@@ -875,6 +875,33 @@ Brief and defusing
 - Deletes: when the list changed because a row was edited, the message now names the row
   ("todo #1 was edited") instead of "a record on the list was edited".
 
+### Project history and clean-up follow-ups (task 75)
+
+- **Project history from the brief's link.** The page the brief's link opens has the
+  Project history link at the top, next to "Who did what", as the page `flowstate
+  review-page` opens does. From the review queue filtered to one project, the link opens that
+  project's history. Still only on this computer: never on the tunnel page, the phone pages,
+  an AI tool or the relay.
+- **Newest first.** The history timeline now starts with the newest entries. "Oldest first"
+  is still in the order menu (`order=oldest`).
+- **Erased todos are not in the Todos tab.** An erased todo has nothing left to show, so the
+  Todos tab leaves it out of its list and its counts. The timeline still shows `[erased]`
+  where an entry names it.
+- **A record page under the wrong project.** A record page whose address names a project the
+  record doesn't belong to now sends the browser to the same page under the record's own
+  project (a link: either of its two projects is fine; a deleted record: the project its edit
+  history has). It never shows a record under another project. An erased record, or an id
+  nothing knows, is shown as before.
+- **The AI's review list says when a clean-up is out of date.** In `manage_review` list and
+  walk lines, a waiting clean-up whose exact list no longer matches ends with "(out of date:
+  approving changes nothing)", as the review page already warns. The walk's Approve / Reject
+  box shows the review page's warning too.
+- **`flowstate erase` removes a clean-up's stored list.** A clean-up suggestion about an
+  erased record (it names the record, or its list has it, a link included) loses its stored
+  list of ids, digest and per-row hashes, in the item and in every copy of it in the edit
+  history. The item stays; approving it changes nothing and says "a record on its list was
+  erased".
+
 ## 2.4.3 - 2026-10-23
 
 - No new dependencies. One additive database migration (023: three new tables for

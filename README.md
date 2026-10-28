@@ -347,7 +347,7 @@ prompt `flowstate-start`.
 
 **Your controls (command line and browser)**
 - **Local review page**: a small page in your browser, on this computer only: review queue,
-  review mode, pause apps, "Who did what". Click the link in your AI's answer (see "Where to see
+  review mode, pause apps, "Who did what", Project history. Click the link in your AI's answer (see "Where to see
   what's waiting for you"), double-click the "FlowState review" shortcut setup puts on your
   desktop, or run `flowstate review-page` (one-time link). The page an AI's link opens can pause
   an app but never resume one (`flowstate apps resume`, or the page `flowstate review-page`
@@ -559,8 +559,8 @@ Honest limits:
 ### Project history
 
 The review page on your computer (`flowstate review-page`, the desktop shortcut, or the link in
-the brief) has a **Project history** link at the top. Pick a project and you see its whole path
-in time order:
+the brief) has a **Project history** link at the top, next to "Who did what". Pick a project and
+you see its whole path in time order, newest first:
 
 - records created, edited, deleted and undone, and a decision that another one replaced;
 - possible conflicts and disagreement cards, and how each was settled;
@@ -570,12 +570,13 @@ in time order:
 
 Each entry says when it happened, which app did it, the model (only when the app said), the
 machine, and how the app signed in. Filter by type, by app or machine, or by dates, search
-the text, and choose oldest or newest first. Long histories come 50 entries a page. The page
+the text, and switch to oldest first. Long histories come 50 entries a page. The page
 works on a phone screen.
 
 Tap a record to see its fields now and its whole edit history, with every changed field
 before and after, plus everything else that names it. The **Todos** tab lists the project's
-todos with who created each one and its status now (open, done, cancelled, deleted). Tap one
+todos with who created each one and its status now (open, done, cancelled, deleted; an erased
+todo is left out, since nothing about it is left to show). Tap one
 for its full timeline: who created it, claimed it, let a claim run out, edited it, completed
 it, reopened it or deleted it.
 
