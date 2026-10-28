@@ -65,18 +65,23 @@ def approve(db_path: Path, item: dict, args: dict, user_request: str, client: st
         edits = {}
     if safety.needs_copy(item):   # a verified copy first, or no change at all
         done["safety_copy"] = safety.copy_before(db_path).name
-    return review.approve(db_path, int(item["id"]), user_request, client, apply, edits,
-                          others={"cleanup": apply_cleanup, "edit": apply_edit,
-                                  "delete": apply_delete, "conflict": apply_conflict,
-                                  "setting": apply_setting, "disagreement": apply_disagreement,
-                                  "source": lambda it, _e: provenance.confirm(db_path, it),
-                                  "handoff": lambda it, _e: handoffs.apply_queued(db_path, it),
-                                  "card_offer": lambda it, _e: card_offer.apply(db_path, it, client),
-                                  conflict_reopen.KIND: lambda it, _e: conflict_reopen.apply(
-                                      db_path, it, client, done),
-                                  "rule": lambda it, _e: rules.confirm(
-                                      db_path, it, path or _path_of(client))},
-                          path=path or _path_of(client))
+    try:
+        return review.approve(db_path, int(item["id"]), user_request, client, apply, edits,
+                              others={"cleanup": apply_cleanup, "edit": apply_edit,
+                                      "delete": apply_delete, "conflict": apply_conflict,
+                                      "setting": apply_setting, "disagreement": apply_disagreement,
+                                      "source": lambda it, _e: provenance.confirm(db_path, it),
+                                      "handoff": lambda it, _e: handoffs.apply_queued(db_path, it),
+                                      "card_offer": lambda it, _e: card_offer.apply(db_path, it, client),
+                                      conflict_reopen.KIND: lambda it, _e: conflict_reopen.apply(
+                                          db_path, it, client, done),
+                                      "rule": lambda it, _e: rules.confirm(
+                                          db_path, it, path or _path_of(client))},
+                              path=path or _path_of(client))
+    except deletes.DeleteError as e:   # the list the user saw is out of date: closed
+        if item.get("kind") == "delete" and e.payload.get("error") in deletes.VOIDS:
+            deletes.void(db_path, int(item["id"]), e.payload["message"])
+        raise
 
 
 def reject(db_path: Path, item: dict, reason: str, user_request: str, client: str,

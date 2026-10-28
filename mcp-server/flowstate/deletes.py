@@ -25,6 +25,7 @@ without a foreign key (record_meta, link_alerts.record_id; memory_fts rows go, 2
 (AUTOINCREMENT), so they can't attach to another record, and undo finds them as they were.
 """
 
+import hashlib
 import json
 import sqlite3
 from collections import Counter, defaultdict
@@ -78,6 +79,11 @@ LABELS = {"components": "components", "conversations": "decisions", "changes": "
 # Counts that must not change between the request and the approval (the user approved
 # these numbers). Sessions and review items move on their own while the user decides.
 _FIXED = tuple(v for v in LABELS.values() if v not in ("sessions", "review items"))
+# The record tables whose exact rows an approval is bound to (2.4.4, task 72): the user
+# approves this list of rows, worked out from the database, not a count or anyone's summary.
+_BOUND = frozenset(t for t, label in LABELS.items() if label in _FIXED)
+# Refusals that close the request: what it would delete is no longer what the user saw.
+VOIDS = ("changed_since_request", "request_outdated")
 
 DERIVED = {"meaning_index"}   # a search cache rebuilt from the records; not copied
 # record_links endpoint type -> table (links have no foreign key to the record itself)
@@ -197,6 +203,41 @@ def counts(gone: dict, root: tuple) -> dict:
     c = Counter(LABELS.get(t, "other rows") for (t, k) in gone if (t, k) != root)
     order = list(LABELS.values()) + ["other rows"]   # records first, bookkeeping last
     return {k: c[k] for k in order if c.get(k)}
+
+
+def bound(gone: dict, changed: dict, root: tuple) -> dict:
+    """The exact rows a delete approval covers: the record itself and every record row that
+    goes with it (by id, and a hash of each row's content), and the record rows that only
+    lose their link to it (by id). Sessions and review items are left out: they move on
+    their own while the user decides."""
+    def ids(rows) -> dict:
+        out = defaultdict(list)
+        for (t, k) in rows:
+            if t in _BOUND or (t, k) == root:
+                out[t].append(k)
+        return {t: sorted(v, key=str) for t, v in sorted(out.items())}
+    rows, lose = ids(gone), ids(changed)
+    h = hashlib.sha256(json.dumps({"rows": rows, "changed": lose}, sort_keys=True,
+                                  default=str).encode())
+    for t, keys in rows.items():
+        for k in keys:
+            h.update(json.dumps(gone[(t, k)], sort_keys=True, default=str).encode())
+    return {"rows": rows, "changed": lose, "digest": h.hexdigest()}
+
+
+def _bound_diff(then: dict, now: dict) -> str:
+    """What differs between the approved list and today's, in a few words."""
+    parts = []
+    for key, verb in (("rows", "deletes"), ("changed", "unlinks")):
+        a, b = then.get(key) or {}, now.get(key) or {}
+        for t in sorted(set(a) | set(b)):
+            was, is_ = {str(k) for k in a.get(t, [])}, {str(k) for k in b.get(t, [])}
+            name = _NAMED.get(t) or history.TYPE_OF.get(t, t)
+            if is_ - was:
+                parts.append(f"now also {verb} {name} " + ", ".join(f"#{k}" for k in sorted(is_ - was)))
+            if was - is_:
+                parts.append(f"no longer {verb} {name} " + ", ".join(f"#{k}" for k in sorted(was - is_)))
+    return "; ".join(parts) or "a record on the list was edited"
 
 
 def _table_counts(conn) -> dict:
@@ -369,6 +410,13 @@ def preview(db_path: Path, item: dict) -> dict:
         body = _body(inv, with_, undo)
         headline = f"These records will be deleted from {project}" if with_ else \
             f"This record will be deleted from {project}"
+        then, rows = payload.get("bound"), bound(gone, changed, (TYPES[rtype][0], int(rid)))
+        stale = not isinstance(then, dict) or rows["digest"] != then.get("digest")
+        if stale:   # approving it will be refused (_carry_out); say so before the user tries
+            body += ("\nThis list is not the one the request was made with ("
+                     + (_bound_diff(then, rows) if isinstance(then, dict)
+                        else "queued by an older FlowState")
+                     + "). Approving it deletes nothing; ask for the delete again.")
         plain = headline + "\n" + body
         if note:
             plain += f"\nAI's note: {note}"
@@ -378,7 +426,8 @@ def preview(db_path: Path, item: dict) -> dict:
             would["children_more"] = inv["children_more"]
         return {"missing": False, "headline": headline, "root_line": _root_line(inv),
                 "details": body + (f"\nAI's note: {note}" if note else ""),
-                "plain": plain, "ai_note": note, "would_delete": would, "changed_rows": len(changed)}
+                "plain": plain, "ai_note": note, "would_delete": would, "changed_rows": len(changed),
+                "changed_since_request": stale}
     finally:
         conn.close()
 
@@ -473,15 +522,24 @@ def request(db_path: Path, project_id: int, rtype: str, rid, client: str = "unkn
         title = _title(conn, rtype, rid)
         gone, changed = plan(conn, table, rid)
         with_ = counts(gone, (table, rid))
+        rows = bound(gone, changed, (table, rid))
+        stale = []
         for (iid, payload) in conn.execute("SELECT id, payload FROM review_items WHERE kind = "
                                            "'delete' AND status = 'pending' AND project_id = ?",
                                            (project_id,)).fetchall():
             p = json.loads(payload or "{}")
             if p.get("record_type") == rtype and p.get("record_id") == rid:
+                if (p.get("bound") or {}).get("digest") != rows["digest"]:
+                    stale.append((iid, p.get("bound")))   # asked about other rows: replaced
+                    continue
                 inv = _inventory(rtype, rid, title, pname, gone, (table, rid))
                 return _request_reply(iid, rtype, rid, title, with_, pname, inv, already=True)
     finally:
         conn.close()
+    for iid, then in stale:
+        void(db_path, iid, "What it would delete changed since this request ("
+             + (_bound_diff(then, rows) if then else "queued by an older FlowState")
+             + "); replaced by a new request.")
     what = f'{rtype} #{rid} "{_one_line(title, 60)}"'
     if with_:
         what += " with " + ", ".join(f"{n} {k}" for k, n in with_.items())
@@ -491,8 +549,9 @@ def request(db_path: Path, project_id: int, rtype: str, rid, client: str = "unkn
                f"restores it); reject to keep everything.")
     if rtype == "project":
         details += f" Approving needs the project's exact name typed by the user: {pname}"
-    payload = {"record_type": rtype, "record_id": rid, "title": title, "counts": with_,
-               "changed_rows": len(changed), "project_name": pname, **(options or {})}
+    payload = {**(options or {}), "record_type": rtype, "record_id": rid, "title": title,
+               "counts": with_, "changed_rows": len(changed), "project_name": pname,
+               "bound": rows}
     item = review.add_item(db_path, project_id, "delete", f"Delete {what}"[:300], details, payload,
                            client)
     inv = _inventory(rtype, rid, title, pname, gone, (table, rid))
@@ -542,9 +601,32 @@ def execute(db_path: Path, item: dict, client: str = "unknown",
     if rtype not in TYPES or rid is None:
         raise DeleteError("bad_request", "This delete request is incomplete; reject it.")
     check_approval(item, confirm_name)
+    if not isinstance(payload.get("bound"), dict) or not payload["bound"].get("digest"):
+        raise DeleteError("request_outdated",
+                          "This delete request was queued by an older FlowState and isn't tied to "
+                          "an exact list of rows, so it was closed. Nothing was deleted; ask for "
+                          "the delete again to get a new request.")
     return _carry_out(db_path, item["project_id"], rtype, rid, client,
                       asked=payload.get("counts") or {}, confirm_name=confirm_name,
-                      pname=payload.get("project_name"), title=payload.get("title"))
+                      pname=payload.get("project_name"), title=payload.get("title"),
+                      approved=payload["bound"])
+
+
+def void(db_path: Path, item_id: int, reason: str) -> bool:
+    """Close a pending delete request whose list of rows is out of date (rejected, by
+    FlowState): its approval can't be used any more, and asking again makes a new one."""
+    conn = connect(db_path)
+    try:
+        who = identity.fields(conn, "review_items", prefix="decided_", ident=identity.SYSTEM)
+        sets = "".join(f", {k} = ?" for k in who)
+        cur = conn.execute(f"""UPDATE review_items SET status = 'rejected', decided_at = ?,
+                              decided_by = 'flowstate (automatic)', reject_reason = ?{sets}
+                              WHERE id = ? AND kind = 'delete' AND status = 'pending'""",
+                           (review._now(), reason[:500], *who.values(), int(item_id)))
+        conn.commit()
+        return cur.rowcount == 1
+    finally:
+        conn.close()
 
 
 def delete_now(db_path: Path, project_id: int, rtype: str, rid, client: str = "unknown") -> dict:
@@ -570,7 +652,7 @@ def delete_now(db_path: Path, project_id: int, rtype: str, rid, client: str = "u
 def _carry_out(db_path: Path, pid: int, rtype: str, rid: int, client: str,
                asked: Optional[dict] = None, confirm_name: Optional[str] = None,
                pname: Optional[str] = None, title: Optional[str] = None,
-               same_save=None) -> dict:
+               same_save=None, approved: Optional[dict] = None) -> dict:
     """The delete itself, in one transaction. `asked` (an approved request's counts): refuse
     if what would go changed since; None for a delete made at once. `same_save(conn,
     edit_id)`, if given, writes more in that same transaction just before it commits (a
@@ -600,10 +682,19 @@ def _carry_out(db_path: Path, pid: int, rtype: str, rid: int, client: str,
                                                            f"reject the request and ask again.")
         gone, changed = plan(conn, table, rid)
         now = counts(gone, (table, rid))
+        if approved is not None:   # the exact rows the user saw, or nothing
+            rows = bound(gone, changed, (table, rid))
+            if rows["digest"] != approved.get("digest"):
+                raise DeleteError("changed_since_request",
+                                  f"What would be deleted changed since the request "
+                                  f"({_bound_diff(approved, rows)}). Nothing was deleted and this "
+                                  f"request is closed; ask for the delete again to get a new "
+                                  f"request.")
         if asked is not None and any(now.get(k, 0) != asked.get(k, 0) for k in _FIXED):
             raise DeleteError("changed_since_request",
                               f"What would be deleted changed since the request (then {asked}, now "
-                              f"{now}). Nothing was deleted; reject this request and ask again.")
+                              f"{now}). Nothing was deleted and this request is closed; ask for "
+                              f"the delete again to get a new request.")
         before = _table_counts(conn)
         key = history.row_key(conn, table)
         conn.execute(f'DELETE FROM "{table}" WHERE "{key}" = ?', (rid,))

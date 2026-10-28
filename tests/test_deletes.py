@@ -338,7 +338,9 @@ def test_approval_refused_if_more_would_go_than_the_user_saw(rich, seeded_db):
     r = _j(call(S, "manage_review", {"action": "approve", "project": "Alpha", "item_id": item,
                                      "user_request": ASK}))
     assert r["error"] == "changed_since_request"
-    assert dump(seeded_db) == before and (item, "delete", "pending") in _pending(seeded_db)
+    # 2.4.4 (task 72): the out-of-date request is closed; asking again makes a new one
+    assert dump(seeded_db) == before and (item, "delete", "pending") not in _pending(seeded_db)
+    assert _q(seeded_db, "SELECT status FROM review_items WHERE id = ?", item) == [("rejected",)]
 
 
 def test_undo_of_a_child_refused_while_its_parent_is_deleted(rich, seeded_db):
