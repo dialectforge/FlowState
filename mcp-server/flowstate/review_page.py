@@ -55,7 +55,7 @@ from typing import Callable, Optional, Union
 from urllib.parse import urlencode
 
 from . import dbconn
-from . import activity, approvals, history, identity, install_name, paths, review, review_mode, updates, who
+from . import activity, approvals, history, history_page, identity, install_name, paths, review, review_mode, updates, who
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8770   # 8766 = LAN server, 8767 = public listener
@@ -100,11 +100,18 @@ table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #eee;pad
 .set .inline{display:inline}.set li form{display:inline;margin-left:.4rem}
 .set li button{min-height:36px;padding:.2rem .8rem}
 .confirm{max-width:38rem}.confirm .set{background:#fff8ec;border-color:#e9d8b4}
+.tl{list-style:none;padding:0;margin:.6rem 0}.tl li{border:1px solid #e7e4dd;border-radius:10px;padding:.55rem .85rem;margin:.5rem 0;background:#fff;overflow-wrap:anywhere}
+.tl .when,.tl .who,.tl .rel{color:#62656b;font-size:.85rem}.tl .what{margin:.15rem 0}.tl .rec a,.tabs a{color:#1f5f5b}
+.tag{font-size:.75rem;border:1px solid #cfd8d6;border-radius:999px;padding:0 .45rem;color:#1f5f5b;white-space:nowrap}
+.fade{background:#fff8ec;border:1px solid #e9d8b4;border-radius:10px;padding:.5rem .8rem;font-size:.9rem}
+.filters .row{margin:.2rem 0}.pager{margin:1rem 0}
+.diff,.fields{margin:.4rem 0;table-layout:fixed}.diff td,.fields td,.fields th{vertical-align:top;overflow-wrap:anywhere}
+.diff .old{color:#8a2d22}.diff .new{color:#0a6b0a}.fields th{width:30%;color:#62656b;font-weight:normal}
 @media (max-width:600px){html{-webkit-text-size-adjust:100%}body{overflow-wrap:anywhere}
 button{min-height:44px;font-size:1rem}input,select,textarea{min-height:44px;font-size:1rem;max-width:100%}
 input[type=checkbox]{min-height:0;width:1.3rem;height:1.3rem;vertical-align:middle}
 .row{flex-wrap:wrap}.row>*{min-width:8rem}table{display:block;max-width:100%;overflow-x:auto}
-.set li button{min-height:44px}}"""
+.set li button{min-height:44px}.diff,.fields{display:table}}"""
 
 
 def _e(v) -> str:
@@ -581,7 +588,11 @@ class Page:
                   f"name='csrf' value='{_e(csrf)}'><button>Sign out</button></form>"
                   if self.sign_out else "") +
                f"<p class='meta'><a href='{self.base}/'>Review queue</a> · <a href='{self.base}/?view=who'>Who did what</a>"
-               f"{' (this page)' if view == 'who' else ''}</p>"]
+               f"{' (this page)' if view == 'who' else ''}"
+               # Project history (history_page.py): this computer's page only, not the tunnel's
+               + (f" · <a href='{self.base}/?view=history'>Project history</a>"
+                  f"{' (this page)' if view in history_page.VIEWS else ''}" if self.settings != "off" else "")
+               + "</p>"]
         if flash:
             out.append(f"<p class='ok'>{_e(flash)}</p>")
         return out
@@ -637,6 +648,11 @@ class Page:
             out.append(f"<p>{' · '.join(nav)}</p>")
         out.append("</body></html>")
         return "".join(out)
+
+    def render_history(self, csrf: str, flash: str = "", q: Optional[dict] = None) -> str:
+        """Project history (history_page.py): a project's timeline, its todos, one record's
+        whole edit history. Read-only; not on the tunnel page."""
+        return history_page.Views(self, _e).render(csrf, flash, q or {})
 
     def render(self, csrf: str, flash: str = "", project: str = "", status: str = "pending") -> str:
         projects = self.projects()
@@ -1184,6 +1200,9 @@ def create_app(page: Page):
         if request.query_params.get("view") == "who":
             return HTMLResponse(page.render_who(page.sessions[sess], flash,
                                                 dict(request.query_params)), headers=headers)
+        if request.query_params.get("view") in history_page.VIEWS:   # read-only
+            return HTMLResponse(page.render_history(page.sessions[sess], flash,
+                                                    dict(request.query_params)), headers=headers)
         return HTMLResponse(page.render(page.sessions[sess], flash,
                                         request.query_params.get("project", ""),
                                         request.query_params.get("status", "pending")
