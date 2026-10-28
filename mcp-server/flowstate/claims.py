@@ -308,8 +308,8 @@ def claim(db_path: Path, pid: int, todo_id, minutes=None, client: Optional[str] 
 
 
 def renew(db_path: Path, pid: int, todo_id, minutes=None, client: Optional[str] = None) -> dict:
-    """Extend your own claim. Fails if you don't hold it (a claim of yours that ran out is
-    renewed too, as long as nobody else has taken it since)."""
+    """Extend your own live claim. Fails if you don't hold it, and once it has expired (2.4.4,
+    task 72): an expired claim is gone, for its holder too; claim the todo again."""
     mins = _minutes(minutes)
     who = me(client)
     now = utcnow()
@@ -321,13 +321,18 @@ def renew(db_path: Path, pid: int, todo_id, minutes=None, client: Optional[str] 
         try:
             t = _todo(conn, pid, todo_id)
             cur = conn.execute("UPDATE todo_claims SET expires_at = ?, model = ? "
-                               "WHERE todo_id = ? AND holder = ?",
-                               (expires, who.get("model"), t["id"], who["holder"]))
+                               "WHERE todo_id = ? AND holder = ? AND expires_at > ?",
+                               (expires, who.get("model"), t["id"], who["holder"], _ts(now)))
             if cur.rowcount != 1:
-                row = conn.execute("SELECT * FROM todo_claims WHERE todo_id = ? AND expires_at > ?",
-                                   (t["id"], _ts(now))).fetchone()
-                if row is not None:
+                row = conn.execute("SELECT * FROM todo_claims WHERE todo_id = ?",
+                                   (t["id"],)).fetchone()
+                if row is not None and row["expires_at"] > _ts(now):
                     raise _held_elsewhere(t, row, now, who["holder"])
+                if row is not None and row["holder"] == who["holder"]:
+                    raise ClaimError("claim_expired", f"Your claim on todo #{t['id']} expired at "
+                                     f"{row['expires_at']} UTC, so it can't be renewed. Claim it "
+                                     f"again if it is still free: manage_todos(action=\"claim\").",
+                                     expired_at=row["expires_at"])
                 raise ClaimError("not_claimed", f"You don't hold a claim on todo #{t['id']}. "
                                  f"Claim it first: manage_todos(action=\"claim\").")
             _event(conn, t["id"], pid, "renew", f"renewed claim on todo #{t['id']} ({mins}m)", who)
@@ -345,6 +350,9 @@ def _drop_own(conn, t, pid: int, who: dict, event: str, summary: str) -> bool:
     """Delete the caller's claim on t (inside the open transaction). True if there was one;
     raises if someone else holds it."""
     now = utcnow()
+    if conn.execute("DELETE FROM todo_claims WHERE todo_id = ? AND holder = ? AND expires_at <= ?",
+                    (t["id"], who["holder"], _ts(now))).rowcount:
+        return False   # it had expired: it was no longer held (the stale row goes)
     cur = conn.execute("DELETE FROM todo_claims WHERE todo_id = ? AND holder = ?",
                        (t["id"], who["holder"]))
     if cur.rowcount != 1:
