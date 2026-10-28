@@ -466,7 +466,8 @@ def _role(kind: str, table: str, rid, recs: list) -> str:
 def preview(db_path: Path, item: dict) -> Optional[dict]:
     """The exact list for the review and phone pages, from the database: each record (id, a
     short title from the live record, what happens to it), and whether it still matches the
-    list the suggestion was made with. None for a clean-up that changes nothing. A record
+    list the suggestion was made with ('text': the list and any warning; 'listed': the list
+    alone; 'warning': the warning alone). None for a clean-up that changes nothing. A record
     that is gone (deleted or erased) is shown by id only."""
     from . import deletes
     try:
@@ -496,15 +497,16 @@ def preview(db_path: Path, item: dict) -> Optional[dict]:
         conn.close()
     stale = then is None or then.get("digest") != now["digest"]
     lines = lines or [NONE_LEFT]
-    text = "Approving changes exactly these records: " + "; ".join(lines) + "."
-    warning = None
+    listed = "Approving changes exactly these records: " + "; ".join(lines) + "."
+    text, warning = listed, None
     if stale:
         why = deletes._bound_diff(then, now, _VERBS) if then else \
             ERASED_WHY if payload.get("bound_erased") else "queued by an older FlowState"
         warning = (f"This list is not the one the suggestion was made with ({why}). Approving it "
                    "changes nothing; run the clean-up again for a new suggestion.")
         text += " " + warning
-    return {"lines": lines, "changed_since_request": stale, "text": text, "warning": warning}
+    return {"lines": lines, "changed_since_request": stale, "text": text, "warning": warning,
+            "listed": listed}
 
 
 def html_for(db_path: Path, it: dict) -> str:

@@ -190,14 +190,16 @@ def view(db_path: Path, it: dict, project: str) -> dict:
                 out.update(approve_label=review.KEEP_ALL, does=review.KEEP_ALL_HOW)
                 if out["contents"].get("explain"):
                     out["contents_text"].append(out["contents"]["explain"])
-    if it["kind"] == "cleanup" and not out["resolved"]:   # its list changed (task 76)
-        from . import cleanup
+    if it["kind"] == "cleanup" and not out["resolved"]:   # its exact list (task 77), and
+        from . import cleanup                             # whether it changed (task 76)
         try:
             got = cleanup.preview(db_path, it)
-        except Exception:  # noqa: BLE001 - the card still shows, without the warning
+        except Exception:  # noqa: BLE001 - the card still shows, without the list
             got = None
-        if got and got["warning"]:
-            out["warning"] = got["warning"]
+        if got:
+            out["would_change"] = got["listed"]
+            if got["warning"]:
+                out["warning"] = got["warning"]
     if out["resolved"]:
         out["detail"] = _outcome(it)
     elif locked(it):
@@ -211,6 +213,8 @@ def plain(v: dict) -> str:
     lines = [v["title"], f"{v['kind_label']} #{v['item_id']} in {v['project']}: {v['text']}"]
     if v.get("details"):
         lines.append(v["details"])
+    if v.get("would_change"):
+        lines.append(v["would_change"])
     if v.get("warning"):
         lines.append(v["warning"])
     lines.extend(v.get("contents_text") or [])
