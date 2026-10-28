@@ -47,7 +47,7 @@ def approve(db_path: Path, item: dict, args: dict, user_request: str, client: st
         done["note"] = ("Kept as a possible conflict; it stays in the brief until a decision "
                         "replaces one of them (log_work replaces= or manage_links supersedes). "
                         "Ask the user which one stands.")
-        return conflicts.confirm(db_path, item)
+        return conflicts.confirm(db_path, item, client)
 
     def apply_delete(item: dict, _edits: dict):
         done.update(deletes.execute(db_path, item, client, args.get("confirm_name")))

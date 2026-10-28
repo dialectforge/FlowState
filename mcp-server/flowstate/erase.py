@@ -14,7 +14,8 @@ y; never a tool, never piped input). For each deleted record it removes:
   of a disagreement card naming them (NEW-3);
 - the text of review items about them (they came from them, name them, or belong to their
   card); any other item loses only a distinctive sentence quoted from them, never a short
-  phrase it happens to share (NEW-2);
+  phrase it happens to share (NEW-2); the edit history of every item it changes (the text
+  before an "approve with edits", task 68) goes too;
 - events in the automatic session log (auto_sessions) whose text matches a removed row (a
   short text only on an event of the record's own kind, NEW-4);
 - attached files FlowState copied into its own folder (projects/<p>.flowstate/attachments).
@@ -257,6 +258,15 @@ def _versions(conn, rows: dict) -> list:
                     d = None
                 if isinstance(d, dict):
                     out.append((table, d))
+    if _has(conn, "review_items"):   # the text an "approve with edits" replaced (task 68)
+        for (table, rid) in rows:
+            for h in conn.execute(
+                    """SELECT h.old_row FROM record_history h JOIN review_items r ON r.id = h.record_id
+                       WHERE h.table_name = 'review_items' AND h.tool = 'queue/review_edit'
+                       AND r.result_table = ? AND r.result_id = ?""", (table, rid)):
+                d = _loads(h["old_row"])
+                if isinstance(d, dict):
+                    out.append(("review_text", d))
     return out
 
 
@@ -280,6 +290,7 @@ def describe(p: dict) -> list:
 # Ids, dates, status / priority / category words, hashes and names of the app that wrote it
 # are not text to look for elsewhere (audit N-F2: matching those damaged unrelated items).
 _TEXT_COLUMNS = {
+    "review_text": ("summary", "details"),   # a review item's text before it was edited
     "projects": ("name", "description"),
     "components": ("name", "description"),
     "conversations": ("user_prompt_summary", "assistant_response_summary", "key_decisions"),
@@ -471,7 +482,8 @@ def _card_topics(conn, rows: dict) -> list:
         and ((c["a_type"], c["a_id"]) in refs or (c["b_type"], c["b_id"]) in refs)}, key=len, reverse=True)
 
 
-def _review_texts(conn, rows: dict, texts: list, about_only: tuple = ()) -> int:
+def _review_texts(conn, rows: dict, texts: list, about_only: tuple = (),
+                  changed: Optional[set] = None) -> int:
     """Quotes of the erased text (every version) in review items. An item about an erased
     record (_about) loses every quote of it, across line breaks. Any other item only loses
     distinctive sentences of it: across line breaks in the records' own project, exactly
@@ -501,6 +513,8 @@ def _review_texts(conn, rows: dict, texts: list, about_only: tuple = ()) -> int:
                          "WHERE id = ?", (s, d, json.dumps(p) if p is not None
                                           else r["payload"], r["id"]))
             n += 1
+            if changed is not None:
+                changed.add(r["id"])
     return n
 
 
@@ -592,8 +606,11 @@ def run(db_path: Path, p: dict, data_dir: Optional[Path] = None) -> dict:
     try:
         conn.execute("PRAGMA secure_delete = ON")   # freed pages are zeroed, not left as they were
         conn.execute("BEGIN IMMEDIATE")
+        items: set = set()   # review items whose text goes: their edit history goes too
         if _has(conn, "review_items"):   # (before the rows' own items are blanked below)
-            n["review_items"] += _review_texts(conn, rows, texts, tuple(_card_topics(conn, rows)))
+            items |= _about(conn, rows)
+            n["review_items"] += _review_texts(conn, rows, texts, tuple(_card_topics(conn, rows)),
+                                               items)
         edits = {t["edit_id"] for t in p["targets"] if t["edit_id"] and t.get("whole", True)}
         for e in edits:
             n["history"] += conn.execute("DELETE FROM record_history WHERE edit_id = ?",
@@ -635,6 +652,9 @@ def run(db_path: Path, p: dict, data_dir: Optional[Path] = None) -> dict:
                            json_extract(payload, '$.record_type') = ? AND
                            json_extract(payload, '$.record_id') = ?)) AND summary != ?""",
                         (ERASED, table, rid, rtype, rid, ERASED)).rowcount
+        for item in sorted(items):   # their text before an "approve with edits" (task 68)
+            n["history"] += conn.execute("DELETE FROM record_history WHERE table_name = "
+                                         "'review_items' AND record_id = ?", (item,)).rowcount
         n["linked"] = _linked(conn, rows, [_pattern(t, True) for t in texts])
         n["history"] += _shared_edits(conn, p, texts, labels)
         if labels and _has(conn, "auto_sessions"):   # the session log of the records' projects

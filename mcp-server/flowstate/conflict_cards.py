@@ -512,9 +512,12 @@ def _quiet_pair(conn, a_id: int, b_id: int, client: str, reason: str) -> None:
     sets, who = identity.set_sql(conn, "decision_conflicts", client, prefix="resolved_")
     isets, iwho = identity.set_sql(conn, "review_items", client, prefix="decided_")
     for r in rows:
+        before = history._row(conn, "decision_conflicts", r["id"])
         conn.execute(f"""UPDATE decision_conflicts SET status = 'dismissed_compatible',
                         resolved_at = ?{sets} WHERE id = ? AND status = 'open'""",
                      (_now(), *who, r["id"]))
+        history.record_row(conn, "decision_conflicts", r["id"], before, "queue/conflict_card",
+                           client)
         if r["review_item_id"] is not None:
             conn.execute(f"""UPDATE review_items SET status = 'rejected', decided_at = ?,
                             decided_by = 'flowstate (automatic)', reject_reason = ?{isets}

@@ -47,11 +47,19 @@ SIDE = {"entry_evidence": "evidence", "record_meta": "source tag", "entry_standi
 KEYED = ("record_meta", "entry_standing")
 _SIDE_OF = ("table_name = ? AND json_extract(COALESCE(new_row, old_row), '$.record_type') = ? "
             "AND json_extract(COALESCE(new_row, old_row), '$.record_id') = ?")
+# A card's outcome (the user's decision): listed with the record, but undo of the record
+# steps over it to the newest ordinary edit and never changes it (task 68).
+CARD_SIDE = ("entry_standing",)
+UNDO_SIDE = tuple(s for s in SIDE if s not in CARD_SIDE)
+# Review-queue rows whose changes are recorded (task 68) under tools starting "queue/": a
+# possible conflict's status, a review item's text when approved with edits. Listed, never
+# undone (they record the user's decisions).
+QUEUE = {"decision_conflicts": "possible conflict", "review_items": "review item"}
 
 
 def type_of(table: str) -> str:
     """The user-facing name of a table's rows: decision, evidence, ... (else the table)."""
-    return TYPE_OF.get(table) or SIDE.get(table) or table
+    return TYPE_OF.get(table) or SIDE.get(table) or QUEUE.get(table) or table
 
 # (tool, action) -> rows the edit can touch: (table, key column, argument holding the key)
 TRACKED = {
@@ -336,7 +344,9 @@ def _put_back(conn, g, row: Optional[dict]) -> bool:
 
 
 def _user_only(g) -> Optional[str]:
-    """Why undo can't change this side row: the user's own decisions stay theirs."""
+    """Why undo can't change this row: the user's own decisions stay theirs."""
+    if (g["tool"] or "").startswith("queue/"):
+        return "it records a decision in the review queue, which is the user's"
     if g["table_name"] == "entry_standing":
         return ("it was set when a disagreement card was decided; the card's outcome is the "
                 "user's (review page)")
@@ -368,6 +378,26 @@ def record_side(conn, table: str, rtype: str, rid: int, before: dict, tool: str,
             "tool": tool, "old_row": json.dumps(old) if old is not None else None,
             "new_row": json.dumps(new) if new is not None else None,
             "client": (client or "")[:80], "created_at": now}, client)
+    return edit_id
+
+
+def record_row(conn, table: str, rid: int, before: Optional[dict], tool: str,
+               client: Optional[str] = "unknown") -> Optional[str]:
+    """Record a change to one review-queue row (QUEUE) made on `conn` (the caller commits):
+    the row before and after, with who and when. `tool` starts with "queue/", so undo never
+    changes it back. `before` is _row() taken before the change."""
+    if table not in QUEUE or not _has(conn, "record_history"):
+        return None
+    after = _row(conn, table, rid)
+    if after == before:
+        return None
+    edit_id = new_edit_id()
+    identity.insert(conn, "record_history", {
+        "edit_id": edit_id, "table_name": table, "record_id": rid,
+        "project_id": (after or before or {}).get("project_id"), "tool": tool,
+        "old_row": json.dumps(before) if before is not None else None,
+        "new_row": json.dumps(after) if after is not None else None,
+        "client": (client or "")[:80], "created_at": _now()}, client)
     return edit_id
 
 
@@ -482,13 +512,31 @@ def _label(table: str, rid) -> str:
 
 def _changed_by(conn, g) -> str:
     """Why a row can't be put back: who changed it after this edit, if FlowState saw it."""
-    later = conn.execute(
-        """SELECT * FROM record_history WHERE table_name = ? AND record_id = ? AND id > ?
-           ORDER BY id DESC LIMIT 1""", (g["table_name"], g["record_id"], g["id"])).fetchone()
+    sql, args = "table_name = ? AND record_id = ? AND id > ?", [g["table_name"], g["record_id"], g["id"]]
+    if g["table_name"] in KEYED:   # record_id is the record's: a todo #3 is not decision #3
+        sql += " AND json_extract(COALESCE(new_row, old_row), '$.record_type') = ?"
+        args.append(_side_ref(g).get("record_type"))
+    later = conn.execute(f"SELECT * FROM record_history WHERE {sql} ORDER BY id DESC LIMIT 1",
+                         args).fetchone()
     if later is None:
         return "changed outside FlowState since"
     who = identity.shown_row(later, fallback=later["client"] or "another app")
     return f"changed again since by {who} (undo that first)"
+
+
+def _card_names(conn, rtype: str, rid: int) -> Optional[str]:
+    """Why taking back a new record would change a decided disagreement card, if it would:
+    a card's mark is on it or names it as the entry that stands, or a decided card names it."""
+    if _has(conn, "entry_standing") and conn.execute(
+            "SELECT 1 FROM entry_standing WHERE (record_type = ? AND record_id = ?) "
+            "OR (by_type = ? AND by_id = ?) LIMIT 1", (rtype, rid, rtype, rid)).fetchone():
+        return "a disagreement card was decided about it"
+    if _has(conn, "conflict_cards") and conn.execute(
+            "SELECT 1 FROM conflict_cards WHERE status NOT IN ('open', 'dismissed') AND "
+            "((a_type = ? AND a_id = ?) OR (b_type = ? AND b_id = ?)) LIMIT 1",
+            (rtype, rid, rtype, rid)).fetchone():
+        return "a disagreement card was decided about it"
+    return None
 
 
 def _creation_check(conn, g, caller: identity.Identity, group_keys: set) -> Optional[tuple[str, str]]:
@@ -500,6 +548,10 @@ def _creation_check(conn, g, caller: identity.Identity, group_keys: set) -> Opti
         return ("user_approved", f"{rtype} #{g['record_id']} was approved by the user in the "
                                  f"review queue; to remove it, manage_memory(action=\"delete\") "
                                  f"asks them.")
+    card = _card_names(conn, rtype, g["record_id"])
+    if card:
+        return ("user_only", f"{rtype} #{g['record_id']} stays: {card}; the card's outcome is the "
+                             f"user's (review page).")
     keys = g.keys()
     col = (lambda k: g[k] if k in keys else None)
     made_app = col("app") or g["client"]
@@ -532,14 +584,22 @@ def undo(db_path: Path, project_id: int, record_type: str, record_id: int,
         if not available(conn):
             raise HistoryError("history_unavailable", "Edit history isn't set up yet (migration 005).")
         conn.execute("BEGIN IMMEDIATE")
-        last = conn.execute(   # the record's last edit, or its side rows' (evidence) if newer
+        last = conn.execute(   # the record's last edit, or its side rows' (evidence) if
+            # newer; a card's outcome (CARD_SIDE) is stepped over, never undone
             f"""SELECT * FROM record_history WHERE undone_at IS NULL AND
-                ((table_name = ? AND record_id = ?) OR {" OR ".join(f"({_SIDE_OF})" for _ in SIDE)})
+                ((table_name = ? AND record_id = ?) OR {" OR ".join(f"({_SIDE_OF})" for _ in UNDO_SIDE)})
                 ORDER BY id DESC LIMIT 1""",
-            (table, int(record_id), *[v for side in SIDE
+            (table, int(record_id), *[v for side in UNDO_SIDE
                                       for v in (side, record_type, int(record_id))])).fetchone()
         if last is None:
             conn.rollback()
+            if any(conn.execute(f"SELECT 1 FROM record_history WHERE {_SIDE_OF} LIMIT 1",
+                                (side, record_type, int(record_id))).fetchone()
+                   for side in CARD_SIDE):
+                raise HistoryError("user_only",
+                                   f"{record_type} #{record_id}: the only recorded change is a "
+                                   f"disagreement card's outcome, which is the user's (review "
+                                   f"page). Nothing was changed.")
             raise HistoryError("nothing_to_undo",
                                f"No recorded change to {record_type} #{record_id} to undo.")
         if last["tool"] == "history/undo" and last["undo_of"]:

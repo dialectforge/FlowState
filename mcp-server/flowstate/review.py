@@ -291,8 +291,12 @@ def approve(db_path: Path, item_id: int, user_request: str, client: str,
         raise
     conn = _conn(db_path)
     try:
+        from . import history
+        before = history._row(conn, "review_items", item_id)
         conn.execute("""UPDATE review_items SET summary = ?, details = ?, result_table = ?,
                         result_id = ? WHERE id = ?""", (summary, details, table, rid, item_id))
+        if edits and before and (before["summary"], before["details"]) != (summary, details):
+            history.record_row(conn, "review_items", item_id, before, "queue/review_edit", client)
         conn.commit()
     finally:
         conn.close()

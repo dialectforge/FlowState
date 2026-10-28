@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import dbconn
-from . import identity, meaning, review
+from . import history, identity, meaning, review
 
 SIMILAR = 0.55            # tuned on tests/test_decision_conflicts.py fixtures (see there)
 OTHER_COMPONENT = 0.65    # both decisions name a component, and not the same one
@@ -268,9 +268,12 @@ def resolve_replaced(db_path: Path, by_decision: int, replaced: int,
                                 "(new_id = ? OR old_id = ?)", (replaced, replaced)).fetchall()
             sets, who = identity.set_sql(conn, "decision_conflicts", client, prefix="resolved_")
             for r in rows:
+                before = history._row(conn, "decision_conflicts", r["id"])
                 conn.execute(f"""UPDATE decision_conflicts SET status = 'resolved_replaced',
                                 resolved_at = ?, resolved_by_decision = ?{sets} WHERE id = ?""",
                              (_now(), by_decision, *who, r["id"]))
+                history.record_row(conn, "decision_conflicts", r["id"], before,
+                                   "queue/conflict_replaced", client)
             _close_items(conn, rows, lambda r: f"closed automatically: D{by_decision} replaced "
                                                f"D{replaced}", client)
             conn.execute("COMMIT")
@@ -299,7 +302,7 @@ def _pair_of(conn, item: dict):
     return row
 
 
-def confirm(db_path: Path, item: dict) -> tuple[str, int]:
+def confirm(db_path: Path, item: dict, client: Optional[str] = None) -> tuple[str, int]:
     """review approve: the user says they really conflict. The pair stays open (and in the
     brief) until a decision replaces one of them."""
     conn = _connect(db_path)
@@ -309,8 +312,17 @@ def confirm(db_path: Path, item: dict) -> tuple[str, int]:
             raise review.ReviewError("already_resolved",
                                      f"D{row['new_id']} vs D{row['old_id']} is already "
                                      f"{row['status'].replace('_', ' ')}.")
-        conn.execute("UPDATE decision_conflicts SET confirmed_at = ? WHERE id = ?",
-                     (_now(), row["id"]))
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            before = history._row(conn, "decision_conflicts", row["id"])
+            conn.execute("UPDATE decision_conflicts SET confirmed_at = ? WHERE id = ?",
+                         (_now(), row["id"]))
+            history.record_row(conn, "decision_conflicts", row["id"], before,
+                               "queue/conflict_confirmed", client)
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
         return "decision_conflicts", row["id"]
     finally:
         conn.close()
@@ -325,9 +337,18 @@ def dismiss(db_path: Path, item_id: int, client: Optional[str] = None) -> dict:
         if row["status"] != "open":
             return {}
         sets, who = identity.set_sql(conn, "decision_conflicts", client, prefix="resolved_")
-        conn.execute(f"""UPDATE decision_conflicts SET status = 'dismissed_compatible',
-                        resolved_at = ?{sets} WHERE id = ? AND status = 'open'""",
-                     (_now(), *who, row["id"]))
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            before = history._row(conn, "decision_conflicts", row["id"])
+            conn.execute(f"""UPDATE decision_conflicts SET status = 'dismissed_compatible',
+                            resolved_at = ?{sets} WHERE id = ? AND status = 'open'""",
+                         (_now(), *who, row["id"]))
+            history.record_row(conn, "decision_conflicts", row["id"], before,
+                               "queue/conflict_dismissed", client)
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
         new_id, old_id = row["new_id"], row["old_id"]
     finally:
         conn.close()
