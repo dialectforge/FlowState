@@ -916,6 +916,15 @@ Brief and defusing
   "Approving changes exactly these records: none (no record on its list is still there)."
   on the review page, the phone page and in these answers, instead of an empty list.
 
+### A clean-up's exact list on the review card (task 77)
+
+- **The review card.** The in-chat review card (MCP Apps) for a waiting clean-up now also shows
+  the review page's "Approving changes exactly these records: ..." list (`would_change`), above
+  the out-of-date warning when there is one. The card's plain text has the same line. Erased
+  records are never shown, by text or by id; when none of its records is left the list reads
+  "none (no record on its list is still there)". Decided clean-ups and other kinds of item are
+  shown as before.
+
 ## 2.4.3 - 2026-10-23
 
 - No new dependencies. One additive database migration (023: three new tables for
