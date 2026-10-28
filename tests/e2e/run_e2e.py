@@ -108,7 +108,8 @@ class Report:
         17: "Settings on the local review page",
         18: "Review cards through the relay", 19: "The card offer (Allow tap cards in this app?)",
         20: "Reopen possible conflicts after an undo",
-        21: "Link removal asks; erase and cut quotes"}
+        21: "Link removal asks; erase and cut quotes",
+        22: "Project history page"}
 
     def __init__(self):
         self.checks = {n: [] for n in self.TITLES}
@@ -2961,6 +2962,84 @@ def s21_link_remove_and_erase(W):
             and "workshop on Mondays" not in blob and "two mechanics" not in blob
             and "[erased]" in blob and "Ask the team about closing on Mondays" in blob, short(hist))
 
+
+def s22_project_history(W):
+    """Task 73: the review page's Project history, opened from the link in a real app's brief:
+    the project's path in time order with who did each step, the Todos view (who created each
+    todo, its status), one todo's whole timeline (claim, completion), a decision replaced by
+    another, an erased decision shown as [erased] with its text nowhere, read-only (no form
+    that posts), and no such page on the HTTP listener's address."""
+    import httpx
+    print("\n== S22 project history page", flush=True)
+    Q = "Garden Centre e2e-22"
+    cc1, cursor = W.agents["cc1"], W.agents["cursor"]
+    gone_text = "Water the seedlings with the blue hose at dawn"
+    cc1.call("manage_projects", action="create", name=Q, description="S22: history page")
+    t = cc1.call("log_work", project=Q, kind="todo", summary="Repot the lemon tree")
+    tid = t["record"]["id"]
+    cursor.call("manage_todos", action="claim", project=Q, todo_id=tid)
+    cursor.call("manage_todos", action="update", project=Q, todo_id=tid, status="done")
+    old = cc1.call("log_work", project=Q, kind="decision", summary="Open the shop at eight")["record"]["id"]
+    new = cursor.call("log_work", project=Q, kind="decision", summary="Open the shop at nine",
+                      replaces=old)["record"]["id"]
+    gone = cc1.call("log_work", project=Q, kind="decision", summary=gone_text)["record"]["id"]
+    cc1.call("manage_memory", action="delete", project=Q, record_type="decision", record_id=gone)
+    rc, out = W.cli_in_terminal(["erase", f"decision:{gone}"], ["y"])
+    p = W.q("SELECT id FROM projects WHERE name = ?", (Q,))
+    pid = p[0]["id"] if p else 0
+    # something waiting for review, so the brief carries the page's link
+    cursor.call("log_work", project=Q, kind="todo", summary="Order more terracotta pots", suggested=True)
+    b = brief_text(cc1.call("start_here", project=Q))
+    m = re.search(r"(http://127\.0\.0\.1:\d+/)", b)
+    R.check(22, "the brief carries the local review page's link", m, short(b[-300:]))
+    if not m:
+        return
+    link = m.group(1)
+    with httpx.Client(timeout=20) as hc:
+        h = hc.get(f"{link}?view=history&project={pid}")
+        R.check(22, "the brief's review link opens Project history: the project's path in time order, "
+                    "each step with its app and machine",
+                h.status_code == 200 and "<h2>Project history</h2>" in h.text
+                and "project created" in h.text and "Repot the lemon tree" in h.text
+                and h.text.index("project created") < h.text.index("Repot the lemon tree")
+                and "by claude-code" in h.text and "by cursor" in h.text and " · on " in h.text,
+                (h.status_code, short(h.text[-300:])))
+        R.check(22, "a decision replaced by another shows as one step, both named",
+                f"decision #{new} replaces decision #{old}" in h.text and "Open the shop at eight" in h.text,
+                short(h.text[-300:]))
+        alltext = h.text + hc.get(f"{link}?view=history&project={pid}&q=seedlings").text \
+            + hc.get(f"{link}?view=record&project={pid}&type=decision&id={gone}").text
+        R.check(22, "an erased decision (the user's y on `flowstate erase`) shows as [erased]; its text "
+                    "is nowhere on the page, in search or on its record page",
+                rc == 0 and "[erased]" in alltext and "blue hose" not in alltext.replace(
+                    'value="seedlings"', "") and "seedlings" not in alltext.replace('value="seedlings"', ""),
+                (rc, short(out)))
+        td = hc.get(f"{link}?view=todos&project={pid}")
+        rec = hc.get(f"{link}?view=record&project={pid}&type=todo&id={tid}")
+        R.check(22, "the Todos view lists who created each todo and its status; the todo's page has its "
+                    "claim and its completion, with before and after",
+                td.status_code == 200 and "Repot the lemon tree" in td.text and ">done<" in td.text
+                and "created" in td.text and rec.status_code == 200 and "claimed todo" in rec.text
+                and "completed (pending -&gt; done)" in rec.text and "class='new'>done" in rec.text,
+                short(rec.text[-400:]))
+        body = h.text.split("<h2>Project history</h2>", 1)[-1] + td.text.split("<h2>Project history</h2>", 1)[-1] \
+            + rec.text.split("<h2>Project history</h2>", 1)[-1]
+        R.check(22, "the history pages are read-only (no form posts anything)",
+                "method='post'" not in body.lower().replace('"', "'"), "")
+        api = None
+        if getattr(W, "http", None) and W.http.poll() is None:
+            try:
+                api = hc.get(f"http://127.0.0.1:{W.port}/?view=history&project={pid}",
+                             headers={"Authorization": f"Bearer {W.shared_token}"})
+            except httpx.ConnectError:
+                api = None
+        R.check(22, "a fresh browser without the page's cookie can't reuse someone's session; the "
+                    "HTTP listener has no history page",
+                (api is None or api.status_code in (401, 404)) and
+                httpx.get(f"{link}?view=history&project={pid}", headers={"Host": "evil.example"}).status_code == 403,
+                api.status_code if api is not None else "no HTTP listener in this run")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--keep", action="store_true", help="keep the temp folder")
@@ -2980,7 +3059,8 @@ def main():
                      s8_backups, s9_ledger, lambda w: s10_upgrade(w, args.skip_upgrade), s11_edges,
                      s13_approvals, s14_user_stated, s15_without_terminal, s15_review_card,
                      s16_tunnel_page, s17_settings_page, s18_relay_cards, s19_card_offer,
-                     s20_reopen_after_undo, s21_link_remove_and_erase, deferred_window,
+                     s20_reopen_after_undo, s21_link_remove_and_erase, s22_project_history,
+                     deferred_window,
                      s12_descriptions):
             try:
                 step(W)
