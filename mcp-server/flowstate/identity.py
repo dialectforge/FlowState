@@ -58,7 +58,8 @@ VIA_SOURCES = SIGN_IN_SOURCES + ("app_key",)   # rows whose machine may carry "(
 _VIA = re.compile(r"^(?:(.*?) )?\(signed in as (.+?)\)?$")
 _PLACES = ("relay", "tunnel", "lan")   # machine words that are a listener, not a workspace
 LABELS = {"app_key": "per-app key", "oauth_client": "OAuth app", "remote_token": "remote token",
-          "shared_token": "shared token (legacy)", "self_reported": "self-reported"}
+          "shared_token": "shared token (legacy)", "self_reported": "self-reported",
+          "flowstate": "FlowState itself"}
 FIELDS = ("app", "model", "machine", "identity_source")
 MAX_LEN = 80
 PROCESS_SESSION = uuid.uuid4().hex[:12]   # stdio: one server process = one session
@@ -81,6 +82,19 @@ class Identity:
     def as_dict(self) -> dict:
         """The four recorded fields (not the session)."""
         return {k: v for k, v in asdict(self).items() if k in FIELDS}
+
+
+# FlowState itself as the one who queued an item (task 70): only the "reopen these possible
+# conflicts?" question (conflict_reopen.py) is written with it. No caller ever is it: resolve()
+# never gives this identity source, and "flowstate" / "system" are reserved app names
+# (names.reserved), so no app can claim it by any name, header or tool argument.
+SYSTEM_SOURCE = "flowstate"
+SYSTEM = Identity("FlowState", None, None, SYSTEM_SOURCE)
+
+
+def is_system(row) -> bool:
+    """Was this row (a dict with app / identity_source) written by FlowState itself?"""
+    return bool(row) and row.get("identity_source") == SYSTEM_SOURCE and row.get("app") == SYSTEM.app
 
 
 _current: contextvars.ContextVar[Optional[Identity]] = contextvars.ContextVar(
@@ -346,7 +360,7 @@ def same_caller(app: Optional[str], machine: Optional[str], source: Optional[str
     in on a key / token / sign-in is matched by that sign-in (same_sign_in, renames
     included), never by the name it sends (it can send any name); a row written through a
     sign-in matches only that sign-in; other rows by app name, as before."""
-    if ident is None:
+    if ident is None or source == SYSTEM_SOURCE:
         return False
     if ident.credential or via(machine, source):
         return same_sign_in(app, machine, source, ident)

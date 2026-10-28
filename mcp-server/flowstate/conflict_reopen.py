@@ -5,7 +5,7 @@ possible-conflict pairs with the replaced decision in them (conflicts.resolve_re
 `resolved_replaced`). If an app later undoes that replacement (manage_history undo of the
 replacing decision or of its supersedes link), the pairs stay closed: no app may reopen
 review-queue state (history._user_only). So that they don't drop out of the brief silently,
-the undo queues ONE review item of kind `reopen_conflict` in the project, naming the
+the undo (or a manage_links remove of that link, task 70) queues ONE review item of kind `reopen_conflict` in the project, naming the
 decisions in plain words: "Reopen the possible conflict between D12 ... and D11 ...?".
 
   - One item per undo, for all its pairs. A pair is asked about once per closing (its
@@ -18,6 +18,8 @@ decisions in plain words: "Reopen the possible conflict between D12 ... and D11 
     phone pages, or a tap on its review card with the card's one-use code (not on the card of
     the app that undid it, conflict_cards.own_refusal). refusal() turns away every other way:
     every AI tool (chat approvals on or off), the chat walk, a popup and the terminal.
+    FlowState itself is recorded as having queued it (identity.SYSTEM, task 70), so the "own
+    item" rule doesn't hide the buttons of the undoing app's card.
   - Approve reopens each pair still closed by that replacement: status open, back in the
     brief, and (unless the user had already said they conflict) a new possible-conflict
     question in the queue. Reject leaves them closed. Both are in record_history (queue/*
@@ -118,10 +120,26 @@ def undone_replacers(restored: list) -> dict:
     return out
 
 
-def ask_after_undo(conn, replacers: dict, client: Optional[str]) -> Optional[dict]:
-    """Inside the undo's transaction (the caller commits): queue the owner's question for the
-    pairs these replacements had closed and that would show again. Returns {"item_id",
-    "queued", "pairs"} (queued False: an earlier question already covers them), or None."""
+def ask(conn, replacers: dict, client: Optional[str], how: str = "undo") -> Optional[dict]:
+    """ask_after_undo on the caller's transaction, in a savepoint: a failure here never stops
+    the undo (how="undo") or the link remove (how="link") it follows."""
+    conn.execute("SAVEPOINT reopen_ask")
+    try:
+        asked = ask_after_undo(conn, replacers, client, how)
+    except sqlite3.Error:
+        conn.execute("ROLLBACK TO reopen_ask")
+        asked = None
+    conn.execute("RELEASE reopen_ask")
+    return asked
+
+
+def ask_after_undo(conn, replacers: dict, client: Optional[str],
+                   how: str = "undo") -> Optional[dict]:
+    """Inside the undo's (or link remove's) transaction (the caller commits): queue the owner's
+    question for the pairs these replacements had closed and that would show again. Returns
+    {"item_id", "queued", "pairs"} (queued False: an earlier question already covers them), or
+    None. FlowState itself queues it (identity.SYSTEM, task 70), so the user can tap its card
+    in the chat of the app that did the undo too; the details still name that app."""
     if not replacers or not history._has(conn, "decision_conflicts") \
             or not review.available(conn) or not history._has(conn, "record_links"):
         return None
@@ -158,8 +176,9 @@ def ask_after_undo(conn, replacers: dict, client: Optional[str]) -> Optional[dic
     else:
         summary = f"Reopen {len(new)} possible conflicts closed by {', '.join(f'D{x}' for x in gone)}?"
         what, these = "these possible conflicts", "they"
-    details = (f"{app} undid {took}, which had replaced one of these decisions. That replacement "
-               f"had closed {what}, so {these} left the brief: " + "; ".join(pairs) + ". "
+    did = (f"{app} removed the link saying {took} replaces one of these decisions" if how == "link"
+           else f"{app} undid {took}, which had replaced one of these decisions")
+    details = (f"{did}. That replacement had closed {what}, so {these} left the brief: " + "; ".join(pairs) + ". "
                "Reopen: back in the brief and the conflict list, and you are asked again whether "
                "they conflict. Leave closed: nothing changes. Only you decide this.")
     ids = sorted({i for r in new for i in (r["new_id"], r["old_id"])} | set(gone))
@@ -168,8 +187,8 @@ def ask_after_undo(conn, replacers: dict, client: Optional[str]) -> Optional[dic
                          for r in new],
                "decisions": [{"record_type": "decision", "record_id": i} for i in ids],
                "user_only": True}
-    item = review.add_item(None, pid, KIND, summary, details, payload, (client or "unknown")[:80],
-                           conn=conn)
+    item = review.add_item(None, pid, KIND, summary, details, payload, "flowstate", conn=conn,
+                           ident=identity.SYSTEM)
     return {"item_id": item, "queued": True, "pairs": len(new)} if item else None
 
 
@@ -247,7 +266,9 @@ def apply(db_path: Path, item: dict, client: str, done: dict) -> tuple:
                         "(stays in the brief until one replaces the other). Reject = they are "
                         "compatible (dismissed).",
                         {"conflict_id": row["id"], "new_id": row["new_id"],
-                         "old_id": row["old_id"], "score": row["score"]}, client, conn=conn)
+                         "old_id": row["old_id"], "score": row["score"],
+                         "decisions": [{"record_type": "decision", "record_id": i}
+                                       for i in (row["new_id"], row["old_id"])]}, client, conn=conn)
                     if q is not None:
                         conn.execute("UPDATE decision_conflicts SET review_item_id = ? WHERE id = ?",
                                      (q, row["id"]))

@@ -149,7 +149,9 @@ def _own(item: Optional[dict], ident) -> bool:
     """Did this caller's app (on the same machine, when recorded) queue the item? With a key,
     token or sign-in (LAN, relay, own tunnel) the app name is the app's own say-so, so the same
     sign-in counts as the same caller whatever name it sends now, and under any name the token
-    had (`flowstate remote rename`; identity.same_sign_in)."""
+    had (`flowstate remote rename`; identity.same_sign_in). FlowState's own items are no app's."""
+    if identity.is_system(item):
+        return False
     if item and getattr(ident, "credential", None) and (
             (item.get("machine") and item["machine"] == ident.machine)
             or identity.same_sign_in(item.get("app"), item.get("machine"),

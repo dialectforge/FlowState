@@ -97,6 +97,12 @@ def decision_text(key_decisions: Optional[str], fallback: Optional[str]) -> list
     return [text[len("Decision:"):].strip() if text.startswith("Decision:") else text]
 
 
+def _whole(s: str) -> str:
+    """A decision quoted in a review item: on one line, never cut (task 70), so `flowstate
+    erase` finds and removes the whole quote; pages and lists shorten it when they show it."""
+    return " ".join((s or "").split())
+
+
 def _one_line(s: str, n: int) -> str:
     s = " ".join((s or "").split())
     return s if len(s) <= n else s[: n - 3].rstrip() + "..."
@@ -156,6 +162,7 @@ def find(conn, pid: int, new_id: int, summary: str, comp_id: Optional[int]) -> l
         sem = cos.get(c["id"], 0.0)
         if kw >= bar or sem >= MEANING_MIN + (bar - SIMILAR):
             hits.append({"decision_id": c["id"], "summary": _one_line(c["lines"][0], 90),
+                         "text": _whole(c["lines"][0]),
                          "score": round(max(kw, sem), 3), "same_component": same,
                          "matched_by": "keywords" if kw >= bar else "meaning"})
     hits.sort(key=lambda h: (not h["same_component"], -h["score"], -h["decision_id"]))
@@ -193,13 +200,15 @@ def check(db_path: Path, pid: int, new_id: int, summary: str, comp_id: Optional[
                                  (*who, cid))
                 item = review.add_item(
                     db_path, pid, "conflict",
-                    f'Possible conflict: D{new_id} "{_one_line(summary, 70)}" vs '
-                    f'D{h["decision_id"]} "{_one_line(h["summary"], 70)}"',
+                    f'Possible conflict: D{new_id} "{_whole(summary)}" vs '
+                    f'D{h["decision_id"]} "{h["text"]}"',
                     "FlowState found these decisions read alike; it can't tell if they really "
                     "conflict. Approve = they conflict (stays in the brief until one replaces the "
                     "other). Reject = they are compatible (dismissed).",
                     {"conflict_id": cid, "new_id": new_id, "old_id": h["decision_id"],
-                     "score": h["score"]}, client, conn=conn)
+                     "score": h["score"],
+                     "decisions": [{"record_type": "decision", "record_id": i}
+                                   for i in (new_id, h["decision_id"])]}, client, conn=conn)
                 if item is not None:
                     conn.execute("UPDATE decision_conflicts SET review_item_id = ? WHERE id = ?",
                                  (item, cid))

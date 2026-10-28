@@ -109,7 +109,7 @@ def test_undoing_a_replacing_decision_asks_the_owner_once(backend, seeded_db):
     for words in (f"D{new}", f"D{old}", "Use SQLite for hosted storage",
                   "Use Postgres for hosted storage", f"D{c}", "Use DuckDB for hosted storage"):
         assert words in text, (words, text)
-    assert item["app"] == "Windsurf"                       # who undid it
+    assert identity.is_system(item) and "Windsurf" in item["details"]   # FlowState asks (task 70)
     assert pair_status(db, cid) == "resolved_replaced"    # nothing reopened by the app
     assert f"D{new} vs D{old}" not in brief(S)
     # the same undo again (redo), and undo once more: still one question
@@ -235,7 +235,9 @@ def test_phone_approve_link_works_for_it(backend, seeded_db):
     assert approval_log(db, item["id"]) == [(KIND, "phone", "phone", "approved")]
 
 
-def test_a_card_tap_decides_it_but_not_on_the_undoing_apps_own_card(backend, seeded_db, ui):
+def test_a_card_tap_decides_it_also_on_the_undoing_apps_own_card(backend, seeded_db, ui):
+    """Task 70: FlowState itself queued it, so the undoing app's own card decides it too (with
+    the card's one-use code)."""
     S, db = backend, seeded_db
     _old, _new, c, cid = replaced(S)
     ok(undo(S, "decision", c))
@@ -243,14 +245,12 @@ def test_a_card_tap_decides_it_but_not_on_the_undoing_apps_own_card(backend, see
     shown = call(S, "show_review_card", {"project": "Alpha", "item_id": item["id"]},
                  app="Claude Desktop")[0].structuredContent["cards"][0]
     assert shown["decide_here"] is True, shown
-    _r, own = tap(S, item["id"], "approve", app="Windsurf")
-    assert own.get("error") == "own_item" and pair_status(db, cid) == "resolved_replaced", own
     r, body = call(S, "resolve_review_card", {"item_id": item["id"], "decision": "approve",
-                                              "project": "Alpha"}, app="Claude Desktop")
+                                              "project": "Alpha"}, app="Windsurf")
     assert body.get("error") == "not_a_card_tap" and pair_status(db, cid) == "resolved_replaced"
-    done = ok(tap(S, item["id"], "approve"))
+    done = ok(tap(S, item["id"], "approve", app="Windsurf"))
     assert done["resolved"] == item["id"] and pair_status(db, cid) == "open"
-    assert approval_log(db, item["id"]) == [(KIND, "card", "card (Claude Desktop)", "approved")]
+    assert approval_log(db, item["id"]) == [(KIND, "card", "card (Windsurf)", "approved")]
 
 
 def test_approving_after_the_replacement_is_back_reopens_nothing(backend, seeded_db):

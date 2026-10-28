@@ -365,9 +365,19 @@ def remove(db_path: Path, pid: int, link_id: int, client: Optional[str] = None) 
         sets, who = identity.set_sql(conn, "record_links", client, prefix="removed_")
         conn.execute(f"UPDATE record_links SET removed_at = ?, removed_by = ?{sets} WHERE id = ?",
                      (now(), (client or "")[:80], *who, link_id))
+        asked = None
+        if row["link_type"] == "supersedes" and row["from_type"] == "decision":
+            # the possible conflicts this replacement had closed stay closed: ask the user once
+            # whether to reopen them, as an undo of the replacement does (task 70)
+            from . import conflict_reopen
+            asked = conflict_reopen.ask(conn, {row["from_id"]: None}, client, how="link")
         conn.commit()
-        return {"removed": link_id, "link": _view(conn, conn.execute(
+        out = {"removed": link_id, "link": _view(conn, conn.execute(
             "SELECT * FROM record_links WHERE id = ?", (link_id,)).fetchone())}
+        if asked:
+            from .conflict_reopen import note
+            out.update(reopen_question=asked, note=note(asked))
+        return out
     finally:
         conn.close()
 

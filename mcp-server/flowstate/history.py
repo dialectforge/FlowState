@@ -577,15 +577,7 @@ def _ask_reopen(conn, restored: list, client: str) -> Optional[dict]:
     (queue rows are the user's), so ask the user once whether to reopen them (task 69). On the
     undo's transaction; a failure here never stops the undo."""
     from . import conflict_reopen
-    conn.execute("SAVEPOINT reopen_ask")
-    try:
-        asked = conflict_reopen.ask_after_undo(conn, conflict_reopen.undone_replacers(restored),
-                                               client)
-    except sqlite3.Error:
-        conn.execute("ROLLBACK TO reopen_ask")
-        asked = None
-    conn.execute("RELEASE reopen_ask")
-    return asked
+    return conflict_reopen.ask(conn, conflict_reopen.undone_replacers(restored), client)
 
 
 def undo(db_path: Path, project_id: int, record_type: str, record_id: int,

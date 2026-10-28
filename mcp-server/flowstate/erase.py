@@ -13,7 +13,8 @@ y; never a tool, never piped input). For each deleted record it removes:
 - their evidence (entry_evidence), a todo's claim history (todo_claim_events) and the topic
   of a disagreement card naming them (NEW-3);
 - the text of review items about them (they came from them, name them, or belong to their
-  card); any other item loses only a distinctive sentence quoted from them, never a short
+  card; a possible-conflict item naming them by id, task 70), also a quote of it cut short
+  with "..." as older possible-conflict items stored it; any other item loses only a distinctive sentence quoted from them, never a short
   phrase it happens to share (NEW-2); the edit history of every item it changes (the text
   before an "approve with edits", task 68) goes too;
 - events in the automatic session log (auto_sessions) whose text matches a removed row (a
@@ -400,6 +401,53 @@ def _pattern(t: str, loose: bool):
     return re.compile("|".join(r"\s+".join(re.escape(w) for w in x.split(" ")) for x in forms))
 
 
+_ELLIPSIS = re.compile(r"\.\.\.|\u2026")
+
+
+class _Cut:
+    """A quote of one of `texts` cut short with "..." or "\u2026": how 2.3.0 - 2.4.3 quoted
+    decisions in possible-conflict items (conflicts._one_line, about 70 characters) and how
+    other short labels are cut. Matches the longest start of a text, `least`+ characters
+    (`distinct`: a distinctive sentence, _distinctive), that ends right before an ellipsis
+    and starts a word; used like a compiled pattern (`.sub`) by _redact (task 70)."""
+
+    def __init__(self, texts: list, least: int = MIN_TEXT, distinct: bool = False):
+        self.texts = [f for t in texts
+                      for f in dict.fromkeys(unicodedata.normalize(n, t) for n in ("NFC", "NFD"))]
+        self.least, self.distinct = least, distinct
+
+    def _cut_len(self, head: str) -> int:
+        """Characters at the end of `head` that start one of the texts (0: none)."""
+        best = 0
+        for t in self.texts:
+            for k in range(min(len(t), len(head)), max(self.least, best + 1) - 1, -1):
+                p = t[:k].rstrip()
+                if len(p) < self.least or len(p) <= best or not head.endswith(p):
+                    continue
+                before = head[len(head) - len(p) - 1] if len(head) > len(p) else ""
+                if before.isalnum() or (self.distinct and not _distinctive(p)):
+                    continue
+                best = len(p)
+                break
+        return best
+
+    def sub(self, repl: str, s: str) -> str:
+        out, pos = [], 0
+        for m in _ELLIPSIS.finditer(s):
+            if m.start() < pos:
+                continue
+            head = s[pos:m.start()]
+            n = self._cut_len(head)
+            if n:
+                out.append(head[:len(head) - n] + repl)
+                pos = m.end()
+        return "".join(out) + s[pos:]
+
+
+def _cuts(texts: list, distinct: bool = False) -> list:
+    return [_Cut(texts, distinct=distinct)] if texts else []
+
+
 def _redact(s, pats: list):
     """`s` with every match replaced by [erased]; everything outside a match (line breaks
     too) stays exactly as it was."""
@@ -458,6 +506,27 @@ def _about(conn, rows: dict) -> set:
     for (table, rid), row in rows.items():
         if table == "decision_conflicts" and row.get("review_item_id"):
             ids.add(row["review_item_id"])
+    return ids | _conflict_items(conn, {rid for rt, rid in refs if rt == "decision"})
+
+
+def _conflict_items(conn, decisions: set) -> set:
+    """Possible-conflict items about an erased decision. Their payload names the pair only as
+    new_id / old_id (and the pair's conflict_id); items from 2.3.0 - 2.4.3 have no decisions
+    list (task 70). Also every item a pair naming it was ever asked in."""
+    if not decisions:
+        return set()
+    pairs, ids = set(), set()
+    if _has(conn, "decision_conflicts"):
+        for c in conn.execute("SELECT id, new_id, old_id, review_item_id FROM decision_conflicts"):
+            if c["new_id"] in decisions or c["old_id"] in decisions:
+                pairs.add(c["id"])
+                if c["review_item_id"]:
+                    ids.add(c["review_item_id"])
+    for r in conn.execute("SELECT id, payload FROM review_items WHERE kind = 'conflict'"):
+        p = _loads(r["payload"])
+        if isinstance(p, dict) and (p.get("conflict_id") in pairs or p.get("new_id") in decisions
+                                    or p.get("old_id") in decisions):
+            ids.add(r["id"])
     return ids
 
 
@@ -496,6 +565,9 @@ def _review_texts(conn, rows: dict, texts: list, about_only: tuple = (),
     every = [_pattern(t, True) for t in sorted(set(texts) | set(about_only), key=len, reverse=True)]
     quotes = [t for t in texts if _distinctive(t)]
     loose, exact = [_pattern(t, True) for t in quotes], [_pattern(t, False) for t in quotes]
+    every += _cuts(texts)               # and the start of it cut with "..." (task 70)
+    loose += _cuts(quotes, distinct=True)
+    exact += _cuts(quotes, distinct=True)
     n = 0
     for r in conn.execute("SELECT id, project_id, summary, details, payload "
                           "FROM review_items").fetchall():
@@ -527,8 +599,9 @@ def _shared_edits(conn, p: dict, texts: list, labels: list) -> int:
         return 0
     rows = p["rows"]
     refs = {(rt, rid) for (table, rid) in rows if (rt := _rtype_of(table))}
-    every = [_pattern(t, True) for t in texts]
+    every = [_pattern(t, True) for t in texts] + _cuts(texts)
     quotes = [_pattern(t, True) for t in texts if _distinctive(t)]
+    quotes += _cuts([t for t in texts if _distinctive(t)], distinct=True)
     n = 0
     for e in edits:
         for h in conn.execute("SELECT id, table_name, record_id, old_row, new_row FROM "

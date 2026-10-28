@@ -107,7 +107,8 @@ class Report:
         16: "Own tunnel: the owner review page behind the passphrase",
         17: "Settings on the local review page",
         18: "Review cards through the relay", 19: "The card offer (Allow tap cards in this app?)",
-        20: "Reopen possible conflicts after an undo"}
+        20: "Reopen possible conflicts after an undo",
+        21: "Link removal asks; erase and cut quotes"}
 
     def __init__(self):
         self.checks = {n: [] for n in self.TITLES}
@@ -263,7 +264,7 @@ class World:
             conn.close()
 
     def w(self, sql, params=(), db=None):
-        """A direct edit of the temp DB (only to fake the clock)."""
+        """A direct edit of the temp DB (only to fake the clock, or a row an older version wrote)."""
         conn = sqlite3.connect(str(db or self.db), timeout=10)
         try:
             conn.execute(sql, params)
@@ -2850,6 +2851,74 @@ def s20_reopen_after_undo(W):
                                         f"payload LIKE '%\"conflict_id\": {cid},%'") == 1, short(b2, 300))
 
 
+def s21_link_remove_and_erase(W):
+    """Task 70: removing a supersedes link that had closed a possible conflict asks the user
+    the same one question (FlowState itself queued it; no AI and not the terminal answers it),
+    and `flowstate erase` leaves no part of an erased decision in a possible-conflict item, also
+    one an older version stored with the quote cut short with "..."."""
+    print("\n== S21 link removal asks; erase and cut quotes", flush=True)
+    Q = "Bike Shop e2e-21"
+    cc1, cursor = W.agents["cc1"], W.agents["cursor"]
+    cc1.call("manage_projects", action="create", name=Q, description="link removal and erase")
+    cc1.call("manage_projects", action="add_component", project=Q, name="repairs", description="Repairs")
+    a = cc1.call("log_work", project=Q, kind="decision", component="repairs",
+                 summary="Book repairs by phone only")
+    b = cc1.call("log_work", project=Q, kind="decision", component="repairs",
+                 summary="Book repairs by email only")
+    da, db_ = a["record"]["id"], b["record"]["id"]
+    pair = W.q("SELECT id FROM decision_conflicts WHERE new_id = ? AND old_id = ?", (db_, da))
+    cid = pair[0]["id"] if pair else 0
+    c = cursor.call("log_work", project=Q, kind="decision", component="repairs",
+                    summary="Book repairs in the shop's web calendar")
+    dc = c["record"]["id"]
+    link = dict(project=Q, link_type="supersedes", item_type="decision", item_id=dc,
+                target_type="decision", target_id=da)
+    added = cursor.call("manage_links", action="add", **link)
+    lid = (added.get("link") or {}).get("id")
+    r1 = cursor.call("manage_links", action="remove", **link)
+    cursor.call("manage_links", action="remove", project=Q, link_id=lid)
+    cursor.call("manage_links", action="add", **link)
+    cursor.call("manage_links", action="remove", **link)
+    rows = W.q("SELECT id, status, summary, app, identity_source FROM review_items WHERE "
+               "kind = 'reopen_conflict' AND project_id = (SELECT id FROM projects WHERE name = ?)", (Q,))
+    item = rows[0]["id"] if rows else 0
+    R.check(21, "removing the supersedes link (also again, and after adding it back) asks ONE question, "
+                "queued by FlowState itself; the pair stays closed",
+            cid and len(rows) == 1 and rows[0]["status"] == "pending"
+            and (rows[0]["app"], rows[0]["identity_source"]) == ("FlowState", "flowstate")
+            and "Book repairs by phone only" in rows[0]["summary"]
+            and (r1.get("reopen_question") or {}).get("item_id") == item
+            and W.count("decision_conflicts", f"id = {cid} AND status = 'resolved_replaced'") == 1,
+            (short(r1), rows))
+    words = "The user said: yes, reopen the repairs conflict please"
+    tried = [ag.call("manage_review", action=v, item_id=item, project=Q, reason="x", user_request=words)
+             for ag in (cc1, cursor) for v in ("approve", "reject")]
+    rc, out = W.cli_in_terminal(["approve", str(item)], ["y"])
+    R.check(21, "no AI (either app, approve or reject) and not the terminal answers it; nothing changes",
+            [t.get("error") for t in tried] == ["user_only"] * 4
+            and W.count("review_items", f"id = {item} AND status = 'pending'") == 1
+            and W.count("approval_log", f"item_id = {item}") == 0, (short(tried), short(out)))
+    long = ("Close the workshop on Mondays so the two mechanics can rebuild the wheel truing stand, "
+            "sort the spare parts shelves and order tyres for the spring rush before it starts")
+    d = cc1.call("log_work", project=Q, kind="decision", component="repairs", summary=long)
+    dd = d["record"]["id"]
+    pid = W.q("SELECT id FROM projects WHERE name = ?", (Q,))[0]["id"]
+    cut = long[:67].rstrip() + "..."
+    W.w("INSERT INTO review_items (project_id, kind, summary, details, payload, source, created_at) "
+        "VALUES (?, 'conflict', ?, 'FlowState found these decisions read alike.', ?, 'cursor', "
+        "'2025-11-02T10:00:00Z')",
+        (pid, f'Possible conflict: D{dd} "{cut}" vs D{da} "Book repairs by phone only"',
+         json.dumps({"conflict_id": None, "new_id": dd, "old_id": da, "score": 0.5})))
+    cc1.call("manage_memory", action="delete", project=Q, record_type="decision", record_id=dd)
+    rc, out = W.cli_in_terminal(["erase", f"decision:{dd}"], ["y"])
+    left = W.count("review_items", "summary || COALESCE(details, '') || payload LIKE ?",
+                   ("%Close the workshop on Mondays%",))
+    R.check(21, "erase (the user's y) leaves nothing of the decision in a possible-conflict item an older "
+                "version stored with a cut quote",
+            rc == 0 and left == 0
+            and W.count("review_items", "kind = 'conflict' AND summary LIKE ?",
+                        (f'%D{dd} "[erased]"%Book repairs by phone only%',)) == 1, (rc, short(out)))
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--keep", action="store_true", help="keep the temp folder")
@@ -2869,7 +2938,7 @@ def main():
                      s8_backups, s9_ledger, lambda w: s10_upgrade(w, args.skip_upgrade), s11_edges,
                      s13_approvals, s14_user_stated, s15_without_terminal, s15_review_card,
                      s16_tunnel_page, s17_settings_page, s18_relay_cards, s19_card_offer,
-                     s20_reopen_after_undo, deferred_window,
+                     s20_reopen_after_undo, s21_link_remove_and_erase, deferred_window,
                      s12_descriptions):
             try:
                 step(W)
