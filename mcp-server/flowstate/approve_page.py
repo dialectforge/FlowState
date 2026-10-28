@@ -313,6 +313,10 @@ def view(db_path, item_id: int) -> dict:
     if item["kind"] == "cleanup":   # FlowState's own idea: one plain question and its reason
         why = p.get("reason") or ""
         question = f"Should FlowState {ask}?" + (f" {why[:1].upper()}{why[1:]}." if why else "")
+        from . import cleanup   # the exact list, flagged if it changed (task 74)
+        listed = cleanup.preview(db_path, item)
+        if listed:
+            details = (details + "\n" if details else "") + listed["text"]
     elif item["kind"] == "session_summary":   # what Keep / Don't keep really do
         question = f"{review.KEEP_QUESTION} {review.KEEP_HOW}"   # Keep all: below, with records
     elif item["kind"] == "delete":   # the rows the database says will go, not the agent's words

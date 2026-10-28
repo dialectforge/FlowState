@@ -210,25 +210,37 @@ def bound(gone: dict, changed: dict, root: tuple) -> dict:
     goes with it (by id, and a hash of each row's content), and the record rows that only
     lose their link to it (by id). Sessions and review items are left out: they move on
     their own while the user decides."""
-    def ids(rows) -> dict:
+    keep = lambda rows: {tk: v for tk, v in rows.items() if tk[0] in _BOUND or tk == root}
+    return bind(keep(gone), keep(changed))
+
+
+def bind(rows: dict, changed: Optional[dict] = None) -> dict:
+    """An exact list of rows ({(table, key): row}) an approval is tied to: their ids per
+    table, the ids of `changed` (rows only unlinked; ids alone), a digest over the ids and
+    every row's full content, and a short hash per row (`each`, to say which one was edited).
+    Ids and hashes only: no record text is stored. Deletes (task 72) and clean-ups (task 74)."""
+    def ids(rs) -> dict:
         out = defaultdict(list)
-        for (t, k) in rows:
-            if t in _BOUND or (t, k) == root:
-                out[t].append(k)
+        for (t, k) in rs:
+            out[t].append(k)
         return {t: sorted(v, key=str) for t, v in sorted(out.items())}
-    rows, lose = ids(gone), ids(changed)
-    h = hashlib.sha256(json.dumps({"rows": rows, "changed": lose}, sort_keys=True,
+    listed, lose = ids(rows), ids(changed or {})
+    h = hashlib.sha256(json.dumps({"rows": listed, "changed": lose}, sort_keys=True,
                                   default=str).encode())
-    for t, keys in rows.items():
+    each = {}
+    for t, keys in listed.items():
         for k in keys:
-            h.update(json.dumps(gone[(t, k)], sort_keys=True, default=str).encode())
-    return {"rows": rows, "changed": lose, "digest": h.hexdigest()}
+            blob = json.dumps(rows[(t, k)], sort_keys=True, default=str).encode()
+            h.update(blob)
+            each[f"{t}:{k}"] = hashlib.sha256(blob).hexdigest()[:16]
+    return {"rows": listed, "changed": lose, "digest": h.hexdigest(), "each": each}
 
 
-def _bound_diff(then: dict, now: dict) -> str:
+def _bound_diff(then: dict, now: dict,
+                verbs=(("rows", "deletes"), ("changed", "unlinks"))) -> str:
     """What differs between the approved list and today's, in a few words."""
     parts = []
-    for key, verb in (("rows", "deletes"), ("changed", "unlinks")):
+    for key, verb in verbs:
         a, b = then.get(key) or {}, now.get(key) or {}
         for t in sorted(set(a) | set(b)):
             was, is_ = {str(k) for k in a.get(t, [])}, {str(k) for k in b.get(t, [])}
@@ -237,6 +249,11 @@ def _bound_diff(then: dict, now: dict) -> str:
                 parts.append(f"now also {verb} {name} " + ", ".join(f"#{k}" for k in sorted(is_ - was)))
             if was - is_:
                 parts.append(f"no longer {verb} {name} " + ", ".join(f"#{k}" for k in sorted(was - is_)))
+    a, b = then.get("each") or {}, now.get("each") or {}
+    for key in sorted(set(a) & set(b), key=lambda x: (x.split(":")[0], x)):
+        if a[key] != b[key]:
+            t, k = key.split(":", 1)
+            parts.append(f"{_NAMED.get(t) or history.TYPE_OF.get(t, t)} #{k} was edited")
     return "; ".join(parts) or "a record on the list was edited"
 
 
@@ -612,17 +629,18 @@ def execute(db_path: Path, item: dict, client: str = "unknown",
                       approved=payload["bound"])
 
 
-def void(db_path: Path, item_id: int, reason: str) -> bool:
-    """Close a pending delete request whose list of rows is out of date (rejected, by
-    FlowState): its approval can't be used any more, and asking again makes a new one."""
+def void(db_path: Path, item_id: int, reason: str, kind: str = "delete") -> bool:
+    """Close a pending delete request (or clean-up suggestion, task 74) whose list of rows is
+    out of date (rejected, by FlowState): its approval can't be used any more, and asking
+    again makes a new one."""
     conn = connect(db_path)
     try:
         who = identity.fields(conn, "review_items", prefix="decided_", ident=identity.SYSTEM)
         sets = "".join(f", {k} = ?" for k in who)
         cur = conn.execute(f"""UPDATE review_items SET status = 'rejected', decided_at = ?,
                               decided_by = 'flowstate (automatic)', reject_reason = ?{sets}
-                              WHERE id = ? AND kind = 'delete' AND status = 'pending'""",
-                           (review._now(), reason[:500], *who.values(), int(item_id)))
+                              WHERE id = ? AND kind = ? AND status = 'pending'""",
+                           (review._now(), reason[:500], *who.values(), int(item_id), kind))
         conn.commit()
         return cur.rowcount == 1
     finally:

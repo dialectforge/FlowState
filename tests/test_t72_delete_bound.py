@@ -195,7 +195,7 @@ def test_the_review_page_preview_says_when_the_list_changed(rich, seeded_db):
                              "title": "renamed while it waits"})
     got = deletes.preview(db, review.get_item(db, item))
     assert got["changed_since_request"] is True
-    assert "not the one the request was made with (a record on the list was edited)" in got["plain"]
+    assert "not the one the request was made with (todo #1 was edited)" in got["plain"]   # task 74: names the row
 
 
 def test_asking_again_on_the_same_connection_gets_a_new_request(rich, seeded_db):

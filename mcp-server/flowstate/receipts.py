@@ -11,7 +11,7 @@ saved or failed, and the record ids. Never the text.
 - Duplicates: the same arguments from the same connection within WINDOW_SECONDS of a saved
   write return that write's receipt instead of saving a copy. If the first one is still
   saving (it timed out), the repeat waits for it. Undo (undo again = redo), claim renewals
-  and delete requests are never treated as repeats. This check is in memory: a connection's writes all pass
+  delete requests and clean-up runs are never treated as repeats. This check is in memory: a connection's writes all pass
   through this process, so it costs the write nothing.
 
 Nothing here may break a write: callers wrap these in try/except, and a database without
@@ -39,7 +39,10 @@ NOT_REPEATS = {("history", "undo"), ("todo", "renew"), ("review_approve", None),
                # request (deletes.request answers an identical waiting one itself; task 72)
                ("delete_request", "project"), ("delete_request", "component"),
                ("delete_request", "record"), ("variable", "delete"), ("method", "delete"),
-               ("file", "remove")}
+               ("file", "remove"),
+               # a clean-up run again after a suggestion was closed as out of date suggests it
+               # anew (cleanup.queue skips one that is waiting and still matches; task 74)
+               ("cleanup_suggest", None)}
 NO_RECEIPT = {"git"}   # runs git on the data repo (status, history, sync): not a record write
 _IGNORED_ARGS = ("model",)   # the same content however the caller names itself
 _PROJECT_ARGS = ("project", "project_id", "project_name")   # compared by the project's id

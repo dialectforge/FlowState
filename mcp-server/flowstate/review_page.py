@@ -682,7 +682,8 @@ class Page:
                             f'<option value=""></option>{targets}</select></label>')
                 if it["kind"] == "cleanup":   # one plain question: nothing to edit
                     verb = "move" if move else "cancel"
-                    out.append(f"""<p><strong>{_e(it['summary'])}</strong></p><p class="meta">{_e(it['details'])}</p>
+                    from . import cleanup   # the exact list, flagged if it changed (task 74)
+                    out.append(f"""<p><strong>{_e(it['summary'])}</strong></p><p class="meta">{_e(it['details'])}</p>{cleanup.html_for(self.db_path, it)}
 <form method="post" action="{self.base}/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">{move}
 <button>Approve: {verb} it</button></form>""")
                 elif it["kind"] == "conflict":   # possible conflicting decisions: nothing to edit

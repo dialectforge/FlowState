@@ -79,8 +79,8 @@ def approve(db_path: Path, item: dict, args: dict, user_request: str, client: st
                                           db_path, it, path or _path_of(client))},
                               path=path or _path_of(client))
     except deletes.DeleteError as e:   # the list the user saw is out of date: closed
-        if item.get("kind") == "delete" and e.payload.get("error") in deletes.VOIDS:
-            deletes.void(db_path, int(item["id"]), e.payload["message"])
+        if item.get("kind") in ("delete", "cleanup") and e.payload.get("error") in deletes.VOIDS:
+            deletes.void(db_path, int(item["id"]), e.payload["message"], item["kind"])
         raise
 
 
