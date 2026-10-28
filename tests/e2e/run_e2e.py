@@ -474,6 +474,10 @@ def s2_day(W):
     R.check(2, "cc2 refused while grok's claim is live", r.get("claimed") is not True, r)
     W.w("UPDATE todo_claims SET expires_at = ? WHERE todo_id = ?",
         (utc(datetime.now(timezone.utc) - timedelta(minutes=2)), t_load))   # fake the clock
+    r = grok.call("manage_todos", action="renew", project=P, todo_id=t_load, minutes=30)
+    R.check(2, "grok can't renew its expired claim (task 72)", r.get("error") == "claim_expired", r)
+    r = cc2.call("manage_todos", action="renew", project=P, todo_id=t_load, minutes=30)
+    R.check(2, "nor can cc2 renew it (task 72)", r.get("error") == "not_claimed", r)
     r = cc2.call("manage_todos", action="claim", project=P, todo_id=t_load)
     R.check(2, "after grok's claim expires cc2 can claim it", r.get("claimed") is True, r)
     r = cc2.call("manage_todos", action="handoff", project=P, todo_id=t_load,
@@ -1650,6 +1654,23 @@ def s13_approvals(W):
     code, out = W.cli_in_terminal(["approve", str(cur_item)], ["y"])
     R.check(13, "the user approves it in their terminal", code == 0 and W.count("todos", "id=?", (tid,)) == 0,
             f"exit {code}: {short(out, 160)}")
+
+    # ---- the approval covers the exact rows asked about (task 72)
+    tid = todo("Flyer that gets edited while it waits")
+    r = cursor.call("manage_memory", action="delete", project=P, record_type="todo", record_id=tid)
+    old_item = r.get("delete_requested")
+    cc1.call("manage_todos", action="update", project=P, todo_id=tid, title="Flyer, now a poster")
+    code, out = W.cli_in_terminal(["approve", str(old_item)], ["y"])
+    R.check(13, "a row edited after the request: the user's approval deletes nothing and closes the request",
+            W.count("todos", "id=?", (tid,)) == 1 and not pending(old_item)
+            and W.q("SELECT status FROM review_items WHERE id=?", (old_item,)) == [{"status": "rejected"}]
+            and "changed since the request" in out, f"exit {code}: {short(out, 300)}")
+    r = cursor.call("manage_memory", action="delete", project=P, record_type="todo", record_id=tid)
+    new_item = r.get("delete_requested")
+    code, out = W.cli_in_terminal(["approve", str(new_item)], ["y"])
+    R.check(13, "asking again makes a new request, and approving that one deletes the edited row",
+            new_item and new_item != old_item and code == 0 and W.count("todos", "id=?", (tid,)) == 0,
+            f"exit {code}: {short(out, 200)}")
 
     # ---- review-setting change: turning review off waits; stricter changes don't
     r = cursor.call("manage_review", action="set_mode", project=P, mode="off",
