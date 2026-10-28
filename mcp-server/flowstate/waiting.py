@@ -447,6 +447,17 @@ def _one_item(db_path: Path, item_id, pid: Optional[int], named) -> dict:
             answer["record_note"] = ("Each record's Keep / Remove is the user's alone (review "
                                      "page, phone, review card, or `flowstate review record` in "
                                      "their terminal); you can't decide records.")
+    elif it.get("kind") == "cleanup" and it.get("status") == "pending":
+        from . import cleanup   # the review page's exact list and warning (task 76)
+        try:
+            got = cleanup.preview(db_path, it)
+        except Exception:  # noqa: BLE001 - the item is still shown without its list
+            log.warning("clean-up list for #%s skipped", it.get("id"))
+            got = None
+        if got:
+            it["would_change"] = got["text"]
+            if got["warning"]:
+                it["out_of_date"] = got["warning"]
     elif it.get("kind") == "disagreement":
         packed = _safe_card(db_path, it)
         if packed:
@@ -674,9 +685,8 @@ def _form(it: dict, i: int, n: int) -> tuple[str, dict]:
     if it["kind"] == "cleanup":   # its list changed: say so before the user ticks (task 75)
         from . import cleanup, server as S
         got = cleanup.preview(S.backend.db_path, it)
-        if got and got["changed_since_request"]:
-            details = "\n".join(([details] if details else [])
-                                 + [got["text"][got["text"].index(" This list is not") + 1:]])
+        if got and got["warning"]:
+            details = "\n".join(([details] if details else []) + [got["warning"]])
     msg = (f"Waiting for you ({i} of {n}), {it['project']}, {_KIND.get(it['kind'], it['kind'])} "
            f"#{it['id']} from {who}:\n{strip_tag(it.get('summary'))}" + (f"\n{details}" if details else "")
            + (f"\n{KEEP_QUESTION} {KEEP_HOW}\nTick {KEEP} and submit to keep it; submit it unticked "

@@ -21,6 +21,7 @@ REVIEW_CSS = r""".item{border:1px solid var(--line);border-radius:12px;padding:1
 .kind{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin:0 0 4px}
 .text{margin:0 0 8px;overflow-wrap:anywhere}
 .details{margin:0 0 8px;color:var(--muted);font-size:14px;overflow-wrap:anywhere;white-space:pre-line}
+.warn{margin:0 0 8px;font-weight:600;color:var(--danger,#8a2d22);overflow-wrap:anywhere}
 .who{color:var(--muted);font-size:14px;margin:0}
 .saved{margin:0 0 8px;padding-left:18px}.saved li{margin:6px 0;overflow-wrap:anywhere}
 .saved .ex{color:var(--muted);font-size:14px;margin:2px 0 0}
@@ -91,6 +92,7 @@ REVIEW_JS = r"""  // ---- drawing
     item.appendChild(el("p", "kind", view.kind_label || "Review item"));
     item.appendChild(el("p", "text", view.text || ""));
     if (view.details) { item.appendChild(el("p", "details", view.details)); }
+    if (view.warning) { item.appendChild(el("p", "warn", view.warning)); }
     if (view.contents) { drawSaved(item, view.contents, view.resolved || !view.decide_here ? undefined : index); }
     var when = localDate(view.when_utc) || view.when;
     item.appendChild(el("p", "who", "From " + (view.who || "an app") + (when ? ", " + when : "")));

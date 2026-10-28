@@ -386,6 +386,7 @@ VOIDED_BY = "flowstate (automatic)"
 # and leaves `bound_erased` (erase.py, task 75): approving it changes nothing, as for any change
 ERASED_WHY = "a record on its list was erased"
 _VERBS = (("rows", "lists"),)
+NONE_LEFT = "none (no record on its list is still there)"   # e.g. its only record was erased
 _TABLE = {"todo": "todos", "learning": "learnings", "problem": "problems", "change": "changes"}
 
 
@@ -494,13 +495,16 @@ def preview(db_path: Path, item: dict) -> Optional[dict]:
     finally:
         conn.close()
     stale = then is None or then.get("digest") != now["digest"]
+    lines = lines or [NONE_LEFT]
     text = "Approving changes exactly these records: " + "; ".join(lines) + "."
+    warning = None
     if stale:
         why = deletes._bound_diff(then, now, _VERBS) if then else \
             ERASED_WHY if payload.get("bound_erased") else "queued by an older FlowState"
-        text += (f" This list is not the one the suggestion was made with ({why}). Approving it "
-                 "changes nothing; run the clean-up again for a new suggestion.")
-    return {"lines": lines, "changed_since_request": stale, "text": text}
+        warning = (f"This list is not the one the suggestion was made with ({why}). Approving it "
+                   "changes nothing; run the clean-up again for a new suggestion.")
+        text += " " + warning
+    return {"lines": lines, "changed_since_request": stale, "text": text, "warning": warning}
 
 
 def html_for(db_path: Path, it: dict) -> str:
@@ -511,9 +515,8 @@ def html_for(db_path: Path, it: dict) -> str:
         return ""
     out = ("<p class='meta'>Approving changes exactly these records:</p><ul>"
            + "".join(f"<li>{html.escape(x)}</li>" for x in got["lines"]) + "</ul>")
-    if got["changed_since_request"]:
-        warn = got["text"][got["text"].index(" This list is not") + 1:]
-        out += f"<p><strong>{html.escape(warn)}</strong></p>"
+    if got["warning"]:
+        out += f"<p><strong>{html.escape(got['warning'])}</strong></p>"
     return out
 
 
