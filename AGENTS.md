@@ -549,7 +549,7 @@ The same guidance is available as the MCP prompt `flowstate-start`.
   `rules.py`, `handoffs.py`, `provenance.py`, `ask.py`, `meaning.py`, `cleanup.py`,
   `activity.py`, `review_page.py`, `markdown_io.py`, `memory_import.py`, `git_capture.py`, `deletes.py`,
   `secrets_scan.py`, `secret_store.py`, `remote_auth.py`, `app_keys.py`, `identity.py`,
-  `who.py`, `claims.py`, `conflicts.py`, `backup.py`, `offsite.py`, `scheduler.py`, `cli.py`, `cli_more.py`,
+  `who.py`, `project_history.py` and `history_page.py` (the review page's read-only Project history), `claims.py`, `conflicts.py`, `backup.py`, `offsite.py`, `scheduler.py`, `cli.py`, `cli_more.py`,
   `cli_review.py` (the user's `review` / `approve` / `reject` / `approvals`), `approvals.py` (opt-in
   user-only approvals, phone grants, pinned `FSA_PUBLIC_KEYS`), `popup.py` (MCP elicitation),
   `approve_page.py` (the phone page at `/approve/<item>`), `card_offer.py` (the one-time "Allow tap cards in

@@ -823,6 +823,28 @@ Brief and defusing
   that the user picks the winner) and "Who, which model, which machine" (what each change
   records).
 
+### Project history on the review page (task 73)
+
+- **New: Project history.** The local review page has a "Project history" view. Pick a project
+  and see its whole path in time order: records created, edited, deleted and undone, decisions
+  and what replaced them, possible conflicts and disagreement cards and how they were settled,
+  review items and their outcome, todo claims (also a claim that ran out with nobody renewing
+  or releasing it), and sessions. Each entry has the time, app, model (when the app gave it),
+  machine and how the app signed in.
+- Filters by type, app or machine, and date range; a search box that also finds a record by
+  an older wording kept in its edit history; oldest or newest first; 50 entries a page.
+- Tapping a record shows its fields now and its whole edit history, every changed field before
+  and after, and every entry that names it.
+- **Todos tab:** each todo of the project with who created it (app, model, machine, sign-in) and
+  its status now; tapping one gives its full timeline (created, claimed, renewed, released,
+  claim expired, edited, status changes, completed, reopened, cancelled, deleted, undone).
+- Read-only: no form on these pages changes anything. Same session as the rest of the review
+  page on this computer; not on the tunnel page, the phone pages or the relay, and no MCP tool.
+- A record removed with `flowstate erase` shows as `[erased]`, and its text is in no entry,
+  search result or record page. When the shown range reaches back past the activity log's 90
+  days, the page says that older detail has faded.
+- No migration. The page opens the database read-only (`query_only`).
+
 ## 2.4.3 - 2026-10-23
 
 - No new dependencies. One additive database migration (023: three new tables for

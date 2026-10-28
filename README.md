@@ -556,6 +556,43 @@ Honest limits:
 - If your computer is off or the relay agent isn't running, the phone link can't open the
   list.
 
+### Project history
+
+The review page on your computer (`flowstate review-page`, the desktop shortcut, or the link in
+the brief) has a **Project history** link at the top. Pick a project and you see its whole path
+in time order:
+
+- records created, edited, deleted and undone, and a decision that another one replaced;
+- possible conflicts and disagreement cards, and how each was settled;
+- review items, and whether you approved or rejected them;
+- todo claims, renewals, releases and claims that ran out;
+- sessions opening and closing.
+
+Each entry says when it happened, which app did it, the model (only when the app said), the
+machine, and how the app signed in. Filter by type, by app or machine, or by dates, search
+the text, and choose oldest or newest first. Long histories come 50 entries a page. The page
+works on a phone screen.
+
+Tap a record to see its fields now and its whole edit history, with every changed field
+before and after, plus everything else that names it. The **Todos** tab lists the project's
+todos with who created each one and its status now (open, done, cancelled, deleted). Tap one
+for its full timeline: who created it, claimed it, let a claim run out, edited it, completed
+it, reopened it or deleted it.
+
+Some things to know:
+
+- **It only shows.** It has no buttons that change anything. Approving stays in the review
+  queue, undo in "Who did what".
+- **Same access as the rest of the page.** It is only on this computer, behind the review
+  page's own session. It is not on the tunnel page or your phone pages, and no AI tool reads it.
+- **Erased records stay erased.** A record removed with `flowstate erase` shows as `[erased]`
+  wherever an entry still names it. Its text is not on the page, in search results or on its
+  record page.
+- **Older detail fades.** The activity log and the link from a change to its session are kept
+  for 90 days (`FLOWSTATE_ACTIVITY_DAYS`). When the page reaches further back, it says so:
+  older entries may not say which app or session made them, and records from before version
+  2.4.0 never did ("not recorded"). The edit history itself is kept until you erase it.
+
 ## Where to change settings
 
 Run `flowstate review-page`: its **Settings** section (this computer only) lists every setting
