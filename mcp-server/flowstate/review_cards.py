@@ -59,6 +59,8 @@ def _payload(it: dict) -> dict:
 def locked(it: dict) -> bool:
     """No buttons in the chat: only the user decides it (approvals.user_only), and every
     delete (a whole project needs its name typed; the review page and phone ask for that)."""
+    if it.get("kind") == "reopen_conflict":   # the user's alone, but a card tap is theirs too
+        return False
     return approvals.user_only(it) or it.get("kind") == "delete"
 
 
@@ -116,6 +118,12 @@ def _words(it: dict, project: str, db_path: Path) -> dict:
                         "other. They fit together: the flag is dismissed. Neither decision is "
                         "changed.",
                 "approve_label": "They conflict", "reject_label": "They fit together"}
+    if kind == "reopen_conflict":   # conflict_reopen.py: FlowState's question after an undo
+        return {"title": _sentence(it.get("summary") or "Reopen these possible conflicts?"),
+                "kind_label": "Reopen possible conflict?",
+                "does": "Reopen puts them back in the brief and the conflict list, and asks you "
+                        "again whether they conflict. Leave closed changes nothing.",
+                "approve_label": "Reopen", "reject_label": "Leave closed"}
     label = {"setting": "Review setting", "source": "Did you say this?", "rule": "Hard rule",
              "delete": "Delete request", "card_offer": "Allow cards?"}.get(kind, kind.replace("_", " ").capitalize())
     return {"title": _sentence(approvals.describe(it, project, db_path)) + "?",

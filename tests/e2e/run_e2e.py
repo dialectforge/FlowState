@@ -106,7 +106,8 @@ class Report:
         15: "What's waiting, without a terminal: chat walk, local link, phone list",
         16: "Own tunnel: the owner review page behind the passphrase",
         17: "Settings on the local review page",
-        18: "Review cards through the relay", 19: "The card offer (Allow tap cards in this app?)"}
+        18: "Review cards through the relay", 19: "The card offer (Allow tap cards in this app?)",
+        20: "Reopen possible conflicts after an undo"}
 
     def __init__(self):
         self.checks = {n: [] for n in self.TITLES}
@@ -2761,6 +2762,94 @@ def s19_card_offer(W):
         _stop(srv, plog)
 
 
+def s20_reopen_after_undo(W):
+    """Task 69: an app undoes its own decision that had replaced another; the possible conflict
+    that replacement closed is not reopened by the app, and FlowState asks the user once.
+    No AI and not the terminal answers it; Reopen on the review page puts it back in the
+    brief, with history and the approval log."""
+    import httpx
+    print("\n== S20 reopen possible conflicts after an undo", flush=True)
+    Q = "Tea Shop e2e-20"
+    cc1, cursor = W.agents["cc1"], W.agents["cursor"]
+    cc1.call("manage_projects", action="create", name=Q, description="reopen after undo")
+    cc1.call("manage_projects", action="add_component", project=Q, name="till", description="Till")
+    a = cc1.call("log_work", project=Q, kind="decision", component="till",
+                 summary="Use a paper ledger for the till")
+    b = cc1.call("log_work", project=Q, kind="decision", component="till",
+                 summary="Use a tablet ledger for the till")
+    da, db_ = a["record"]["id"], b["record"]["id"]
+    pair = W.q("SELECT id FROM decision_conflicts WHERE new_id = ? AND old_id = ?", (db_, da))
+    c = cursor.call("log_work", project=Q, kind="decision", component="till",
+                    summary="Use the card reader's own ledger for the till", replaces=da)
+    dc = c["record"]["id"]
+    cid = pair[0]["id"] if pair else 0
+    R.check(20, "a replacing decision closes the possible conflict (it leaves the brief)",
+            cid and W.count("decision_conflicts", f"id = {cid} AND status = 'resolved_replaced'") == 1
+            and f"D{db_} vs D{da}" not in cc1.call("start_here", project=Q), short(c))
+    asks = "kind = 'reopen_conflict'"
+    u1 = cursor.call("manage_history", action="undo", project=Q, record_type="decision", record_id=dc)
+    cursor.call("manage_history", action="undo", project=Q, record_type="decision", record_id=dc)
+    u3 = cursor.call("manage_history", action="undo", project=Q, record_type="decision", record_id=dc)
+    rows = W.q(f"SELECT id, status, summary, details FROM review_items WHERE {asks}")
+    item = rows[0]["id"] if rows else 0
+    R.check(20, "undo / redo / undo: the pair stays closed, and ONE question waits for the user, "
+                "naming both decisions in plain words",
+            len(rows) == 1 and rows[0]["status"] == "pending"
+            and "Use a paper ledger for the till" in rows[0]["summary"]
+            and "Use a tablet ledger for the till" in rows[0]["summary"]
+            and (u1.get("reopen_question") or {}).get("item_id") == item
+            and (u3.get("reopen_question") or {}).get("item_id") == item
+            and W.count("decision_conflicts", f"id = {cid} AND status = 'resolved_replaced'") == 1,
+            (short(u1), rows))
+    words = "The user said: yes, reopen the till conflict please"
+    tried = [ag.call("manage_review", action=v, item_id=item, project=Q, reason="x", user_request=words)
+             for ag in (cc1, cursor) for v in ("approve", "reject")]
+    rc, out = W.cli_in_terminal(["approve", str(item)], ["y"])
+    R.check(20, "no AI (either app, approve or reject) and not the terminal answers it; nothing changes",
+            [t.get("error") for t in tried] == ["user_only"] * 4
+            and W.count("review_items", f"id = {item} AND status = 'pending'") == 1
+            and W.count("decision_conflicts", f"id = {cid} AND status = 'resolved_replaced'") == 1
+            and W.count("approval_log", f"item_id = {item}") == 0, (short(tried), short(out)))
+    if os.name == "nt":
+        R.word("S20: Reopen on the review page runs on POSIX only (it reads the link from a pseudo-terminal).")
+        return
+    with socket.socket() as sk:
+        sk.bind(("127.0.0.1", 0))
+        port = sk.getsockname()[1]
+    pid, shown = start_in_terminal([PY, "-m", "flowstate", "review-page", "--no-browser", "--print-url",
+                                    "--port", str(port)], b"One-time link:", env=W.env, cwd=str(REPO),
+                                   timeout=40)
+    try:
+        lm = re.search(r"One-time link: (http://127\.0\.0\.1:\d+(/s/[A-Za-z0-9_-]+)/\?key=[A-Za-z0-9_-]+)",
+                       shown)
+        origin = f"http://127.0.0.1:{port}"
+        pbase = origin + (lm.group(2) if lm else "")
+        wait_port("127.0.0.1", port, 20)
+        with httpx.Client(timeout=20, follow_redirects=False) as hc:
+            hc.get(lm.group(1) if lm else origin)
+            page = hc.get(pbase + "/")
+            cs = re.search(r'name="csrf" value="([^"]+)"', page.text)
+            ok = hc.post(pbase + "/approve", data={"csrf": cs.group(1) if cs else "", "item_id": item},
+                         headers={"Origin": origin})
+    finally:
+        stop_in_terminal(pid)
+    hist = W.q("SELECT tool, app FROM record_history WHERE table_name = 'decision_conflicts' "
+               "AND record_id = ? AND tool = 'queue/conflict_reopened'", (cid,))
+    R.check(20, "the user taps Reopen on the review page: open again, in the history and the approval log",
+            "Reopen" in page.text and ok.status_code == 303
+            and W.count("review_items", f"id = {item} AND status = 'approved'") == 1
+            and W.count("decision_conflicts", f"id = {cid} AND status = 'open'") == 1
+            and len(hist) == 1 and hist[0]["app"] == "review-page"
+            and [(r["path"], r["decision"]) for r in
+                 W.q("SELECT path, decision FROM approval_log WHERE item_id = ?", (item,))]
+            == [("review page", "approved")], (page.status_code, hist))
+    b2 = cursor.call("start_here", project=Q)
+    R.check(20, "the pair is back in the brief, and asked again in the review queue",
+            f"D{db_} vs D{da}" in b2
+            and W.count("review_items", f"kind = 'conflict' AND status = 'pending' AND "
+                                        f"payload LIKE '%\"conflict_id\": {cid},%'") == 1, short(b2, 300))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--keep", action="store_true", help="keep the temp folder")
@@ -2780,7 +2869,7 @@ def main():
                      s8_backups, s9_ledger, lambda w: s10_upgrade(w, args.skip_upgrade), s11_edges,
                      s13_approvals, s14_user_stated, s15_without_terminal, s15_review_card,
                      s16_tunnel_page, s17_settings_page, s18_relay_cards, s19_card_offer,
-                     deferred_window,
+                     s20_reopen_after_undo, deferred_window,
                      s12_descriptions):
             try:
                 step(W)

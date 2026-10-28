@@ -327,6 +327,9 @@ def view(db_path, item_id: int) -> dict:
     elif item["kind"] == "card_offer":   # FlowState's own offer (card_offer.py), not an app's ask
         question = item["summary"] + " Approve allows it: its taps on the cards count as yours. " \
             "Reject keeps the text, and it isn't asked again."
+    elif item["kind"] == "reopen_conflict":   # FlowState's question after an undo (conflict_reopen.py)
+        question = item["summary"] + " Approve reopens them: back in the brief, and you are " \
+            "asked again whether they conflict. Reject leaves them closed."
     else:
         question = f"{app} wants to {ask}."
     keep = item["kind"] == "session_summary"

@@ -227,7 +227,8 @@ ELSEWHERE = ("on the computer where FlowState runs (the FlowState review shortcu
 _KIND = {"session_summary": "session summary", "cleanup": "clean-up idea", "edit": "markdown edit",
          "conflict": "possible conflict", "disagreement": "disagreement",
          "setting": "review setting", "source": "said by you?", "delete": "delete request",
-         "rule": "hard rule", "handoff": "handoff note", "card_offer": "allow cards?"}
+         "rule": "hard rule", "handoff": "handoff note", "card_offer": "allow cards?",
+         "reopen_conflict": "reopen conflict?"}
 
 
 LINE_MAX = 160          # one item's line, as the app reads it in the JSON answer
@@ -474,8 +475,12 @@ def prepare(listing: dict, db_path: Path, scopes, project_id: Optional[int] = No
     said = [it for it in items if it.get("kind") == "source"]
     # "Allow tap cards in <app>?" (card_offer.py): only on the review page or the phone page
     offers = [it for it in items if it.get("kind") == "card_offer"]
+    # "Reopen these possible conflicts?" after an undo (conflict_reopen.py): the same
+    reopen = [it for it in items if it.get("kind") == "reopen_conflict"]
     out["_walk"] = {"ids": [it["id"] for it in items
-                            if it.get("kind") not in ("disagreement", "rule", "source", "card_offer")],
+                            if it.get("kind") not in ("disagreement", "rule", "source", "card_offer",
+                                                      "reopen_conflict")],
+                    "reopen": _lines(reopen, db_path=db_path) if reopen else [],
                     "held": _lines(held, db_path=db_path) if held else [],
                     "offers": _lines(offers, db_path=db_path) if offers else [],
                     "said": _lines(said, db_path=db_path) if said else [],
@@ -501,6 +506,9 @@ HELD_NOTE = ("Hard rules get no box here: the user adds or removes one only on t
 SAID_NOTE = ("\"Did you say this?\" items get no box here: only the user confirms that they said "
              "something, on the review page, their phone or with `flowstate approve <id>` in "
              "their terminal.")
+
+REOPEN_NOTE = ("\"Reopen these possible conflicts?\" gets no box here: only the user answers it, "
+               "on the review page, their phone review page or by tapping its review card.")
 
 OFFER_NOTE = ("\"Allow tap cards in <app>?\" gets no box here: only the user answers it, on the "
               "review page or their phone review page.")
@@ -762,6 +770,9 @@ async def walk(result: dict, session, client: str) -> dict:
     if plan.get("offers"):
         result["card_offers"] = plan["offers"]
         result["card_offers_note"] = OFFER_NOTE
+    if plan.get("reopen"):
+        result["reopen_questions"] = plan["reopen"]
+        result["reopen_questions_note"] = REOPEN_NOTE
     result["note"] = _counts(done) + (
         " Then this app answered a box at once, faster than a person could, so FlowState "
         "stopped: that box was not shown and nothing more was decided." if unseen else "")

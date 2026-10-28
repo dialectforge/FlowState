@@ -22,9 +22,10 @@ def approve(db_path: Path, item: dict, args: dict, user_request: str, client: st
     `done` collects extra answer fields (safety_copy, note, deleted). `path` names how the
     decision was made for a disagreement's own log (the card: "card"). Raises ReviewError,
     deletes.DeleteError, safety.SafetyError."""
-    from . import card_offer, cleanup, conflict_cards, conflicts, deletes, history, provenance, \
-        handoffs, review_mode, rules, safety
+    from . import card_offer, cleanup, conflict_cards, conflict_reopen, conflicts, deletes, \
+        history, provenance, handoffs, review_mode, rules, safety
     from . import server as S
+    conflict_reopen.check(item, client, path == "card")   # "Reopen?": the user's alone
 
     def apply(item: dict, payload: dict):   # a source tag is the queuing app's say-so
         r = S._log_work(item["project_id"], payload, None, (item.get("app") or client, item.get("model")))
@@ -60,6 +61,8 @@ def approve(db_path: Path, item: dict, args: dict, user_request: str, client: st
         return conflict_cards.apply_keep(db_path, item, args.get("keep"), client, path=path)
 
     edits = {k: args.get(k) for k in ("summary", "details", "priority", "category", "component")}
+    if item.get("kind") == conflict_reopen.KIND:   # FlowState's own question: nothing to edit
+        edits = {}
     if safety.needs_copy(item):   # a verified copy first, or no change at all
         done["safety_copy"] = safety.copy_before(db_path).name
     return review.approve(db_path, int(item["id"]), user_request, client, apply, edits,
@@ -69,21 +72,32 @@ def approve(db_path: Path, item: dict, args: dict, user_request: str, client: st
                                   "source": lambda it, _e: provenance.confirm(db_path, it),
                                   "handoff": lambda it, _e: handoffs.apply_queued(db_path, it),
                                   "card_offer": lambda it, _e: card_offer.apply(db_path, it, client),
+                                  conflict_reopen.KIND: lambda it, _e: conflict_reopen.apply(
+                                      db_path, it, client, done),
                                   "rule": lambda it, _e: rules.confirm(
                                       db_path, it, path or _path_of(client))},
                           path=path or _path_of(client))
 
 
-def reject(db_path: Path, item: dict, reason: str, user_request: str, client: str) -> dict:
+def reject(db_path: Path, item: dict, reason: str, user_request: str, client: str,
+           path: Optional[str] = None) -> dict:
     """review.reject, then what rejecting means for the kind: a possible conflict is dismissed
-    (the two decisions fit together), a disagreement card is dismissed."""
-    from . import conflict_cards, conflicts
+    (the two decisions fit together), a disagreement card is dismissed, a "reopen?" question
+    leaves the pairs closed. `path` "card": a tap on the review card."""
+    from . import conflict_cards, conflict_reopen, conflicts
     from . import server as S
+    conflict_reopen.check(item, client, path == "card")
+    before = None
+    if item.get("kind") == conflict_reopen.KIND:   # the row as it was, for the history
+        before = review.get_item(db_path, int(item["id"]))
     out = review.reject(db_path, int(item["id"]), reason, user_request, client)
     if out.get("kind") == "conflict":   # the user says the two decisions fit together
         out.update(conflicts.dismiss(db_path, int(item["id"]), client))
     elif out.get("kind") == "disagreement":
         out.update(S._safe_call(conflict_cards.on_reject, db_path, item, client) or {})
+    elif out.get("kind") == conflict_reopen.KIND:
+        out.update(S._safe_call(conflict_reopen.on_reject, db_path, before, int(item["id"]),
+                                client) or {})
     return out
 
 
@@ -108,7 +122,7 @@ def for_card(db_path: Path, client: str):
         by = card_trust.label(client)   # "card (<app>)" like a record's own Keep / Remove
         try:
             if decision == "reject":
-                return reject(db_path, item, reason, words, by)
+                return reject(db_path, item, reason, words, by, path="card")
             done: dict = {}
             return {**approve(db_path, item, {}, words, by, done, path="card"), **done}
         except (review.ReviewError, deletes.DeleteError, safety.SafetyError) as e:

@@ -572,6 +572,22 @@ def _creation_check(conn, g, caller: identity.Identity, group_keys: set) -> Opti
     return None
 
 
+def _ask_reopen(conn, restored: list, client: str) -> Optional[dict]:
+    """An undo that took back a replacement: the possible conflicts it had closed stay closed
+    (queue rows are the user's), so ask the user once whether to reopen them (task 69). On the
+    undo's transaction; a failure here never stops the undo."""
+    from . import conflict_reopen
+    conn.execute("SAVEPOINT reopen_ask")
+    try:
+        asked = conflict_reopen.ask_after_undo(conn, conflict_reopen.undone_replacers(restored),
+                                               client)
+    except sqlite3.Error:
+        conn.execute("ROLLBACK TO reopen_ask")
+        asked = None
+    conn.execute("RELEASE reopen_ask")
+    return asked
+
+
 def undo(db_path: Path, project_id: int, record_type: str, record_id: int,
          client: str = "unknown") -> dict:
     """Revert the last (not yet undone) edit of a record: every row of it that nothing
@@ -702,6 +718,7 @@ def undo(db_path: Path, project_id: int, record_type: str, record_id: int,
                          "now": "deleted" if old is None else "restored"})
             conn.execute("UPDATE record_history SET undone_at = ?, undone_by_edit = ? WHERE id = ?",
                          (now, undo_id, g["id"]))
+        asked = _ask_reopen(conn, restored, client)
         conn.commit()
         out = {"undone": last["edit_id"], "tool": last["tool"], "rows": rows,
                "undo_edit_id": undo_id, "note": "Recorded in history; undo again to redo."}
@@ -711,6 +728,10 @@ def undo(db_path: Path, project_id: int, record_type: str, record_id: int,
                               for g in group if g["id"] in skipped]
             out["note"] = (f"Undid {len(rows)} of {len(group)} rows; skipped {len(skipped)} "
                            f"(listed with why). Recorded in history; undo again to redo.")
+        if asked:
+            from .conflict_reopen import note
+            out["reopen_question"] = asked
+            out["note"] += " " + note(asked)
         return out
     except HistoryError:
         raise

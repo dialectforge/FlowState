@@ -681,6 +681,10 @@ class Page:
                     out.append(f"""<p><strong>{_e(it['summary'])}</strong></p><p class="meta">{_e(it['details'])}</p>
 <form method="post" action="{self.base}/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
 <button>Allow</button></form>""")
+                elif it["kind"] == "reopen_conflict":   # after an undo: reopen or leave closed
+                    out.append(f"""<p><strong>{_e(it['summary'])}</strong></p><p class="meta">{_e(it['details'])}</p>
+<form method="post" action="{self.base}/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
+<button>Reopen</button></form>""")
                 elif it["kind"] == "source":   # "did you say this?": nothing to edit
                     out.append(f"""<p><strong>{_e(it['summary'])}</strong></p><p class="meta">{_e(it['details'])}</p>
 <form method="post" action="{self.base}/approve">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
@@ -716,6 +720,8 @@ class Page:
                       if it["kind"] == "disagreement" else
                       '<input type="hidden" name="reason" value="not allowed on the review page"><button>No</button>'
                       if it["kind"] == "card_offer" else
+                      '<input type="hidden" name="reason" value="left closed on the review page"><button>Leave closed</button>'
+                      if it["kind"] == "reopen_conflict" else
                       '<input type="text" name="reason" placeholder="Reason for rejecting"><button>Reject</button>')
                 out.append(f"""
 <form method="post" action="{self.base}/reject">{hidden}<input type="hidden" name="item_id" value="{it['id']}">
