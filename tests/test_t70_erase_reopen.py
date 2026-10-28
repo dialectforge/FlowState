@@ -149,7 +149,7 @@ def test_erase_removes_a_cut_quote_an_older_version_stored(backend, dots):
             assert frag not in text, (i, frag, text)
         assert "[erased]" in item["summary"], item["summary"]
     assert "Keep invoices in the accounting export" in review.get_item(db, iid)["summary"]
-    assert queue_rows(db, "review_items", iid) == []            # its history went too
+    assert len(queue_rows(db, "review_items", iid)) == 1        # its history stays (task 71), blanked:
     for frag in _fragments(_cut(LONG)[:-3]):
         assert _anywhere(db, frag) == [], frag
 

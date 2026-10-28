@@ -247,7 +247,8 @@ def test_erase_takes_the_edited_review_text_out_of_the_history(backend):
     _delete(S, "decision", rid)
     _erase(db, f"decision:{rid}")
     S.backend.tracker = None
-    assert queue_history(db, "review_items", item) == []
+    hist = queue_history(db, "review_items", item)   # the row stays, without the text (task 71)
+    assert len(hist) == 1 and hist[0]["old"]["summary"] == "[erased]"
     assert _everywhere(db, first) == []
 
 

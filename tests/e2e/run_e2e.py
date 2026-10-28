@@ -2855,7 +2855,8 @@ def s21_link_remove_and_erase(W):
     """Task 70: removing a supersedes link that had closed a possible conflict asks the user
     the same one question (FlowState itself queued it; no AI and not the terminal answers it),
     and `flowstate erase` leaves no part of an erased decision in a possible-conflict item, also
-    one an older version stored with the quote cut short with "..."."""
+    one an older version stored with the quote cut short with "...". Task 71: the other items
+    keep their edit history, with the erased text blanked inside it."""
     print("\n== S21 link removal asks; erase and cut quotes", flush=True)
     Q = "Bike Shop e2e-21"
     cc1, cursor = W.agents["cc1"], W.agents["cursor"]
@@ -2909,8 +2910,23 @@ def s21_link_remove_and_erase(W):
         "'2025-11-02T10:00:00Z')",
         (pid, f'Possible conflict: D{dd} "{cut}" vs D{da} "Book repairs by phone only"',
          json.dumps({"conflict_id": None, "new_id": dd, "old_id": da, "score": 0.5})))
+    old_item = W.q("SELECT id FROM review_items WHERE kind = 'conflict' AND summary LIKE ?",
+                   (f'%D{dd} "{cut}"%',))[0]["id"]
+    W.w("INSERT INTO record_history (edit_id, table_name, record_id, project_id, tool, old_row, "
+        "new_row, client, created_at) VALUES ('e2e-21-old', 'review_items', ?, ?, 'queue/review_edit', "
+        "?, NULL, 'cursor', '2025-11-02T10:00:00Z')",
+        (old_item, pid, json.dumps({"summary": f'Possible conflict: D{dd} "{cut}"'})))
+    sug = cursor.call("log_work", project=Q, kind="todo", suggested=True,
+                      summary=f"Ask the team about this: {long}")
+    sid = sug.get("queued_for_review") or 0
+    cc1.call("manage_review", action="approve", project=Q, item_id=sid,
+             summary="Ask the team about closing on Mondays",
+             user_request="The user said: approve the team question, but make it shorter")
     cc1.call("manage_memory", action="delete", project=Q, record_type="decision", record_id=dd)
     rc, out = W.cli_in_terminal(["erase", f"decision:{dd}"], ["y"])
+    hist = W.q("SELECT record_id, old_row, new_row FROM record_history WHERE table_name = "
+               "'review_items' AND record_id IN (?, ?)", (old_item, sid))
+    blob = " ".join(f"{h['old_row']} {h['new_row']}" for h in hist)
     left = W.count("review_items", "summary || COALESCE(details, '') || payload LIKE ?",
                    ("%Close the workshop on Mondays%",))
     R.check(21, "erase (the user's y) leaves nothing of the decision in a possible-conflict item an older "
@@ -2918,6 +2934,11 @@ def s21_link_remove_and_erase(W):
             rc == 0 and left == 0
             and W.count("review_items", "kind = 'conflict' AND summary LIKE ?",
                         (f'%D{dd} "[erased]"%Book repairs by phone only%',)) == 1, (rc, short(out)))
+    R.check(21, "erase keeps the edit history of the other items (the old item's row, an approve with "
+                "edits of a todo that quoted it), with the decision's text blanked inside",
+            rc == 0 and sorted(h["record_id"] for h in hist) == sorted([old_item, sid])
+            and "workshop on Mondays" not in blob and "two mechanics" not in blob
+            and "[erased]" in blob and "Ask the team about closing on Mondays" in blob, short(hist))
 
 def main():
     ap = argparse.ArgumentParser()
