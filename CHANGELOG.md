@@ -677,6 +677,27 @@ Brief and defusing
   - Every answer is logged with your other approvals, and the change with your other settings
     changes.
 
+### Evidence, source tags and standings are in the edit history (task 67)
+
+- **Earlier evidence is no longer lost.** Saving new evidence for a record (`log_work`
+  `evidence`, `flag_conflict` `evidence` / `target_evidence`) replaced the old snippets without
+  keeping them. Every evidence change is now in the edit history, with the old and new
+  snippets and the app that made it. `manage_history(action="list", record_type=...,
+  record_id=...)` shows it (as `evidence`), and `manage_history(action="undo", ...)` on the
+  record brings the old evidence back. Saving the same evidence again changes nothing.
+- **Undoing your own new record works when it has evidence.** Undo of a record created with
+  evidence was refused ("entry_evidence refers to it"); the evidence now goes with it.
+- **Source tags and checked dates keep their history too.** `set_source` and `mark_checked`
+  overwrote the earlier tag and date. Both are now in the edit history, and undo puts the
+  earlier tag back. Undo never sets or takes back `user_stated`: that stays the user's own
+  decision.
+- **A second disagreement card on the same entry keeps the first outcome in history.** The
+  entry's "superseded" mark from the first card was replaced without a trace. It is recorded
+  now; undo leaves card outcomes alone (they are the user's).
+- `flowstate erase` also removes these history copies of an erased record.
+- Nothing in the database is rewritten: the history uses the existing `record_history` table.
+  Changes made before 2.4.4 have no earlier version to show.
+
 ## 2.4.3 - 2026-10-23
 
 - No new dependencies. One additive database migration (023: three new tables for
