@@ -412,7 +412,9 @@ don't show server instructions:
    other agents' claims are listed last, so pick something else),
    `manage_problems` (attempts and solve), `manage_history` (see edits; undo the last change
    to a record, or take back a record you created while nothing refers to it; rows changed
-   since are skipped and listed), `manage_memory(action="cleanup")` (duplicate / stale todos, misfiled records, as review
+   since are skipped and listed; undoing a decision that replaced another queues one question
+   for the user, whether to reopen the possible conflicts it had closed: pass it on, only they
+   answer it), `manage_memory(action="cleanup")` (duplicate / stale todos, misfiled records, as review
    suggestions only; it only suggests a move when the record names the other project or one of
    its parts), `manage_memory(action="import")` (memory exports into the review queue),
    `manage_projects` (projects and components). **Deletes:** only when the user asks,

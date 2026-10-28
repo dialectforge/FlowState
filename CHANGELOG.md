@@ -720,6 +720,29 @@ Brief and defusing
   #3). It now looks only at the same kind of record.
 - Nothing in the database is rewritten; the history uses the existing `record_history` table.
 
+### The user is asked whether to reopen possible conflicts after an undo (task 69)
+
+- **A possible conflict no longer drops out of the brief silently.** When an app undoes its
+  own decision that had replaced another (`log_work replaces=`), the possible conflicts that
+  replacement had closed stay closed, because no app may change the review queue. FlowState
+  now adds one review item for the user in that project ("Reopen the possible conflict between
+  D12 "..." and D11 "..."?"), naming the decisions in plain words. The undo's answer says so.
+- **One question per undo**, for all the pairs it closed. Retrying the undo, or undo / redo /
+  undo, asks nothing new, and neither does a closing the user already answered.
+- **Reopen** puts the pairs back in the brief and asks again whether they conflict (a new
+  possible-conflict item, unless the user had already said they conflict). **Leave closed**
+  changes nothing. If the replacement is back by then (redo), nothing is reopened and the
+  answer says why. Both answers are in the edit history (with who and when) and in the
+  approval log.
+- **Only the user answers it:** on the review page (this computer's or the tunnel page), the
+  phone pages, or by tapping its review card (not the card of the app that did the undo).
+  Every AI tool, the chat walk, a popup and the terminal are refused, and nothing changes.
+- `flowstate erase` removes the question's text and history with the decisions it names.
+- No migration and nothing rewritten: a new review-item kind (`reopen_conflict`) in the
+  existing tables.
+- Unchanged: an app may still take back its own new entry when the only card naming it was
+  dismissed.
+
 ## 2.4.3 - 2026-10-23
 
 - No new dependencies. One additive database migration (023: three new tables for
