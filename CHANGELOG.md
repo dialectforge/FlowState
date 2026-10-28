@@ -845,6 +845,36 @@ Brief and defusing
   days, the page says that older detail has faded.
 - No migration. The page opens the database read-only (`query_only`).
 
+### Clean-up suggestions bound to the exact rows (task 74)
+
+- **Approving a clean-up suggestion changes exactly the records it was suggested with.** A
+  clean-up item that moves a misfiled record, cancels a duplicate todo (the "merge") or
+  cancels a stale one (the "archive") now stores the exact list of rows approving it would
+  change, the same way a delete request does since task 72: the record (a move also lists
+  its links; a duplicate also the todo it keeps), by id and content. Ids and hashes only, no
+  record text.
+- When the user approves, FlowState works the list out again inside the change itself. If a
+  row on it was edited, or a row was added, is missing or was already removed (deleted,
+  moved, done), nothing is changed, the suggestion is closed (rejected by "flowstate
+  (automatic)", with the reason), and the answer `changed_since_request` says what differs
+  ("todo #12 was edited", "now also lists link #4", "no longer lists todo #9"). Running the
+  clean-up again suggests it anew with the current list. A suggestion queued by an older
+  version has no list: approving it is refused (`request_outdated`) and closes it; running
+  the clean-up again replaces it (`replaced` in the answer) with one that has its list.
+  `manage_memory(action="cleanup")` is no longer answered from the "same write within 2
+  minutes" memory, so running it again right after a suggestion was closed suggests it anew
+  (a suggestion that is waiting and still matches is not queued twice).
+- The review page and the phone page show that list under the question ("Approving changes
+  exactly these records: ...") and, when it no longer matches, say so before the user taps:
+  "This list is not the one the suggestion was made with (...). Approving it changes
+  nothing; run the clean-up again for a new suggestion." A record that is gone (deleted or
+  erased) is shown by its id only.
+- Unchanged: a clean-up that changes nothing (a duplicate of two learnings, queued by an
+  older version) is approved and noted as before; a suggestion the user rejected is still not
+  suggested again; choosing another target project for a move is still allowed.
+- Deletes: when the list changed because a row was edited, the message now names the row
+  ("todo #1 was edited") instead of "a record on the list was edited".
+
 ## 2.4.3 - 2026-10-23
 
 - No new dependencies. One additive database migration (023: three new tables for
