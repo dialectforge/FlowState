@@ -698,6 +698,28 @@ Brief and defusing
 - Nothing in the database is rewritten: the history uses the existing `record_history` table.
   Changes made before 2.4.4 have no earlier version to show.
 
+### Undo around card outcomes, and history for review-queue changes (task 68)
+
+- **A card's outcome no longer blocks undo of older edits.** When an entry's newest history
+  row was a disagreement card's "superseded" mark, undo on that entry was refused, so older
+  ordinary edits (its evidence, its source tag) couldn't be undone either. Undo now steps
+  over the card's mark to the newest ordinary edit and undoes that. The mark itself stays as
+  it is: no app tool changes it.
+- **An app can't take back its own new entry once a card was decided about it.** Undoing the
+  create of the entry a card kept would have left the other one "superseded" by an entry that
+  no longer exists. That undo is now refused (`user_only`).
+- **Review-queue changes are in the history.** A possible conflict's status (dismissed as
+  compatible, closed by a replacing decision or by a card, confirmed) and a review item's
+  text before and after "approve with edits" are recorded, with the app and the time.
+  `manage_history(action="list", project=...)` shows them (as `possible conflict` and
+  `review item`). They record the user's decisions, so undo never changes them back.
+- `flowstate erase` also removes a review item's earlier text from the history (and from the
+  session log) when it erases the record that item became.
+- **Fixed:** when undo was refused because a source tag or card mark changed again, the
+  message could name the app of a different record with the same id (a todo #3 for decision
+  #3). It now looks only at the same kind of record.
+- Nothing in the database is rewritten; the history uses the existing `record_history` table.
+
 ## 2.4.3 - 2026-10-23
 
 - No new dependencies. One additive database migration (023: three new tables for
