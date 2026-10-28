@@ -902,6 +902,20 @@ Brief and defusing
   history. The item stays; approving it changes nothing and says "a record on its list was
   erased".
 
+### A clean-up's exact list in the one-item view and the review card (task 76)
+
+- **One item in full.** `manage_review` list with `item_id=<id>` for a waiting clean-up now
+  also gives `would_change`: the review page's "Approving changes exactly these records: ..."
+  text. When the list no longer matches, `out_of_date` has the review page's warning (approving
+  it changes nothing). Erased records are never shown with text, only the records still there.
+  Decided clean-ups and other kinds of item are shown as before.
+- **The review card.** The in-chat review card (MCP Apps) for a waiting clean-up shows the same
+  warning when its list is out of date, as the review page does. The card's plain text has it
+  too.
+- **A clean-up whose records are all gone** (for example its only todo was erased) now reads
+  "Approving changes exactly these records: none (no record on its list is still there)."
+  on the review page, the phone page and in these answers, instead of an empty list.
+
 ## 2.4.3 - 2026-10-23
 
 - No new dependencies. One additive database migration (023: three new tables for
