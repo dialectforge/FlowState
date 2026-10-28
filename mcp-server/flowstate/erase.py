@@ -39,7 +39,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-from . import dbconn
+from . import dbconn, history
 from .deletes import TYPES
 
 ERASED = "[erased]"
@@ -616,7 +616,11 @@ def run(db_path: Path, p: dict, data_dir: Optional[Path] = None) -> dict:
                     "DELETE FROM meaning_index WHERE content_type = ? AND content_id = ?",
                     (_MEANING_TYPES[table], rid)).rowcount
             rtype = next((k for k, v in TYPES.items() if v[0] == table), None)
-            if rtype:
+            if rtype:   # its side rows' history too: evidence an edit replaced (task 67)
+                for side in history.SIDE:
+                    n["history"] += conn.execute(
+                        f"DELETE FROM record_history WHERE {history._SIDE_OF}",
+                        (side, rtype, rid)).rowcount
                 for meta in ("record_meta", "link_alerts"):
                     if _has(conn, meta):
                         cols = {c[1] for c in conn.execute(f'PRAGMA table_info("{meta}")')}

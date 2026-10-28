@@ -38,6 +38,21 @@ TABLES = {"todo": "todos", "project": "projects", "component": "components",
           "handoff": "handoff_notes"}
 TYPE_OF = {v: k for k, v in TABLES.items()}
 
+# Side rows that belong to one record (their record_type / record_id columns): edits to them
+# are listed and undone with that record, under these names (task 67: a record's evidence,
+# its source tag and last-checked date, its standing after a disagreement card).
+SIDE = {"entry_evidence": "evidence", "record_meta": "source tag", "entry_standing": "standing"}
+# side tables with no id of their own (one row per record): the history row's record_id is
+# the record's id, and its record_type is read from the stored row
+KEYED = ("record_meta", "entry_standing")
+_SIDE_OF = ("table_name = ? AND json_extract(COALESCE(new_row, old_row), '$.record_type') = ? "
+            "AND json_extract(COALESCE(new_row, old_row), '$.record_id') = ?")
+
+
+def type_of(table: str) -> str:
+    """The user-facing name of a table's rows: decision, evidence, ... (else the table)."""
+    return TYPE_OF.get(table) or SIDE.get(table) or table
+
 # (tool, action) -> rows the edit can touch: (table, key column, argument holding the key)
 TRACKED = {
     ("update_project", None): [("projects", "id", "project_id")],
@@ -280,6 +295,82 @@ def _has(conn, table: str, db_path=None) -> bool:
     return ok
 
 
+def side_rows(conn, table: str, rtype: str, rid: int) -> dict:
+    """{row id: row} of a record's side rows (SIDE), e.g. its evidence snippets; for a KEYED
+    table {record id: its one row}."""
+    try:
+        cur = conn.execute(f'SELECT * FROM "{table}" WHERE record_type = ? AND record_id = ?',
+                           (rtype, int(rid)))
+    except sqlite3.OperationalError:
+        return {}
+    cols = [d[0] for d in cur.description]   # any row factory
+    key = "record_id" if table in KEYED else "id"
+    return {row[key]: row for row in ({c: _val(v) for c, v in zip(cols, r)}
+                                      for r in cur.fetchall())}
+
+
+def _side_ref(g) -> dict:
+    return json.loads(g["new_row"] or g["old_row"] or "{}")
+
+
+def _current(conn, g) -> Optional[dict]:
+    """The row a history row is about, as it is now."""
+    if g["table_name"] in KEYED:
+        return side_rows(conn, g["table_name"], _side_ref(g).get("record_type"),
+                         g["record_id"]).get(g["record_id"])
+    return _row(conn, g["table_name"], g["record_id"])
+
+
+def _put_back(conn, g, row: Optional[dict]) -> bool:
+    """_restore for any history row. True if it was re-inserted (checked for a parent)."""
+    table = g["table_name"]
+    if table not in KEYED:
+        return _restore(conn, table, g["record_id"], row)
+    conn.execute(f'DELETE FROM "{table}" WHERE record_type = ? AND record_id = ?',
+                 (_side_ref(g).get("record_type"), g["record_id"]))
+    if row is not None:
+        cols = list(row)
+        conn.execute(f'INSERT INTO "{table}" ({", ".join(chr(34) + c + chr(34) for c in cols)}) '
+                     f'VALUES ({", ".join("?" * len(cols))})', [_unval(row[c]) for c in cols])
+    return False
+
+
+def _user_only(g) -> Optional[str]:
+    """Why undo can't change this side row: the user's own decisions stay theirs."""
+    if g["table_name"] == "entry_standing":
+        return ("it was set when a disagreement card was decided; the card's outcome is the "
+                "user's (review page)")
+    if g["table_name"] == "record_meta":
+        old, new = (json.loads(v) if v else {} for v in (g["old_row"], g["new_row"]))
+        made = g["old_row"] is None and g["tool"] == "source/set"   # tagged when it was saved
+        if "user_stated" in (old.get("source"), new.get("source")) \
+                and old.get("source") != new.get("source") and not made:
+            return "only the user confirms or takes back user_stated"
+    return None
+
+
+def record_side(conn, table: str, rtype: str, rid: int, before: dict, tool: str,
+                client: str = "unknown", project_id: Optional[int] = None) -> Optional[str]:
+    """Record a change to a record's side rows made on `conn` (the caller commits): each row
+    before and after, as one edit of the current write (so evidence saved with a new record
+    is part of its create edit). `before` is side_rows() taken before the change."""
+    if table not in SIDE or not _has(conn, "record_history"):
+        return None
+    after = side_rows(conn, table, rtype, rid)
+    keys = [k for k in dict.fromkeys([*before, *after]) if before.get(k) != after.get(k)]
+    if not keys:
+        return None
+    edit_id, now = new_edit_id(), _now()
+    for k in keys:
+        old, new = before.get(k), after.get(k)
+        identity.insert(conn, "record_history", {
+            "edit_id": edit_id, "table_name": table, "record_id": k, "project_id": project_id,
+            "tool": tool, "old_row": json.dumps(old) if old is not None else None,
+            "new_row": json.dumps(new) if new is not None else None,
+            "client": (client or "")[:80], "created_at": now}, client)
+    return edit_id
+
+
 @contextmanager
 def tracked(db_path: Path, rows: list, tool: str, client: str = "unknown"):
     """Record an edit made inside the block: rows = [(table, key column, key value)]."""
@@ -313,11 +404,15 @@ def list_history(db_path: Path, project_id: int, record_type: Optional[str] = No
         if record_type:
             if record_type not in TABLES:
                 raise HistoryError("bad_type", f"record_type must be one of: {', '.join(TABLES)}.")
-            where.append("table_name = ?")
-            params.append(TABLES[record_type])
-            if record_id is not None:
-                where.append("record_id = ?")
-                params.append(int(record_id))
+            if record_id is not None:   # the record's own rows, and its side rows (evidence)
+                where.append("((table_name = ? AND record_id = ?) OR "
+                             + " OR ".join(f"({_SIDE_OF})" for _ in SIDE) + ")")
+                params += [TABLES[record_type], int(record_id)]
+                for side in SIDE:
+                    params += [side, record_type, int(record_id)]
+            else:
+                where.append("table_name = ?")
+                params.append(TABLES[record_type])
         rows = conn.execute(
             f"""SELECT * FROM record_history WHERE {' AND '.join(where)}
                 ORDER BY id DESC LIMIT ?""", (*params, max(1, min(int(limit or 20), 100)))).fetchall()
@@ -325,9 +420,13 @@ def list_history(db_path: Path, project_id: int, record_type: Optional[str] = No
         for r in rows:
             old = json.loads(r["old_row"]) if r["old_row"] else None
             new = json.loads(r["new_row"]) if r["new_row"] else None
+            side = (new or old or {}) if r["table_name"] in SIDE else {}
             out.append({"history_id": r["id"], "edit_id": r["edit_id"],
-                        "record_type": TYPE_OF.get(r["table_name"], r["table_name"]),
-                        "record_id": r["record_id"], "tool": r["tool"], "client": r["client"],
+                        "record_type": type_of(r["table_name"]),
+                        "record_id": r["record_id"],
+                        **({"of": f"{side.get('record_type')} #{side.get('record_id')}"}
+                           if side else {}),
+                        "tool": r["tool"], "client": r["client"],
                         "at": r["created_at"], "undone_at": r["undone_at"],
                         "undo_of": r["undo_of"], "changes": _changed_fields(old, new),
                         **{k: r[k] for k in identity.FIELDS if k in r.keys()}})
@@ -378,7 +477,7 @@ def _orphans(conn, inserted: dict) -> list:
 
 
 def _label(table: str, rid) -> str:
-    return f"{TYPE_OF.get(table, table)} #{rid}"
+    return f"{type_of(table)} #{rid}"
 
 
 def _changed_by(conn, g) -> str:
@@ -433,9 +532,12 @@ def undo(db_path: Path, project_id: int, record_type: str, record_id: int,
         if not available(conn):
             raise HistoryError("history_unavailable", "Edit history isn't set up yet (migration 005).")
         conn.execute("BEGIN IMMEDIATE")
-        last = conn.execute(
-            """SELECT * FROM record_history WHERE table_name = ? AND record_id = ?
-               AND undone_at IS NULL ORDER BY id DESC LIMIT 1""", (table, int(record_id))).fetchone()
+        last = conn.execute(   # the record's last edit, or its side rows' (evidence) if newer
+            f"""SELECT * FROM record_history WHERE undone_at IS NULL AND
+                ((table_name = ? AND record_id = ?) OR {" OR ".join(f"({_SIDE_OF})" for _ in SIDE)})
+                ORDER BY id DESC LIMIT 1""",
+            (table, int(record_id), *[v for side in SIDE
+                                      for v in (side, record_type, int(record_id))])).fetchone()
         if last is None:
             conn.rollback()
             raise HistoryError("nothing_to_undo",
@@ -454,7 +556,7 @@ def undo(db_path: Path, project_id: int, record_type: str, record_id: int,
         def allowed(g) -> bool:  # the project it was in when edited, or the one it is in now
             if g["project_id"] in (None, project_id):
                 return True
-            now_row = _row(conn, g["table_name"], g["record_id"])
+            now_row = _current(conn, g)
             return _project_of(conn, g["table_name"], now_row) == project_id
         if not all(allowed(g) for g in group):
             conn.rollback()
@@ -462,10 +564,13 @@ def undo(db_path: Path, project_id: int, record_type: str, record_id: int,
                                f"That change belongs to another project; repeat with that project.")
         skipped: dict = {}   # history row id -> (code, reason)
         for g in group:   # rows something changed since (outside history, or a newer edit)
-            current = _row(conn, g["table_name"], g["record_id"])
+            current = _current(conn, g)
             expected = json.loads(g["new_row"]) if g["new_row"] else None
             if current != expected:
                 skipped[g["id"]] = ("changed_since", _changed_by(conn, g))
+            elif _user_only(g):
+                skipped[g["id"]] = ("user_only", _label(g["table_name"], g["record_id"])
+                                    + " stays: " + _user_only(g))
         caller = identity.current() or identity.local(client)
         keys = {(g["table_name"], g["record_id"]) for g in group}
         for g in group:   # removing a created record: only if nothing else needs it
@@ -498,9 +603,9 @@ def undo(db_path: Path, project_id: int, record_type: str, record_id: int,
             restored, inserted = [], {}
             for g in todo:
                 old = json.loads(g["old_row"]) if g["old_row"] else None
-                before = _row(conn, g["table_name"], g["record_id"])
+                before = _current(conn, g)
                 try:
-                    if _restore(conn, g["table_name"], g["record_id"], old):
+                    if _put_back(conn, g, old):
                         inserted.setdefault(g["table_name"], set()).add(g["record_id"])
                 except sqlite3.IntegrityError as e:
                     conn.rollback()
@@ -508,7 +613,7 @@ def undo(db_path: Path, project_id: int, record_type: str, record_id: int,
                                        f"Can't put {_label(g['table_name'], g['record_id'])} back: "
                                        f"{e} (for example a new project now has the same name; "
                                        f"rename it first). Nothing was changed.")
-                after = _row(conn, g["table_name"], g["record_id"])
+                after = _current(conn, g)
                 restored.append((g, before, after, old))
             missing = _orphans(conn, inserted)
             if not missing:
@@ -532,7 +637,7 @@ def undo(db_path: Path, project_id: int, record_type: str, record_id: int,
                 "new_row": json.dumps(after) if after is not None else None,
                 "client": (client or "")[:80], "created_at": now, "undo_of": g["edit_id"]},
                 client)
-            rows.append({"record_type": TYPE_OF.get(g["table_name"], g["table_name"]),
+            rows.append({"record_type": type_of(g["table_name"]),
                          "record_id": g["record_id"],
                          "now": "deleted" if old is None else "restored"})
             conn.execute("UPDATE record_history SET undone_at = ?, undone_by_edit = ? WHERE id = ?",
@@ -541,7 +646,7 @@ def undo(db_path: Path, project_id: int, record_type: str, record_id: int,
         out = {"undone": last["edit_id"], "tool": last["tool"], "rows": rows,
                "undo_edit_id": undo_id, "note": "Recorded in history; undo again to redo."}
         if skipped:
-            out["skipped"] = [{"record_type": TYPE_OF.get(g["table_name"], g["table_name"]),
+            out["skipped"] = [{"record_type": type_of(g["table_name"]),
                                "record_id": g["record_id"], "why": skipped[g["id"]][1]}
                               for g in group if g["id"] in skipped]
             out["note"] = (f"Undid {len(rows)} of {len(group)} rows; skipped {len(skipped)} "

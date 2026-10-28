@@ -281,8 +281,7 @@ def recent(db_path: Path, app: Optional[str] = None, model: Optional[str] = None
         for r in rows:
             undo = _undoable(conn, r)
             what = _edit_what(conn, r) if r["kind"] == "edit" else (r["what"] or "")
-            rtype = history.TYPE_OF.get(r["record_type"], r["record_type"]) \
-                if r["kind"] == "edit" else r["record_type"]
+            rtype = history.type_of(r["record_type"]) if r["kind"] == "edit" else r["record_type"]
             out.append({"at": local_time(r["at"]), "at_utc": r["at"], "app": r["app"],
                         "model": r["model"], "machine": r["machine"],
                         "identity_source": r["identity_source"],

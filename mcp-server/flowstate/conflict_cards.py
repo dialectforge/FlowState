@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import dbconn
-from . import identity, links, review
+from . import history, identity, links, review
 
 UI_EXT = "io.modelcontextprotocol/ui"
 _FILE = re.compile(r"^[\w./\\-]+:\d+$")
@@ -194,7 +194,15 @@ def _evidence(conn, typ: str, rid: int) -> list:
 
 
 def save_evidence(conn, typ: str, rid: int, items: list, client: str) -> None:
+    """Replace a record's evidence. The rows before and after go into the edit history, so
+    the old evidence can be seen and undo brings it back (task 67); the same evidence saved
+    again changes nothing."""
     if not items or not available(conn):
+        return
+    before = history.side_rows(conn, "entry_evidence", typ, rid)
+    same = [(r["kind"], r["label"], r["excerpt"])
+            for r in sorted(before.values(), key=lambda r: (r["position"], r["id"]))]
+    if same == [(ev["kind"], ev["label"], ev.get("excerpt")) for ev in items]:
         return
     conn.execute("DELETE FROM entry_evidence WHERE record_type = ? AND record_id = ?", (typ, rid))
     at = _now()
@@ -202,6 +210,9 @@ def save_evidence(conn, typ: str, rid: int, items: list, client: str) -> None:
         identity.insert(conn, "entry_evidence", {
             "record_type": typ, "record_id": rid, "kind": ev["kind"], "label": ev["label"],
             "excerpt": ev.get("excerpt"), "position": i, "created_at": at}, client)
+    history.record_side(conn, "entry_evidence", typ, rid, before,
+                        "evidence/replace" if before else "evidence/add", client,
+                        links.owner(conn, typ, rid))
 
 
 def _topic_of(conn, typ: str, rid: int, given: str) -> str:
@@ -483,8 +494,11 @@ def _mark(conn, typ: str, rid: int, by: tuple, card_id: int, client: str) -> Non
     who = identity.fields(conn, "entry_standing", client)
     row = {"record_type": typ, "record_id": rid, "standing": "superseded",
            "by_type": by[0], "by_id": by[1], "card_id": card_id, "at": _now(), **who}
+    before = history.side_rows(conn, "entry_standing", typ, rid)   # an earlier card's mark
     conn.execute(f'INSERT OR REPLACE INTO entry_standing ({", ".join(row)}) '
                  f'VALUES ({", ".join("?" * len(row))})', list(row.values()))
+    history.record_side(conn, "entry_standing", typ, rid, before, "card/keep", client,
+                        links.owner(conn, typ, rid))
 
 
 def _quiet_pair(conn, a_id: int, b_id: int, client: str, reason: str) -> None:
