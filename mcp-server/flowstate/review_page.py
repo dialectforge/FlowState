@@ -576,7 +576,7 @@ class Page:
         return f"Undid the last change to {form['record_type']} #{form['record_id']}."
 
     # ------------------------------------------------------------ html
-    def _head(self, flash: str, view: str, csrf: str = "") -> list:
+    def _head(self, flash: str, view: str, csrf: str = "", project: Optional[int] = None) -> list:
         style = (f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
                  f"<link rel='stylesheet' href='{_e(self.stylesheet)}'>" if self.stylesheet
                  else f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -589,8 +589,11 @@ class Page:
                   if self.sign_out else "") +
                f"<p class='meta'><a href='{self.base}/'>Review queue</a> · <a href='{self.base}/?view=who'>Who did what</a>"
                f"{' (this page)' if view == 'who' else ''}"
-               # Project history (history_page.py): this computer's page only, not the tunnel's
-               + (f" · <a href='{self.base}/?view=history'>Project history</a>"
+               # Project history (history_page.py): this computer's pages only (the one
+               # `flowstate review-page` opens and the brief's link page), never the tunnel's;
+               # from a queue filtered by project, that project's history
+               + (f" · <a href='{self.base}/?view=history"
+                  f"{f'&amp;project={int(project)}' if project is not None else ''}'>Project history</a>"
                   f"{' (this page)' if view in history_page.VIEWS else ''}" if self.settings != "off" else "")
                + "</p>"]
         if flash:
@@ -664,7 +667,7 @@ class Page:
         hidden = f'<input type="hidden" name="csrf" value="{_e(csrf)}">'
         opts = "".join(f'<option value="{p["id"]}"{" selected" if p["id"] == pid else ""}>{_e(p["name"])}</option>'
                        for p in projects)
-        out = self._head(flash, "queue", csrf)
+        out = self._head(flash, "queue", csrf, pid)
         out.append(f"""<form method="get" class="row"><select name="project"><option value="">All projects</option>{opts}</select>
 <select name="status">{''.join(f'<option{" selected" if s == status else ""}>{s}</option>' for s in ("pending", "approved", "rejected", "all"))}</select>
 <button>Show</button></form>""")
@@ -1202,6 +1205,13 @@ def create_app(page: Page):
             return HTMLResponse(page.render_who(page.sessions[sess], flash,
                                                 dict(request.query_params)), headers=headers)
         if request.query_params.get("view") in history_page.VIEWS:   # read-only
+            # a record page under the wrong project: the same page under its own project
+            home = page.settings != "off" and history_page.Views(page, _e).record_home(
+                dict(request.query_params))
+            if home:
+                if flash:
+                    page.flashes[sess] = flash
+                return RedirectResponse(home, status_code=303, headers=headers)
             return HTMLResponse(page.render_history(page.sessions[sess], flash,
                                                     dict(request.query_params)), headers=headers)
         return HTMLResponse(page.render(page.sessions[sess], flash,

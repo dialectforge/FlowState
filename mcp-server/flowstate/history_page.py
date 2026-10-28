@@ -1,8 +1,8 @@
 """The review page's "Project history" views (task 73), read-only:
 
   ?view=history&project=ID   the project's whole path in time order (project_history.timeline):
-                             filters by type, app, date range, a search box, oldest or newest
-                             first, 50 entries a page
+                             filters by type, app, date range, a search box, newest first
+                             (order=oldest for oldest first), 50 entries a page
   ?view=todos&project=ID     the project's todos with who created each and its status now
   ?view=record&project=ID&type=T&id=N
                              one record: its fields now, its whole edit history (before and
@@ -121,6 +121,22 @@ class Views:
                 f"edit history itself (every created, edited, deleted and undone record, before "
                 f"and after) is kept.</p>")
 
+    def record_home(self, q: dict) -> Optional[str]:
+        """A record page whose address names a project the record doesn't belong to: the
+        address of the same page under the record's own project (create_app answers 303 with
+        it), or None when the address is right, or the record's project isn't known here."""
+        q = {k: (v or "").strip() for k, v in (q or {}).items()}
+        pid, rtype, rid = _int(q.get("project")), q.get("type", ""), _int(q.get("id"))
+        if q.get("view") != "record" or pid is None or rid is None or not rtype or len(rtype) > 30:
+            return None
+        own = H.record_projects(self.p.db_path, rtype, rid)
+        if not own or pid in own:
+            return None
+        live = {x["id"] for x in self.p.projects()}
+        home = min(own & live) if own & live else None
+        return None if home is None else f"{self.p.base}/?" + urlencode(
+            {"view": "record", "project": home, "type": rtype, "id": rid})
+
     # ------------------------------------------------------------------ views
     def render(self, csrf: str, flash: str, q: dict) -> str:
         e, p = self.e, self.p
@@ -156,7 +172,7 @@ class Views:
 
     def _timeline(self, pid: int, q: dict) -> str:
         e = self.e
-        newest = q.get("order") == "newest"
+        newest = q.get("order") != "oldest"   # newest first unless the user picks oldest
         res = H.timeline(self.p.db_path, pid, q.get("type") or None, q.get("app"), q.get("since"),
                          q.get("until"), q.get("q"), page=_int(q.get("page")) or 1,
                          newest_first=newest)
@@ -167,7 +183,7 @@ class Views:
             return f'<input type="{kind}" name="{n}" placeholder="{ph}" value="{e(q.get(n, ""))}">'
         out = [f"""<form method="get" class="filters"><input type="hidden" name="view" value="history"><input type="hidden" name="project" value="{pid}">
 <div class="row">{field('q', 'search', 'search')}<select name="type"><option value="">All types</option>{types}</select>{field('app', 'app or machine')}</div>
-<div class="row">{field('since', 'from (2026-10-17)')}{field('until', 'to')}<select name="order"><option value="oldest">Oldest first</option><option value="newest"{' selected' if newest else ''}>Newest first</option></select><button>Filter</button></div></form>""",
+<div class="row">{field('since', 'from (2026-10-17)')}{field('until', 'to')}<select name="order"><option value="newest"{' selected' if newest else ''}>Newest first</option><option value="oldest"{'' if newest else ' selected'}>Oldest first</option></select><button>Filter</button></div></form>""",
                f"<p class='meta'>{res['total']} entr{'y' if res['total'] == 1 else 'ies'}. Times are "
                f"this computer's local time. Model is shown only when the app gave it. Tap a "
                f"record for its full edit history. Read-only: approve and undo stay in the review "
@@ -215,6 +231,9 @@ class Views:
         rtype, rid = q.get("type", ""), _int(q.get("id"))
         if not rtype or rid is None or len(rtype) > 30:
             return "<p class='err'>Pick a record from the timeline.</p>"
+        own = H.record_projects(self.p.db_path, rtype, rid)
+        if own and pid not in own:   # never under another project (create_app redirects first)
+            return "<p class='err'>This record belongs to another project.</p>"
         d = H.record_detail(self.p.db_path, pid, rtype, rid)
         res = H.timeline(self.p.db_path, pid, record=(rtype, rid), page=_int(q.get("page")) or 1)
         if d["state"] in ("erased", "") and not res["total"] and not d["edits"]:

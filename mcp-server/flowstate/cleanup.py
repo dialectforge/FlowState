@@ -351,7 +351,8 @@ def queue(db_path: Path, suggestions: list[dict], source: str = "cleanup") -> di
                 payload["bound"] = rows
             if fp in waiting and rows is not None and \
                     (waiting[fp][1].get("bound") or {}).get("digest") != rows["digest"]:
-                then = waiting[fp][1].get("bound")
+                then = waiting[fp][1].get("bound") or \
+                    (ERASED_WHY if waiting[fp][1].get("bound_erased") else None)
                 stale.append((waiting[fp][0], then, rows))   # its list is out of date: replaced
             elif fp in seen:
                 skipped += 1
@@ -365,7 +366,7 @@ def queue(db_path: Path, suggestions: list[dict], source: str = "cleanup") -> di
     replaced = []
     for iid, then, rows in stale:
         why = (deletes._bound_diff(then, rows, _VERBS) if isinstance(then, dict)
-               else "queued by an older FlowState")
+               else ERASED_WHY if then == ERASED_WHY else "queued by an older FlowState")
         if deletes.void(db_path, iid, f"Replaced by a new suggestion: what it would change "
                                       f"changed since it was suggested ({why}).", "cleanup"):
             replaced.append(iid)
@@ -381,6 +382,9 @@ def queue(db_path: Path, suggestions: list[dict], source: str = "cleanup") -> di
 # the same way a delete is (deletes.bind, task 72): a changed row, or a row added, missing or
 # already removed, and approving it changes nothing and closes it (VOIDED_BY).
 VOIDED_BY = "flowstate (automatic)"
+# `flowstate erase` drops the list (ids, digest, hashes) of a clean-up about an erased record
+# and leaves `bound_erased` (erase.py, task 75): approving it changes nothing, as for any change
+ERASED_WHY = "a record on its list was erased"
 _VERBS = (("rows", "lists"),)
 _TABLE = {"todo": "todos", "learning": "learnings", "problem": "problems", "change": "changes"}
 
@@ -430,6 +434,11 @@ def _check(conn, payload: dict) -> None:
     if now is None:
         return
     then = payload.get("bound")
+    if payload.get("bound_erased"):
+        raise deletes.DeleteError(
+            "changed_since_request", f"What this clean-up would change is not what it was "
+            f"suggested with ({ERASED_WHY}). Nothing was changed and the suggestion is closed; "
+            "run the clean-up again (manage_memory action=\"cleanup\") to get a new one.")
     if not isinstance(then, dict) or not then.get("digest"):
         raise deletes.DeleteError(
             "request_outdated", "This clean-up suggestion was queued by an older FlowState and "
@@ -487,7 +496,8 @@ def preview(db_path: Path, item: dict) -> Optional[dict]:
     stale = then is None or then.get("digest") != now["digest"]
     text = "Approving changes exactly these records: " + "; ".join(lines) + "."
     if stale:
-        why = deletes._bound_diff(then, now, _VERBS) if then else "queued by an older FlowState"
+        why = deletes._bound_diff(then, now, _VERBS) if then else \
+            ERASED_WHY if payload.get("bound_erased") else "queued by an older FlowState"
         text += (f" This list is not the one the suggestion was made with ({why}). Approving it "
                  "changes nothing; run the clean-up again for a new suggestion.")
     return {"lines": lines, "changed_since_request": stale, "text": text}

@@ -233,6 +233,8 @@ _KIND = {"session_summary": "session summary", "cleanup": "clean-up idea", "edit
 
 LINE_MAX = 160          # one item's line, as the app reads it in the JSON answer
 LIST_BUDGET = 12_000    # all lines of one page (limit 100: 120 each; the answer stays < 16,000)
+# a clean-up whose exact list changed since it was queued (task 75; the review page's warning)
+OUT_OF_DATE = "(out of date: approving changes nothing)"
 FULL_ITEM = ('One item in full (details, payload; needed before approving with edits): '
              'manage_review(action="list", item_id=<id>).')
 
@@ -275,7 +277,7 @@ def _keep_note(items: list) -> dict:
 def _lines(items: list, status: bool = False, db_path: Optional[Path] = None) -> list:
     """One line each. A disagreement or a delete is the server's own text (the card, or the
     rows that would go), not a 160-character cut of whatever an agent wrote."""
-    from . import conflict_cards, deletes
+    from . import cleanup, conflict_cards, deletes
     room = min(LINE_MAX, LIST_BUDGET // max(1, len(items)))
     out = []
     for it in items:
@@ -290,6 +292,12 @@ def _lines(items: list, status: bool = False, db_path: Optional[Path] = None) ->
                 tail = _records_tail(db_path, it)
                 if tail:
                     out.append(_plain(it, max(60, room - len(tail)), status) + tail)
+                    continue
+            if db_path is not None and it.get("kind") == "cleanup" and it.get("status") == "pending":
+                got = cleanup.preview(db_path, it)   # the review page's check (task 74)
+                if got and got["changed_since_request"]:
+                    out.append(_plain(it, max(60, room - len(OUT_OF_DATE) - 1), status)
+                               + " " + OUT_OF_DATE)
                     continue
         except Exception:  # noqa: BLE001 - a list line must not fail the whole answer
             log.warning("review line for #%s skipped", it.get("id"))
@@ -663,6 +671,12 @@ def _form(it: dict, i: int, n: int) -> tuple[str, dict]:
             from .review import KEEP_ALL, KEEP_ALL_HOW
             KEEP, KEEP_HOW = KEEP_ALL, KEEP_ALL_HOW + (" To keep or remove one record, use the "
                                                        "review page or your phone.")
+    if it["kind"] == "cleanup":   # its list changed: say so before the user ticks (task 75)
+        from . import cleanup, server as S
+        got = cleanup.preview(S.backend.db_path, it)
+        if got and got["changed_since_request"]:
+            details = "\n".join(([details] if details else [])
+                                 + [got["text"][got["text"].index(" This list is not") + 1:]])
     msg = (f"Waiting for you ({i} of {n}), {it['project']}, {_KIND.get(it['kind'], it['kind'])} "
            f"#{it['id']} from {who}:\n{strip_tag(it.get('summary'))}" + (f"\n{details}" if details else "")
            + (f"\n{KEEP_QUESTION} {KEEP_HOW}\nTick {KEEP} and submit to keep it; submit it unticked "

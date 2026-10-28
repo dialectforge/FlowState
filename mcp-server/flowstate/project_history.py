@@ -545,6 +545,40 @@ def timeline(db_path: Path, project_id: int, rtype: Optional[str] = None,
         conn.close()
 
 
+def record_projects(db_path: Path, rtype: str, rid: int) -> Optional[set]:
+    """The projects a record belongs to (a link: both of its ends), from its live row, else
+    from the edit history's newest copy. None: not known here (an erased record, an unknown
+    type or id), so the page goes by what the project's own history names (task 75)."""
+    table = history.TABLES.get(rtype) or {"review_item": "review_items",
+                                          "conflict": "decision_conflicts"}.get(rtype)
+    conn = dbconn.connect(str(db_path), timeout=5.0)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA query_only = ON")
+        t = _tables(conn)
+        if not table or table not in t or rid is None:
+            return None
+        row = conn.execute(f"SELECT * FROM {table} WHERE id = ?", (rid,)).fetchone()
+        if row is not None:
+            row = dict(row)
+            own = history._project_of(conn, table, row)
+        elif "record_history" in t:
+            h = conn.execute("SELECT project_id, old_row, new_row FROM record_history WHERE "
+                             "table_name = ? AND record_id = ? ORDER BY id DESC LIMIT 1",
+                             (table, rid)).fetchone()
+            if h is None:
+                return None
+            row = _load(h["new_row"]) or _load(h["old_row"]) or {}
+            own = h["project_id"]
+        else:
+            return None
+        out = {x for x in (own, row.get("to_project_id") if table == "record_links" else None)
+               if isinstance(x, int)}
+        return out or None
+    finally:
+        conn.close()
+
+
 def record_detail(db_path: Path, project_id: int, rtype: str, rid: int) -> dict:
     """One record: its state and label, its live fields, and its whole edit history (each
     edit with who and every changed field before and after). An erased record: state

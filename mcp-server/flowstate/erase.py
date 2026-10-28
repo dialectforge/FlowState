@@ -712,6 +712,53 @@ def _item_history(conn, rows: dict, texts: list, about_only: tuple, about: set,
     return n
 
 
+def _unbound(payload, rows: dict, about: bool) -> Optional[dict]:
+    """A clean-up item's payload without its exact list (`bound`: ids, a digest and per-row
+    hashes) when the list or the item is about an erased record, else None (unchanged)."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("bound"), dict):
+        return None
+    listed = payload["bound"].get("rows") or {}
+    hit = about or any((t, k) in rows for t, ks in listed.items() if isinstance(ks, list)
+                       for k in ks)
+    if not hit:
+        return None
+    out = {k: v for k, v in payload.items() if k != "bound"}
+    out["bound_erased"] = True   # cleanup._check: approving it changes nothing, and says why
+    return out
+
+
+def _cleanup_lists(conn, rows: dict, about: set) -> int:
+    """Clean-up suggestions (task 74) store the exact rows they would change as ids and
+    hashes. For one about an erased record (it names it, or its list has it, a link
+    included) that list goes too, from the live item and every copy of it in the edit
+    history (task 75). The item stays; approving it changes nothing. Returns rows changed."""
+    n, items = 0, set()
+    for r in conn.execute("SELECT id, payload FROM review_items WHERE kind = 'cleanup'").fetchall():
+        new = _unbound(_loads(r["payload"]), rows, r["id"] in about)
+        items.add(r["id"])
+        if new is not None:
+            conn.execute("UPDATE review_items SET payload = ? WHERE id = ?", (json.dumps(new), r["id"]))
+            n += 1
+    if not _has(conn, "record_history"):
+        return n
+    for h in conn.execute("SELECT id, record_id, old_row, new_row FROM record_history WHERE "
+                          "table_name = 'review_items'").fetchall():
+        out = []
+        for v in (h["old_row"], h["new_row"]):
+            d = _loads(v)
+            if not isinstance(d, dict) or (h["record_id"] not in items and d.get("kind") != "cleanup"):
+                out.append(v)
+                continue
+            new = _unbound(_loads(d.get("payload")), rows, h["record_id"] in about)
+            out.append(v if new is None else json.dumps(
+                dict(d, payload=json.dumps(new) if isinstance(d.get("payload"), str) else new)))
+        if out != [h["old_row"], h["new_row"]]:
+            conn.execute("UPDATE record_history SET old_row = ?, new_row = ? WHERE id = ?",
+                         (out[0], out[1], h["id"]))
+            n += 1
+    return n
+
+
 def _loads(v):
     try:
         return json.loads(v) if isinstance(v, str) else v
@@ -807,6 +854,7 @@ def run(db_path: Path, p: dict, data_dir: Optional[Path] = None) -> dict:
                         (ERASED, table, rid, rtype, rid, ERASED)).rowcount
         if _has(conn, "review_items"):   # their history stays, without the text (task 71)
             n["history_blanked"] = _item_history(conn, rows, texts, topics, about, blank)
+            _cleanup_lists(conn, rows, about)   # and clean-ups lose their list (task 75)
         n["linked"] = _linked(conn, rows, [_pattern(t, True) for t in texts])
         n["history"] += _shared_edits(conn, p, texts, labels)
         if labels and _has(conn, "auto_sessions"):   # the session log of the records' projects
