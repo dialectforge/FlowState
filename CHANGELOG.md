@@ -735,13 +735,43 @@ Brief and defusing
   answer says why. Both answers are in the edit history (with who and when) and in the
   approval log.
 - **Only the user answers it:** on the review page (this computer's or the tunnel page), the
-  phone pages, or by tapping its review card (not the card of the app that did the undo).
+  phone pages, or by tapping its review card (since task 70 also the card of the app that did
+  the undo).
   Every AI tool, the chat walk, a popup and the terminal are refused, and nothing changes.
 - `flowstate erase` removes the question's text and history with the decisions it names.
 - No migration and nothing rewritten: a new review-item kind (`reopen_conflict`) in the
   existing tables.
 - Unchanged: an app may still take back its own new entry when the only card naming it was
   dismissed.
+
+### Erase and cut quotes, the reopen question in the same chat, link removal (task 70)
+
+- **`flowstate erase` no longer leaves the start of a long decision in a possible-conflict
+  item.** Those items (since 2.3.0) quoted each decision cut to about 70 characters with
+  "...". Erase now also removes a quote cut short with "..." or "…", and finds a
+  possible-conflict item by the decisions it names (the pair's ids), not only by its text.
+  This works on existing databases too: items an older version stored are cleaned the same
+  way, and their edit history goes with them. An unrelated item that only shares a few
+  opening words is left as it was.
+- **New possible-conflict items quote each decision whole** and name both decisions by id,
+  as the reopen question already did. Pages and lists still shorten long lines when they
+  show them.
+- **The "reopen?" question can be answered in the same chat.** FlowState itself now queues
+  it (shown as "FlowState"; the details still say which app undid what), so the app that
+  did the undo shows working buttons on its review card. A tap still needs the card's hidden
+  one-use code: no code, a wrong code or a used one is refused.
+- Still refused, with nothing changed: every AI tool (`manage_review` approve / reject, with
+  chat approvals on or off, approve with edits), the chat walk, popups, an AI calling itself
+  the review page, phone or tunnel page, the open review link page, and the terminal's
+  `flowstate approve`.
+- No app can be FlowState: "FlowState", "system" and lookalikes are reserved app names, and
+  no key, token, header or tool argument gives FlowState's own identity. Only the reopen
+  question is recorded with it.
+- **Removing a supersedes link asks too.** `manage_links remove` of a link that had closed
+  possible conflicts now queues the same single question as an undo (deduplicated the same
+  way: retrying, or adding and removing the link again, asks nothing new).
+- Unchanged: pairs closed and undone before this version get no question; an app may still
+  take back its own new entry when the only card naming it was dismissed. No migration.
 
 ## 2.4.3 - 2026-10-23
 
