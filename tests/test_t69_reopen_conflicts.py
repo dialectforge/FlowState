@@ -343,7 +343,8 @@ def test_erase_covers_the_question(backend):
     _erase(db, f"decision:{c}")
     S.backend.tracker = None
     assert _everywhere(db, "Use DuckDB for hosted storage") == []
-    assert queue_rows(db, "review_items", item["id"]) == []
+    kept = queue_rows(db, "review_items", item["id"])   # the row stays, blanked (task 71)
+    assert len(kept) == 1 and "DuckDB" not in json.dumps(kept)
 
 
 def test_erase_covers_a_long_decision_text_too(backend):
