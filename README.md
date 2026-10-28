@@ -55,6 +55,73 @@ Each window of an app gets its own session, and the brief opens with one line ab
 others did meanwhile (`Since your last visit (Oct 19): Claude Desktop and Grok saved 3 decisions,
 5 changes, 2 todos.`), and nothing when nothing changed.
 
+### When two decisions clash
+
+FlowState doesn't decide which of two decisions is right. It notices when they might clash,
+shows it to every AI, and leaves the choice to you.
+
+How a clash gets flagged:
+- **On its own.** When an AI logs a decision that reads like a current one (similar words, or
+  similar meaning if the optional local model is installed) and doesn't say it replaces it, the
+  decision is still saved and the pair is flagged as a possible conflict, for example
+  `D31 vs D12`. This is matching, not judgement, so some flags turn out to be harmless.
+- **By an AI on purpose.** An AI that sees two entries disagree can flag them with a short
+  topic and up to two evidence snippets (`log_work` with `conflicts_with`, or
+  `manage_links(action="flag_conflict")`). That makes a disagreement card: claim A and claim B
+  side by side, who wrote each, and the evidence.
+
+Where it shows:
+- **The AI's reply.** The `log_work` answer says "Possible conflict with D12 ...", so
+  the AI you are working with can mention it right away. A flagged disagreement comes back with
+  the card as plain text and the review link.
+- **The brief.** Every AI that opens the project sees `Possible conflicts: D31 vs D12`. While
+  a pair is open, the newer decision is tagged as unsettled and the older one's text is left out
+  of "Recent decisions", so no AI follows either one as settled.
+- **The review queue.** Each flag waits for you there: on the review page on your computer, in
+  `flowstate review` in your terminal, and in an AI's `manage_review` list.
+- **Your phone.** With the relay set up and phone links on, your phone review list shows it too.
+- **In-chat tap cards.** In apps on your card list that draw MCP Apps cards (Claude Desktop to
+  start with), the AI can show the card in the chat and you tap your choice.
+
+Who settles it:
+- **You pick the winner.** For a possible conflict you say whether the two really clash or fit
+  together. For a disagreement card you keep the older one, the newer one, or both, or dismiss
+  the card. The one you don't keep is marked superseded, not deleted.
+- **An AI can't pick it for you.** The buttons on an in-chat card carry a one-use code that
+  only the card gets, so the AI can't press them. An AI may pass your choice on only when you
+  said it in that chat, quoting your words, and the app that made a card can't settle it by
+  quoting the card's own text. Through the relay an AI can't settle anything in the chat
+  unless you turn that on (`flowstate relay chat-approvals on`). The quoting rule is checked
+  by wording, not by cryptography (see "Honest limits").
+- **What an AI can do:** say that its own new decision replaces an older one
+  (`log_work(..., replaces=12)` or a "supersedes" link). That closes the flag, and the brief
+  and the edit history show it. If that is later undone or the link is removed, FlowState asks
+  you whether to reopen the conflicts it had closed.
+
+### Who, which model, which machine
+
+Every change FlowState saves (records, edits, review decisions, links, handoffs, hard rules,
+todo claims) keeps who made it. You see it in "Who did what" on the review page, on the
+disagreement card, and through `manage_history(action="who")`.
+- **App:** the name the app reports about itself, for example "Cursor". When the app signed
+  in with a per-app key, a remote token or an approved sign-in through your tunnel or the
+  relay, the sign-in's name is shown beside it if it differs: `Grok Bot (via work-key)`. The
+  app chooses the first name; it can't choose the second. A desktop app that starts FlowState
+  itself, or one on the shared LAN token, has no sign-in of its own, so its name is only what
+  it says.
+- **Model:** the AI model, only when the app reports it (the `model` argument, the
+  `X-FlowState-Model` header, or `FLOWSTATE_MODEL` for a desktop app). FlowState never
+  guesses, so this is often blank.
+- **Machine:** where the change came from. On your own computer that is `FLOWSTATE_WORKSPACE`
+  or the computer's name (or what the app sends); a per-app key can carry its own workspace;
+  over the network it reads like `lan (signed in as ...)`, `relay (signed in as ...)` or
+  `tunnel (signed in as ...)`.
+- **How it was identified:** per-app key, remote token, OAuth sign-in, shared token or
+  self-reported, so you can tell which names the app chose itself.
+
+This is there so you can find a change and undo it. Most of it is what the app says about
+itself; only the sign-in's name is something the app can't pick.
+
 <p align="center"><a href="docs/media/flowstate-side-by-side.mp4"><img src="docs/media/flowstate-side-by-side.gif" width="520" alt="Claude and Grok on an iPhone, side by side, both reading the same FlowState project brief and both knowing what was just shipped from the PC"></a></p>
 
 <p align="center"><em>Worked on my PC with Grok Build, then asked Claude and Grok on my iPhone. Both knew what I did last. (Click for the full-quality video.)</em></p>

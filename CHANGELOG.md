@@ -793,6 +793,36 @@ Brief and defusing
   what" and undo work as before. The erase report gives the number of history rows blanked.
   No migration.
 
+### Delete approvals bound to the exact rows, expired claims, README on conflicts (task 72)
+
+- **A delete approval covers exactly the rows the user was asked about.** With approvals on,
+  a delete request now stores the exact list of rows it would remove, worked out from the
+  database (the record and every record row that goes with it, by id and content, plus the
+  rows that would only lose their link to it). When the user approves, FlowState works the
+  list out again; if a row was added, removed or edited in the meantime, nothing is deleted,
+  the request is closed, and the answer says what changed ("now also deletes change #9").
+  Asking for the delete again makes a new request with the current list. Before, only the
+  number of rows of each kind was compared, so one row swapped for another, or an edited row,
+  went through.
+- Asking again while an out-of-date request is still waiting closes the old one (rejected by
+  "flowstate (automatic)", with the reason) and queues a new one. A delete request queued by
+  an older version has no such list: approving it is refused (`request_outdated`) and it is
+  closed; ask again. Delete requests are no longer answered from the "same write within 2
+  minutes" memory, so asking again right after a request was closed gets a new one (an
+  identical request that is still waiting is still answered with that one).
+- Unchanged: the request's summary, details and an "approve with edits" never change what is
+  deleted; a used or closed request can't be approved again; phone links and card codes stay
+  one-use. Sessions and review items that go with a project or component are still not part
+  of the list (they move on their own while the user decides).
+- **An expired todo claim can't be renewed.** `manage_todos(action="renew")` used to extend a
+  claim its holder had let run out, as long as nobody else had taken it. Now it answers
+  `claim_expired` (holder) or `not_claimed` (anyone else); claim the todo again, which any
+  agent can do once it has expired. Renewing before it expires works as before. Releasing an
+  expired claim answers `released: false` (it was no longer held).
+- README: new sections "When two decisions clash" (how a clash is flagged, where it shows, and
+  that the user picks the winner) and "Who, which model, which machine" (what each change
+  records).
+
 ## 2.4.3 - 2026-10-23
 
 - No new dependencies. One additive database migration (023: three new tables for
