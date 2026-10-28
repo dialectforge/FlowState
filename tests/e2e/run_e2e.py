@@ -1154,6 +1154,34 @@ def s8_backups(W):
     else:
         R.check(8, "manage_memory cleanup asks one plain question for two near-identical todos",
                 False, review_lines(lst))
+    # task 74: a clean-up is bound to the rows it listed; an edit in between voids it
+    cursor.call("log_work", project=P, kind="todo", summary="Order more rye flour from the mill")
+    cc2.call("log_work", project=P, kind="todo", summary="Order more rye flour from the mill!")
+    r = cc1.call("manage_memory", action="cleanup", project=P, kinds=["duplicate"])
+    rye = [x for x in (r.get("item_ids") or []) if "rye flour" in
+           (W.q("SELECT summary FROM review_items WHERE id = ?", (x,))[0]["summary"] or "")]
+    tid = (W.q("SELECT id FROM todos WHERE title LIKE 'Order more rye flour%' ORDER BY id DESC")
+           or [{"id": None}])[0]["id"]
+    if rye and tid:
+        cursor.call("manage_todos", action="update", project=P, todo_id=tid, priority="urgent")
+        before = W.q("SELECT id, status, priority FROM todos ORDER BY id")
+        r = cursor.call("manage_review", action="approve", project=P, item_id=rye[0],
+                     user_request="yes cancel the duplicate rye flour todo")
+        st = W.q("SELECT status, decided_by FROM review_items WHERE id = ?", (rye[0],))[0]
+        R.check(8, "a clean-up whose todo was edited after it was queued changes nothing and is closed",
+                (r or {}).get("error") == "changed_since_request" and f"todo #{tid} was edited" in r.get("message", "")
+                and W.q("SELECT id, status, priority FROM todos ORDER BY id") == before
+                and (st["status"], st["decided_by"]) == ("rejected", "flowstate (automatic)"), short(r, 300))
+        r = cc1.call("manage_memory", action="cleanup", project=P, kinds=["duplicate"])
+        again = r.get("item_ids") or []
+        r2 = cursor.call("manage_review", action="approve", project=P, item_id=again[0] if again else -1,
+                      user_request="yes cancel the duplicate rye flour todo") if again else r
+        R.check(8, "running the clean-up again suggests it anew, and approving that one works",
+                len(again) == 1 and not err(r2)
+                and W.q("SELECT status FROM todos WHERE id = ?", (tid,))[0]["status"] == "cancelled", short(r2, 300))
+    else:
+        R.check(8, "a clean-up whose todo was edited after it was queued changes nothing and is closed",
+                False, short(r, 300))
     # stale, mark_checked, set_source, import
     r = cc1.call("manage_memory", action="stale", project=P, days=0, limit=5)
     R.check(8, "manage_memory stale (days=0 lists facts)", not err(r), r)
