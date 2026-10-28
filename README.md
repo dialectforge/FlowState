@@ -760,7 +760,8 @@ and meaning search indexes, notes that name them, their decision evidence, a tod
 history and the topic of a disagreement card about them, the text of review items they came
 from, every quote of them in review items about them (another item only loses a whole sentence
 quoted from them, 5 words and 30 characters or more, never a short shared phrase), matching events in the automatic session log, and attached files
-FlowState copied in. Records an AI took back with undo count as deleted, and so does a record
+FlowState copied in. Other review items keep their edit history: only the erased text is
+blanked inside it. Records an AI took back with undo count as deleted, and so does a record
 deleted along with its project or component (the project's own delete can still be undone).
 A hard rule you removed can be erased too (`flowstate erase rule:ID`): it stays listed as
 removed, without its text. Then it compacts the database (SQLite's `secure_delete` and

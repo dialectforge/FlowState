@@ -773,6 +773,26 @@ Brief and defusing
 - Unchanged: pairs closed and undone before this version get no question; an app may still
   take back its own new entry when the only card naming it was dismissed. No migration.
 
+### Erase keeps other items' history, without the erased text (task 71)
+
+- **`flowstate erase` no longer deletes the whole edit history of other items.** When it
+  takes an erased record's text out of a review item (a possible-conflict item, a
+  disagreement card's item, or an unrelated item that quoted it), that item's history rows
+  now stay. Only the erased text is replaced by `[erased]` inside them, by the same rules as
+  the item itself: whole quotes and quotes cut short with "..." or "…"; in an item that isn't
+  about the record, only a distinctive sentence (never a short shared phrase). Every stored
+  field of those rows is cleaned: the text before and after an "approve with edits", details,
+  evidence snippets, titles and the payload (also when it was stored as escaped JSON).
+- An item that came from the erased record (or asked to delete it) keeps its history rows,
+  blanked whole, as the item itself is.
+- **Also fixed:** text an "approve with edits" replaced stayed in that item's history when the
+  item no longer showed it. Erase now looks through the history of every review item.
+- Unchanged: the erased record's own history still goes entirely. History rows an older
+  version wrote (fewer columns, a payload stored as an object, a row that isn't JSON) are
+  cleaned the same way; rows without the text stay byte for byte. The history list, "who did
+  what" and undo work as before. The erase report gives the number of history rows blanked.
+  No migration.
+
 ## 2.4.3 - 2026-10-23
 
 - No new dependencies. One additive database migration (023: three new tables for
