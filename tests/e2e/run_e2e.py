@@ -1164,6 +1164,10 @@ def s8_backups(W):
            or [{"id": None}])[0]["id"]
     if rye and tid:
         cursor.call("manage_todos", action="update", project=P, todo_id=tid, priority="urgent")
+        lst = cc1.call("manage_review", action="list", project=P, limit=100)
+        line = [x for x in review_lines(lst) if line_id(x) == rye[0]]
+        R.check(8, "the AI's list line says the clean-up is out of date (task 75)",
+                line and line[0].endswith("(out of date: approving changes nothing)"), line)
         before = W.q("SELECT id, status, priority FROM todos ORDER BY id")
         r = cursor.call("manage_review", action="approve", project=P, item_id=rye[0],
                      user_request="yes cancel the duplicate rye flour todo")
@@ -3029,9 +3033,24 @@ def s22_project_history(W):
                     "each step with its app and machine",
                 h.status_code == 200 and "<h2>Project history</h2>" in h.text
                 and "project created" in h.text and "Repot the lemon tree" in h.text
-                and h.text.index("project created") < h.text.index("Repot the lemon tree")
+                and h.text.index("project created") > h.text.index("Repot the lemon tree")
                 and "by claude-code" in h.text and "by cursor" in h.text and " · on " in h.text,
                 (h.status_code, short(h.text[-300:])))
+        o = hc.get(f"{link}?view=history&project={pid}&order=oldest").text
+        q0 = hc.get(link).text
+        R.check(22, "newest first by default, oldest first on request, and the brief's page links to "
+                    "Project history like Who did what (task 75)",
+                "project created" in o and o.index("project created") < o.index("Repot the lemon tree")
+                and "?view=history'>Project history</a>" in q0 and "?view=who'>Who did what</a>" in q0,
+                short(q0[:400]))
+        other = [r["id"] for r in W.q("SELECT id FROM projects WHERE id != ? ORDER BY id LIMIT 1", (pid,))]
+        tdo = W.q("SELECT id FROM todos WHERE project_id = ? ORDER BY id LIMIT 1", (pid,))
+        if other and tdo:
+            rr = hc.get(f"{link}?view=record&project={other[0]}&type=todo&id={tdo[0]['id']}",
+                        follow_redirects=False)
+            R.check(22, "a record page under another project goes to the record's own project (task 75)",
+                    rr.status_code == 303 and f"project={pid}&" in rr.headers.get("location", ""),
+                    (rr.status_code, rr.headers.get("location")))
         R.check(22, "a decision replaced by another shows as one step, both named",
                 f"decision #{new} replaces decision #{old}" in h.text and "Open the shop at eight" in h.text,
                 short(h.text[-300:]))
