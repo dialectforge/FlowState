@@ -62,13 +62,18 @@ def create_http_app(token: Optional[str], path: str = "/mcp", db_path: Optional[
         from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
         resource = public_url + path
         provider = RA.FlowStateOAuthProvider(store, public_url, resource)
-        routes += create_auth_routes(
-            provider, AnyHttpUrl(public_url),
+        # one exact issuer string, never with a trailing slash (task 78): the SDK's URL type
+        # renders a bare host as "https://host/", which strict issuer comparison (RFC 8414
+        # section 3.3) treats as another issuer than the address
+        issuer = str(AnyHttpUrl(public_url)).rstrip("/")
+        routes += _exact_issuer(create_auth_routes(
+            provider, AnyHttpUrl(issuer),
             client_registration_options=ClientRegistrationOptions(
                 enabled=True, valid_scopes=RA.SCOPES, default_scopes=RA.SCOPES),
-            revocation_options=RevocationOptions(enabled=True))
-        prm = create_protected_resource_routes(AnyHttpUrl(resource), [AnyHttpUrl(public_url)],
-                                               scopes_supported=RA.SCOPES, resource_name="FlowState")
+            revocation_options=RevocationOptions(enabled=True)), issuer)
+        prm = _exact_issuer(create_protected_resource_routes(
+            AnyHttpUrl(resource), [AnyHttpUrl(issuer)], scopes_supported=RA.SCOPES,
+            resource_name="FlowState"), issuer)
         # also at the bare well-known path, for clients that don't add the resource path
         routes += prm + [Route("/.well-known/oauth-protected-resource", prm[0].endpoint,
                                methods=["GET", "OPTIONS"])]
@@ -109,3 +114,51 @@ def create_http_app(token: Optional[str], path: str = "/mcp", db_path: Optional[
 def urlparse_host(url: str) -> str:
     from urllib.parse import urlparse
     return (urlparse(url).hostname or "").lower()
+
+
+def _exact_issuer(routes: list, issuer: str) -> list:
+    """The SDK's routes, with its metadata documents answering `issuer` (authorization server
+    metadata) and `authorization_servers` (protected resource metadata) as the exact string.
+    The SDK keeps both as Pydantic URLs, which add '/' to a bare host when serialized (task
+    78); everything else in the documents, and the endpoints built from the issuer, stay the
+    SDK's."""
+    from starlette.routing import Route
+    return [Route(r.path, _ExactIssuer(r.app, issuer), methods=sorted(r.methods or ()))
+            if r.path.startswith("/.well-known/") else r for r in routes]
+
+
+class _ExactIssuer:
+    """ASGI wrapper (a class, so Starlette's Route passes it through as an app) that rewrites
+    the issuer fields of a 200 JSON answer; any other answer (the CORS preflight) is as is."""
+
+    def __init__(self, app, issuer: str):
+        self.app, self.fields = app, {"issuer": issuer, "authorization_servers": [issuer]}
+
+    async def __call__(self, scope, receive, send):
+        import json
+        start, chunks = None, []
+
+        async def capture(message):
+            nonlocal start
+            if message["type"] == "http.response.start":
+                start = message
+                return
+            if message["type"] != "http.response.body":
+                await send(message)
+                return
+            chunks.append(message.get("body", b""))
+            if message.get("more_body"):
+                return
+            body = b"".join(chunks)
+            try:
+                data = json.loads(body) if start["status"] == 200 else None
+            except ValueError:
+                data = None
+            if isinstance(data, dict):
+                data.update({k: v for k, v in self.fields.items() if k in data})
+                body = json.dumps(data, separators=(",", ":")).encode("utf-8")
+            headers = [(k, v) for k, v in start.get("headers", []) if k.lower() != b"content-length"]
+            await send({**start, "headers": headers + [(b"content-length", str(len(body)).encode())]})
+            await send({"type": "http.response.body", "body": body})
+
+        await self.app(scope, receive, capture)

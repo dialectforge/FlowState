@@ -925,6 +925,20 @@ Brief and defusing
   "none (no record on its list is still there)". Decided clean-ups and other kinds of item are
   shown as before.
 
+### OAuth issuer without a trailing slash (task 78)
+
+- **One exact issuer.** Found by a security reviewer's scan: a relay address, an own tunnel
+  (`--public-url`) and a local public-mode listener published their OAuth issuer with a
+  trailing slash (`https://abc123.fsmcp.com/`), which strict issuer comparison (RFC 8414
+  section 3.3) treats as a different issuer from the address. `issuer` in
+  `/.well-known/oauth-authorization-server` and `authorization_servers` in the protected
+  resource metadata (both `/.well-known/oauth-protected-resource` and
+  `/.well-known/oauth-protected-resource/mcp`) are now the address exactly, without the slash,
+  also when `--public-url` is given with one. The endpoint URLs (`/authorize`, `/token`,
+  `/register`, `/revoke`) and `resource` (`<address>/mcp`) were already right and are
+  unchanged. Apps already connected keep their sign-in: registrations and tokens are not tied
+  to the issuer string. The LAN listener has no OAuth, as before.
+
 ## 2.4.3 - 2026-10-23
 
 - No new dependencies. One additive database migration (023: three new tables for
