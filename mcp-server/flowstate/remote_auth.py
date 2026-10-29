@@ -453,6 +453,13 @@ class AuthStore:
             return None
         return row
 
+    def token_owner(self, token: str):
+        """The token's client, kind and family, live or not (for /revoke: RFC 7009 answers
+        200 for a token that is already invalid, but only its own client may revoke it)."""
+        with self._conn() as c:
+            return c.execute("SELECT client_id, kind, family FROM tokens WHERE hash = ?",
+                             (_h(token),)).fetchone()
+
     def mark_used(self, token: str) -> bool:
         """Single-use tokens (codes, refresh): True only for the first caller."""
         with self._conn() as c:
@@ -654,6 +661,85 @@ class FlowStateOAuthProvider:
                                 {"code_challenge": params.code_challenge,
                                  "redirect_uri": str(params.redirect_uri),
                                  "explicit": params.redirect_uri_provided_explicitly})
+
+
+class RevocationHandler:
+    """POST /revoke, RFC 7009 (task 81), in place of the SDK's. The SDK's request model
+    requires a `client_secret` form field, so a public client (`none`) or one using HTTP Basic
+    got 400 invalid_request, and Basic alone (no `client_id` in the form) got 401. Here the
+    client authenticates the way it registered (Basic, form secret, or `client_id` alone for a
+    public client); the token is looked up whatever its type (`token_type_hint` is only a
+    hint), and only the client it was issued to may revoke it. Revoking an access or refresh
+    token ends that whole grant (both tokens), as refresh-token reuse does."""
+
+    def __init__(self, provider: FlowStateOAuthProvider):
+        self.provider = provider
+
+    async def handle(self, request):
+        from starlette.responses import JSONResponse, Response
+        try:
+            form = await request.form()
+        except Exception:  # noqa: BLE001 - a malformed body is the client's error
+            return JSONResponse({"error": "invalid_request",
+                                 "error_description": "form body expected"}, status_code=400)
+        basic = request.headers.get("authorization", "")[:6].lower() == "basic "
+        client = await self._client(request, form)
+        if client is None:
+            return JSONResponse(
+                {"error": "invalid_client", "error_description": "client authentication failed"},
+                status_code=401,
+                headers={"WWW-Authenticate": 'Basic realm="FlowState"'} if basic else None)
+        token = form.get("token")
+        if not isinstance(token, str) or not token:
+            return JSONResponse({"error": "invalid_request",
+                                 "error_description": "token is required"}, status_code=400)
+        store = self.provider.store
+        row = await asyncio.to_thread(store.token_owner, token)
+        if row and row["kind"] != "code":
+            if row["client_id"] != client.client_id:
+                return JSONResponse({"error": "unauthorized_client", "error_description":
+                                     "the token was not issued to this client"}, status_code=400)
+            if row["kind"] in ("access", "refresh"):
+                await asyncio.to_thread(store.revoke_family, row["family"])
+                log.info("OAuth tokens revoked by client %s", client.client_id)
+        # unknown, already revoked or expired: 200 all the same (RFC 7009 section 2.2)
+        return Response(status_code=200, headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
+
+    async def _client(self, request, form) -> Optional[OAuthClientInformationFull]:
+        import base64
+        import binascii
+        from urllib.parse import unquote
+        auth = request.headers.get("authorization", "")
+        basic_id = basic_secret = None
+        if auth[:6].lower() == "basic ":
+            try:
+                basic_id, basic_secret = base64.b64decode(auth[6:].strip(), validate=True) \
+                    .decode("utf-8").split(":", 1)
+            except (ValueError, UnicodeDecodeError, binascii.Error):
+                return None
+            basic_id, basic_secret = unquote(basic_id), unquote(basic_secret)
+        form_id, form_secret = form.get("client_id"), form.get("client_secret")
+        if basic_id is not None and form_id and form_id != basic_id:
+            return None
+        cid = basic_id or form_id
+        if not isinstance(cid, str) or not cid:
+            return None
+        client = await self.provider.get_client(cid)
+        if client is None:
+            return None
+        method = client.token_endpoint_auth_method or "client_secret_post"
+        if method == "client_secret_basic":
+            given = basic_secret
+        elif method == "client_secret_post":
+            given = form_secret if basic_id is None and isinstance(form_secret, str) else None
+        else:
+            given = None
+        if client.client_secret:
+            if not given or not hmac.compare_digest(client.client_secret.encode(), given.encode()):
+                return None
+            if client.client_secret_expires_at and client.client_secret_expires_at < time.time():
+                return None
+        return client
 
 
 def _token_obj(token: str, row, store: Optional[AuthStore] = None) -> FSAccessToken:

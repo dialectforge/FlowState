@@ -968,6 +968,14 @@ Brief and defusing
   CI are pinned to full commit SHAs.
 - README: FlowState is not on PyPI; the `flowstate` package there is an unrelated project.
 
+### No CORS on the OAuth endpoints, and a working token revocation (task 81)
+
+- `/token`, `/register` and `/revoke` no longer send `Access-Control-Allow-Origin: *` or grant
+  CORS preflights (no FlowState client runs in a browser page; the metadata documents keep it).
+- `/revoke` follows RFC 7009 for Basic, form-secret and public clients (Basic and public ones got
+  400 before): it ends that sign-in's access and refresh token whatever the hint, answers 200 for
+  an unknown token, and refuses another app's token, which stays valid.
+
 ## 2.4.3 - 2026-10-23
 
 - No new dependencies. One additive database migration (023: three new tables for

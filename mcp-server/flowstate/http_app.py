@@ -77,10 +77,10 @@ def create_http_app(token: Optional[str], path: str = "/mcp", db_path: Optional[
                 enabled=True, valid_scopes=RA.SCOPES, default_scopes=RA.SCOPES),
             revocation_options=RevocationOptions(enabled=True))
         audience = settings.resource_server_url if settings.validate_token_resource else None
-        routes += _exact_issuer(create_auth_routes(
+        routes += _exact_issuer(_oauth_endpoints(create_auth_routes(
             provider, settings.issuer_url,
             client_registration_options=settings.client_registration_options,
-            revocation_options=settings.revocation_options), issuer)
+            revocation_options=settings.revocation_options), provider, settings), issuer)
         prm = _exact_issuer(create_protected_resource_routes(
             settings.resource_server_url, [AnyHttpUrl(issuer)], scopes_supported=RA.SCOPES,
             resource_name="FlowState"), issuer)
@@ -125,6 +125,33 @@ def create_http_app(token: Optional[str], path: str = "/mcp", db_path: Optional[
 def urlparse_host(url: str) -> str:
     from urllib.parse import urlparse
     return (urlparse(url).hostname or "").lower()
+
+
+def _oauth_endpoints(routes: list, provider, settings) -> list:
+    """The SDK's auth routes with /token, /register and /revoke built here, without the CORS
+    wrapper the SDK puts around them (`Access-Control-Allow-Origin: *`, preflight granted to
+    any origin; task 81). It is there for OAuth clients running in a browser page; FlowState
+    has none (/mcp sends no CORS headers, so such a client could not use it anyway), and the
+    apps that do connect (claude.ai's servers, Claude Desktop, Cursor, the relay) don't send
+    CORS requests. /token and /register keep the SDK's handlers and body limit; /revoke is
+    FlowState's RFC 7009 handler (remote_auth.RevocationHandler). The metadata documents and
+    /authorize stay the SDK's."""
+    from mcp.server.auth.handlers.register import RegistrationHandler
+    from mcp.server.auth.handlers.token import TokenHandler
+    from mcp.server.auth.middleware.client_auth import ClientAuthenticator
+    from mcp.server.transport_security import (DEFAULT_MAX_REQUEST_BODY_SIZE,
+                                               RequestBodyLimitMiddleware)
+    from starlette.routing import Route, request_response
+    from . import remote_auth as RA
+
+    def app(handler):
+        return RequestBodyLimitMiddleware(request_response(handler), DEFAULT_MAX_REQUEST_BODY_SIZE)
+    own = {"/token": app(TokenHandler(provider, ClientAuthenticator(provider)).handle),
+           "/register": app(RegistrationHandler(
+               provider, options=settings.client_registration_options).handle),
+           "/revoke": app(RA.RevocationHandler(provider).handle)}
+    return [r for r in routes if r.path not in own] + \
+        [Route(p, a, methods=["POST"]) for p, a in own.items()]
 
 
 def _exact_issuer(routes: list, issuer: str) -> list:
