@@ -938,6 +938,10 @@ Brief and defusing
   `/register`, `/revoke`) and `resource` (`<address>/mcp`) were already right and are
   unchanged. Apps already connected keep their sign-in: registrations and tokens are not tied
   to the issuer string. The LAN listener has no OAuth, as before.
+- **Consent link uses the same address as the issuer (task 79).** The link to the passphrase
+  page is now built from the published issuer, so an unusual `--public-url` (a mixed-case host
+  or an explicit default port, such as `https://FlowState.Example.com:443`) no longer sends you
+  to a differently written address. Usual addresses get exactly the same link as before.
 
 ## 2.4.3 - 2026-10-23
 

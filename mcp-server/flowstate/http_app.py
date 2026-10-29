@@ -61,11 +61,12 @@ def create_http_app(token: Optional[str], path: str = "/mcp", db_path: Optional[
                                             create_protected_resource_routes)
         from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
         resource = public_url + path
-        provider = RA.FlowStateOAuthProvider(store, public_url, resource)
         # one exact issuer string, never with a trailing slash (task 78): the SDK's URL type
         # renders a bare host as "https://host/", which strict issuer comparison (RFC 8414
-        # section 3.3) treats as another issuer than the address
-        issuer = str(AnyHttpUrl(public_url)).rstrip("/")
+        # section 3.3) treats as another issuer than the address; the consent link is built
+        # from the same string (task 79)
+        issuer = RA.oauth_issuer(public_url)
+        provider = RA.FlowStateOAuthProvider(store, issuer, resource)
         routes += _exact_issuer(create_auth_routes(
             provider, AnyHttpUrl(issuer),
             client_registration_options=ClientRegistrationOptions(

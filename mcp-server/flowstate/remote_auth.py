@@ -543,6 +543,14 @@ class FSAccessToken(AccessToken):
     former_names: list[str] = []     # its names before `flowstate remote rename` (identity.aka)
 
 
+def oauth_issuer(public_url: str) -> str:
+    """The one issuer string for a public address (task 78): Pydantic's URL clean-up (lower-case
+    host, default port dropped) without the '/' it adds to a bare host. The metadata documents
+    and the consent link both use it (task 79)."""
+    from pydantic import AnyHttpUrl
+    return str(AnyHttpUrl(public_url)).rstrip("/")
+
+
 class FlowStateOAuthProvider:
     """MCP SDK OAuthAuthorizationServerProvider backed by AuthStore. The SDK's handlers do
     the protocol checks (PKCE S256, redirect URI match, grant types); this class decides
@@ -550,7 +558,7 @@ class FlowStateOAuthProvider:
 
     def __init__(self, store: AuthStore, issuer_url: str, resource_url: str):
         self.store = store
-        self.issuer_url = issuer_url.rstrip("/")
+        self.issuer_url = oauth_issuer(issuer_url)
         self.resource_url = resource_url
 
     def _same_resource(self, resource: Optional[str]) -> bool:
