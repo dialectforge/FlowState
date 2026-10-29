@@ -24,7 +24,7 @@ classifiers = [
     "Topic :: Software Development",
 ]
 dependencies = [
-    "mcp>=1.26,<2",
+    "mcp>=1.30,<2",
     "pydantic>=2.0.0",
 ]
 
@@ -34,9 +34,9 @@ Repository = "https://github.com/dialectforge/FlowState"
 Changelog = "https://github.com/dialectforge/FlowState/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
-# The off-site encryption needs `cryptography`. `mcp` already brings it; it is listed here, not in
-# `dependencies`, so 2.4.4 needs no new .venv (`flowstate update` on Windows refuses a release
-# whose dependencies change). Move it into `dependencies` with the next release that changes them.
+# The off-site encryption needs `cryptography`. `mcp` already brings it, so it is listed here, not
+# in `dependencies`. (2.4.4 changes `dependencies` anyway: mcp>=1.30 for two security advisories,
+# so `flowstate update` to 2.4.4 makes a new .venv.)
 offsite = [
     "cryptography>=42",
 ]

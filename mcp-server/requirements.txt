@@ -1,5 +1,5 @@
 # Core dependencies
-mcp>=1.26,<2
+mcp>=1.30,<2
 pydantic>=2.0.0
 cryptography>=42
 

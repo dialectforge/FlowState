@@ -666,7 +666,9 @@ def _token_obj(token: str, row, store: Optional[AuthStore] = None) -> FSAccessTo
 
 class TokenChecker:
     """Bearer check for /mcp: owner token (if allowed), per-client tokens, OAuth tokens, and
-    (LAN listener only, app_keys=True) per-app LAN keys."""
+    (LAN listener only, app_keys=True) per-app LAN keys. Also the SDK's TokenVerifier
+    (verify_token): it reports each token's audience as `resource` and the SDK's bearer check
+    in Gate refuses one not issued for this server (AuthSettings.validate_token_resource, task 80)."""
 
     def __init__(self, store: Optional[AuthStore], master: Optional[str],
                  provider: Optional[FlowStateOAuthProvider] = None, app_keys: bool = False):
@@ -674,11 +676,17 @@ class TokenChecker:
         self.master = master.encode() if master and len(master) >= 16 else None
         self.app_keys = app_keys
 
+    async def verify_token(self, token: str) -> Optional[FSAccessToken]:
+        return await asyncio.to_thread(self.check, token.strip())
+
     def check(self, token: str) -> Optional[FSAccessToken]:
+        # the owner token and per-client tokens are kept by this server alone and open only
+        # it, so their audience is this server's resource (None on the LAN listener: no OAuth)
+        own = self.provider.resource_url if self.provider else None
         if self.master and hmac.compare_digest(token.encode(), self.master):
             return FSAccessToken(token="", client_id="owner", client_name="owner (LAN token)",
                                  scopes=[SCOPE_READ, SCOPE_WRITE, SCOPE_LOCAL],
-                                 identity_source="shared_token")
+                                 identity_source="shared_token", resource=own)
         if self.store and token.startswith(APP_KEY_PREFIX):
             if not self.app_keys:
                 return None   # LAN keys never open the public listener
@@ -689,11 +697,12 @@ class TokenChecker:
         row = self.store.lookup(token, ("access", "static"))
         if not row:
             return None
-        if row["kind"] == "access":
-            if not self.provider or row["resource"] != self.provider.resource_url:
-                return None
+        if row["kind"] == "access" and not self.provider:
+            return None   # OAuth tokens never open the LAN listener
         self.store.touch(row["client_id"])
-        return _token_obj(token, row, self.store)
+        tok = _token_obj(token, row, self.store)
+        # an OAuth token's audience is the resource it was issued for (the SDK compares it)
+        return tok if row["kind"] == "access" else tok.model_copy(update={"resource": own})
 
 
 # ---------------------------------------------------------------- consent page
@@ -957,8 +966,12 @@ class Gate:
     def __init__(self, app, checker: TokenChecker, mcp_path: str,
                  allowed_hosts: Optional[set[str]] = None, trust_proxy: bool = False,
                  resource_metadata_url: Optional[str] = None, peer_resolver=None,
-                 listener: str = "lan"):
+                 listener: str = "lan", resource_server_url=None):
+        from mcp.server.auth.middleware.bearer_auth import BearerAuthBackend
         self.app, self.checker, self.mcp_path = app, checker, mcp_path
+        # the SDK's bearer check; with resource_server_url (AuthSettings with
+        # validate_token_resource) it refuses a token issued for another resource (task 80)
+        self.bearer = BearerAuthBackend(checker, resource_server_url=resource_server_url)
         # which listener this is (lan / public / relay), set here for every request so the
         # popup and the review walk know it from the server's own side, never from a header
         self.listener = listener
@@ -991,8 +1004,7 @@ class Gate:
         scope[LISTENER_KEY] = self.listener
         # the real socket peer (uvicorn runs with proxy_headers=False), never a header; the relay
         # agent also connects from loopback, so only the LAN listener can count as local
-        from starlette.authentication import AuthCredentials
-        from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
+        from starlette.requests import HTTPConnection
         t0 = time.monotonic()
         headers = dict(scope.get("headers") or [])
         scope[LOCAL_KEY] = self.listener == "lan" and \
@@ -1016,7 +1028,8 @@ class Gate:
             if path.rstrip("/") == self.mcp_path:
                 auth = headers.get(b"authorization", b"").decode("latin-1")
                 tok = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
-                info = await asyncio.to_thread(self.checker.check, tok) if tok else None
+                found = await self.bearer.authenticate(HTTPConnection(scope)) if tok else None
+                info = found[1].access_token if found else None
                 if info is None:
                     ok, wait = self.per_ip.allow("ip:" + ip)
                     if not ok:
@@ -1054,8 +1067,7 @@ class Gate:
                     await _json(send_wrapped, 429, {"error": "rate_limited"},
                                 [(b"retry-after", str(wait).encode())])
                     return
-                scope["user"] = AuthenticatedUser(info)
-                scope["auth"] = AuthCredentials(info.scopes)
+                scope["auth"], scope["user"] = found
             elif path != "/health":
                 ok, wait = self.per_ip.allow("ip:" + ip)
                 if not ok:

@@ -53,13 +53,14 @@ def create_http_app(token: Optional[str], path: str = "/mcp", db_path: Optional[
     # their own signed grants
     routes = [Route("/health", health, methods=["GET"])] + approve_routes(lambda: S.backend.db_path) \
         + review_routes(lambda: S.backend.db_path)
-    provider = rmd = None
+    provider = rmd = audience = None
     allowed_hosts = None
     if public_url:
         from pydantic import AnyHttpUrl
         from mcp.server.auth.routes import (build_resource_metadata_url, create_auth_routes,
                                             create_protected_resource_routes)
-        from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
+        from mcp.server.auth.settings import (AuthSettings, ClientRegistrationOptions,
+                                              RevocationOptions)
         resource = public_url + path
         # one exact issuer string, never with a trailing slash (task 78): the SDK's URL type
         # renders a bare host as "https://host/", which strict issuer comparison (RFC 8414
@@ -67,13 +68,21 @@ def create_http_app(token: Optional[str], path: str = "/mcp", db_path: Optional[
         # from the same string (task 79)
         issuer = RA.oauth_issuer(public_url)
         provider = RA.FlowStateOAuthProvider(store, issuer, resource)
-        routes += _exact_issuer(create_auth_routes(
-            provider, AnyHttpUrl(issuer),
+        # validate_token_resource (mcp 1.30, GHSA-w4fh-qvv9-3v23): the bearer check in Gate
+        # takes only tokens issued for `resource`, the one published and put in every token
+        settings = AuthSettings(
+            issuer_url=AnyHttpUrl(issuer), resource_server_url=AnyHttpUrl(resource),
+            validate_token_resource=True,
             client_registration_options=ClientRegistrationOptions(
                 enabled=True, valid_scopes=RA.SCOPES, default_scopes=RA.SCOPES),
-            revocation_options=RevocationOptions(enabled=True)), issuer)
+            revocation_options=RevocationOptions(enabled=True))
+        audience = settings.resource_server_url if settings.validate_token_resource else None
+        routes += _exact_issuer(create_auth_routes(
+            provider, settings.issuer_url,
+            client_registration_options=settings.client_registration_options,
+            revocation_options=settings.revocation_options), issuer)
         prm = _exact_issuer(create_protected_resource_routes(
-            AnyHttpUrl(resource), [AnyHttpUrl(issuer)], scopes_supported=RA.SCOPES,
+            settings.resource_server_url, [AnyHttpUrl(issuer)], scopes_supported=RA.SCOPES,
             resource_name="FlowState"), issuer)
         # also at the bare well-known path, for clients that don't add the resource path
         routes += prm + [Route("/.well-known/oauth-protected-resource", prm[0].endpoint,
@@ -109,7 +118,8 @@ def create_http_app(token: Optional[str], path: str = "/mcp", db_path: Optional[
     return RA.Gate(app, checker, path, allowed_hosts=allowed_hosts,
                    trust_proxy=bool(public_url) if trust_proxy is None else trust_proxy,
                    resource_metadata_url=rmd, peer_resolver=peer_resolver,
-                   listener="relay" if relay else ("public" if public_url else "lan"))
+                   listener="relay" if relay else ("public" if public_url else "lan"),
+                   resource_server_url=audience)
 
 
 def urlparse_host(url: str) -> str:

@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.4.4 - 2026-10-24
+## 2.4.4 - 2026-10-29
 
 ### Upgrading to 2.4.4
 
@@ -33,6 +33,11 @@ Most setups need nothing. Check these after updating:
   review items about it (made from it, naming it, or its disagreement card). Other review items
   lose only a whole sentence quoted from it (5 words and 30 characters or more), never a short
   shared phrase such as a component's name.
+- **2.4.4 needs `mcp` 1.30 or later** (two security fixes), so it comes with a new `.venv`. On
+  macOS and Linux `flowstate update` makes it (quit your AI apps first). On Windows
+  `flowstate update` refuses a release that changes the Python packages: quit your AI apps,
+  then in the FlowState folder run `git pull` and `python setup_flowstate.py` with the options
+  you set it up with (README, "Upgrading", "By hand").
 - **Remote access: update cloudflared to 2026.10.2 or later** (`cloudflared --version`). Older
   versions still trust compromised eMudhra certificates
   (https://blog.cloudflare.com/emudhra-certificate-compromise). `flowstate remote status` now
@@ -40,10 +45,13 @@ Most setups need nothing. Check these after updating:
 
 ### Changes
 
-- No new dependencies. One small migration (024: an empty column on hard rules saying how the
-  user set each one; existing data is not changed). `flowstate update` from 2.4.0 to 2.4.3
-  needs no new `.venv`. The off-site encryption uses the `cryptography` package that already
-  comes with `mcp`; FlowState now lists it as its `offsite` extra (and in requirements.txt).
+- One changed dependency: `mcp>=1.30,<2` (was `>=1.26`), for two security advisories (task 80,
+  below), so `flowstate update` to 2.4.4 makes a new `.venv` (the old one is kept as
+  `.venv.pre-update`; quit every AI app using FlowState first; on Windows update by hand, see
+  "Upgrading to 2.4.4"). One small migration (024: an
+  empty column on hard rules saying how the user set each one; existing data is not changed).
+  The off-site encryption uses the `cryptography` package that already comes with `mcp`;
+  FlowState now lists it as its `offsite` extra (and in requirements.txt).
 - **A name for this FlowState.** Each install now has a display name, "Main FlowState" until
   you change it, so people see a name instead of the relay handle (the random letters in your
   relay address). Change it with `flowstate name "Office laptop"` (no word shows it,
@@ -484,7 +492,7 @@ Off-site copy, backups and file permissions
 - Windows: FlowState's owner-only access lists name your account by its ID, and setup keeps an
   app config file's own access list when it rewrites the file.
 - FlowState now lists `cryptography`, which off-site encryption needs, as its `offsite` extra
-  and in requirements.txt (it still comes with `mcp`, so updating needs no new `.venv`).
+  and in requirements.txt (it still comes with `mcp`, so it adds nothing to install).
 
 Data-git and stored text
 - Data-git: if you sync from several computers, update every one of them to 2.4.4 before
@@ -942,6 +950,23 @@ Brief and defusing
   page is now built from the published issuer, so an unusual `--public-url` (a mixed-case host
   or an explicit default port, such as `https://FlowState.Example.com:443`) no longer sends you
   to a differently written address. Usual addresses get exactly the same link as before.
+
+### Security dependency floor and token audience check (task 80)
+
+- **`mcp` 1.30 or later.** Versions before 1.30.0 are affected by GHSA-w4fh-qvv9-3v23 (a bearer
+  token issued for another server could be accepted) and GHSA-84m7-p3x7-pcfv (Streamable HTTP
+  sessions were never reclaimed, so memory could be run out). 1.30 closes idle sessions after
+  30 minutes and caps them at 10,000; an app whose session was closed starts a new one.
+- **Token audience check.** The tunnel and relay listeners now use the SDK's own check
+  (`AuthSettings(resource_server_url=<address>/mcp, validate_token_resource=True)`): a token
+  is accepted only when it was issued for this FlowState's `resource`. FlowState's tokens have
+  always carried that exact `resource`, so apps already connected keep their sign-in; `resource`
+  and the issuer are unchanged. The LAN listener has no OAuth, as before.
+- **Reproducible test installs.** `requirements-dev.lock` pins every dev/test package with
+  hashes (for Windows, macOS and Linux, Python 3.11 to 3.13); CI installs from it. What
+  `pip install -e mcp-server` installs still comes from `pyproject.toml`. The GitHub Actions in
+  CI are pinned to full commit SHAs.
+- README: FlowState is not on PyPI; the `flowstate` package there is an unrelated project.
 
 ## 2.4.3 - 2026-10-23
 

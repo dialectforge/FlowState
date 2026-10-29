@@ -181,6 +181,10 @@ JSON config with an `mcpServers` object), `--db <file>`, `--python <path>`.
 
 Needs Python 3.11+ and git.
 
+FlowState is not published on PyPI: install it from this repository as shown here. The
+`flowstate` package on PyPI is an unrelated project, so `pip install flowstate` does not
+install this.
+
 ```bash
 git clone https://github.com/dialectforge/FlowState.git FlowState
 cd FlowState
@@ -194,7 +198,9 @@ python setup_flowstate.py --clients claude-desktop --schedule-backups --no-offsi
 ```
 
 `setup_flowstate.py` installs into `.venv` itself, so the `pip install` lines are only needed
-if you want the test tools or manage the venv yourself (then add `--skip-install`). A plain,
+if you want the test tools or manage the venv yourself (then add `--skip-install`). For the exact,
+hash-checked test set CI uses: `pip install --require-hashes -r requirements-dev.lock`, then
+`pip install --no-deps -e mcp-server`. A plain,
 non-editable `pip install mcp-server` (or of a built wheel) works too from 2.4.1 on; in 2.4.0 it
 left out the database schema, so every FlowState call failed, and the failed start left an empty
 database file behind. 2.4.1 sets up such an empty file as a new database, so reinstalling is
@@ -960,8 +966,10 @@ put a `.flowstate-no-self-update` file in the folder (that file wins until you d
 `python setup_flowstate.py --clients <your apps> --verify` with the same options as when you
 set it up, then quit and reopen your AI apps. 2.4.0, the first release that has
 `flowstate update`, has to be installed this way; if you don't have 2.4.0 yet, install the
-newest release (2.4.4) the same way. From 2.4.0, 2.4.1, 2.4.2 or 2.4.3 to 2.4.4 `flowstate update`
-works, on Windows too (2.4.4 needs no new `.venv`). (If your folder is at a release tag instead
+newest release (2.4.4) the same way. 2.4.4 needs a newer `mcp` package (1.30 or later, for two
+security fixes), so `flowstate update` to 2.4.4 makes a new `.venv`: on macOS and Linux it does
+that itself (quit your AI apps first); on Windows it refuses, so update by hand as described
+here, after quitting your AI apps. (If your folder is at a release tag instead
 of `main`, `git pull` says you are not on a branch: run `git fetch --tags` and
 `git checkout v2.4.4` instead.)
 
