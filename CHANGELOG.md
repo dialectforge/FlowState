@@ -1004,6 +1004,9 @@ Brief and defusing
   which rejected a rule typed after `--project` ("unrecognized arguments"). The text may come
   before or after the options; rules with control or invisible characters are refused as
   before.
+- **Test tools:** the `dev` extra adds `httpx2`, which Starlette's test client now uses, and a
+  test sets its cookie on the client, and a new `pytest.ini` sets pytest-asyncio's fixture loop
+  scope, so the suite runs without deprecation warnings. Nothing changes for users. (task 85)
 
 ## 2.4.3 - 2026-10-23
 

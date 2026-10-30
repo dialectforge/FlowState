@@ -212,8 +212,8 @@ def test_sign_out_ends_the_session(tunnel):
     assert r.status_code == 303 and "__Host-fs_review_tunnel=" in r.headers["set-cookie"]
     assert "Owner passphrase" in c.get("/review/tunnel").text
     # the old cookie is dead on the server too
-    r = c.post("/review/tunnel/approve", data={"csrf": csrf, "item_id": str(item)}, headers=ORIGIN,
-               cookies={"__Host-fs_review_tunnel": cookie})
+    c.cookies.set("__Host-fs_review_tunnel", cookie)
+    r = c.post("/review/tunnel/approve", data={"csrf": csrf, "item_id": str(item)}, headers=ORIGIN)
     assert r.status_code == 403 and status(item and db, item)[0] == "pending"
 
 
