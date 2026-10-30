@@ -9,7 +9,7 @@ This module provides:
 """
 
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 from dataclasses import dataclass, field
 
@@ -70,7 +70,6 @@ class StoryGenerator:
         """
         conn = self._conn()
         try:
-            # Get project
             project = conn.execute(
                 "SELECT * FROM projects WHERE id = ?",
                 (project_id,)

@@ -8,7 +8,6 @@ project_not_found, project_mismatch, record_not_found.
 
 import sqlite3
 from pathlib import Path
-from typing import Optional
 
 from . import dbconn
 from .brief import resolve_project

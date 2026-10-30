@@ -46,6 +46,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from . import review_page
+from .urls import no_trailing_slash
 
 log = logging.getLogger("flowstate.review_tunnel")
 
@@ -204,7 +205,7 @@ def routes(db_path_fn, store, public_url: str):
     from .remote_auth import CLIENT_IP_KEY
 
     global PUBLIC_URL
-    PUBLIC_URL = public_url.rstrip("/")
+    PUBLIC_URL = no_trailing_slash(public_url)
     u = urlparse(PUBLIC_URL)
     origin = f"{u.scheme}://{u.netloc}".lower()
     sessions = Sessions()

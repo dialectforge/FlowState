@@ -46,6 +46,7 @@ from mcp.server.auth.provider import (AccessToken, AuthorizationCode, Authorizat
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
 from . import paths
+from .urls import no_trailing_slash
 
 log = logging.getLogger("flowstate.auth")
 access_log = logging.getLogger("flowstate.access")
@@ -555,7 +556,7 @@ def oauth_issuer(public_url: str) -> str:
     host, default port dropped) without the '/' it adds to a bare host. The metadata documents
     and the consent link both use it (task 79)."""
     from pydantic import AnyHttpUrl
-    return str(AnyHttpUrl(public_url)).rstrip("/")
+    return no_trailing_slash(str(AnyHttpUrl(public_url)))
 
 
 class FlowStateOAuthProvider:
@@ -569,7 +570,7 @@ class FlowStateOAuthProvider:
         self.resource_url = resource_url
 
     def _same_resource(self, resource: Optional[str]) -> bool:
-        return resource is None or resource.rstrip("/") == self.resource_url.rstrip("/")
+        return resource is None or no_trailing_slash(resource) == no_trailing_slash(self.resource_url)
 
     async def get_client(self, client_id: str):
         return self.store.oauth_client(client_id)

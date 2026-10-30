@@ -45,7 +45,6 @@ the page too, as it could run `flowstate approve`.
 import hashlib
 import hmac
 import html
-import json
 import os
 import secrets
 import sqlite3

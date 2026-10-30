@@ -976,6 +976,13 @@ Brief and defusing
   400 before): it ends that sign-in's access and refresh token whatever the hint, answers 200 for
   an unknown token, and refuses another app's token, which stays valid.
 
+### Maintenance (internal, task 82)
+
+- Code clean-up, no change in behaviour: removed two unused modules (`server_v14.py`,
+  `split_tools.py`), unused imports and comments that only repeated the code; one helper
+  (`urls.py`) for the trailing '/' on addresses and issuers; an up-to-date `server.py` header,
+  without the byte-order mark at the start of the file.
+
 ## 2.4.3 - 2026-10-23
 
 - No new dependencies. One additive database migration (023: three new tables for

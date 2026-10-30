@@ -58,7 +58,6 @@ def git_init() -> dict:
             paths=_list(unsafe))}
     privatefs.private_dir(utils.data_dir() / "projects")
 
-    # Initialize git
     success, stdout, stderr = _run_git_command(["init"])
     if not success:
         return {"success": False, "error": stderr}
@@ -104,11 +103,9 @@ def git_status() -> dict:
             "error": "Not a git repository. Run git_init first."
         }
     
-    # Get branch
     success, stdout, _ = _run_git_command(["branch", "--show-current"])
     branch = stdout.strip() if success else "unknown"
     
-    # Get remote
     success, stdout, _ = _run_git_command(["remote", "-v"])
     has_remote = bool(stdout.strip())
     remote_url = None
@@ -479,10 +476,8 @@ def git_set_remote(remote_url: str, allow_unchecked: bool = False, checker=None)
     has_origin = "origin" in stdout
 
     if has_origin:
-        # Update existing remote
         success, stdout, stderr = _run_git_command(["remote", "set-url", "origin", remote_url])
     else:
-        # Add new remote
         success, stdout, stderr = _run_git_command(["remote", "add", "origin", remote_url])
 
     if not success:

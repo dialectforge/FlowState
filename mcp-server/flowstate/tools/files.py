@@ -5,7 +5,6 @@ import shutil
 import hashlib
 from pathlib import Path
 from typing import Optional
-from datetime import datetime
 from .utils import get_db, data_dir
 
 def _inside(base: Path, path: Path) -> Path:
@@ -102,7 +101,6 @@ def attach_file(
     if not source_path.exists():
         raise FileNotFoundError(f"File not found: {file_path}")
     
-    # Get project info
     project = db.get_project(project_id)
     if not project:
         raise ValueError(f"Project not found: {project_id}")

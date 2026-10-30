@@ -23,7 +23,6 @@ re-checking; nothing is changed or hidden because of it.
 
 import os
 import re
-import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional

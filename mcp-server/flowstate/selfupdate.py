@@ -37,11 +37,10 @@ import tempfile
 import time
 import urllib.request
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
-from . import paths, updates
+from . import updates
 
 ORIGIN_URLS = ("https://github.com/dialectforge/FlowState", "https://github.com/dialectforge/FlowState.git")
 MIN_GIT = (2, 34)

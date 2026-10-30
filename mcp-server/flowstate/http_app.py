@@ -5,6 +5,8 @@ import asyncio
 from pathlib import Path
 from typing import Optional
 
+from .urls import no_trailing_slash
+
 
 def create_http_app(token: Optional[str], path: str = "/mcp", db_path: Optional[Path] = None,
                     public_url: Optional[str] = None, allow_master_token: bool = False,
@@ -31,7 +33,7 @@ def create_http_app(token: Optional[str], path: str = "/mcp", db_path: Optional[
     path = "/" + path.strip("/")
     store = RA.AuthStore(auth_db)
     if public_url:
-        public_url = public_url.rstrip("/")
+        public_url = no_trailing_slash(public_url)
         master = token if allow_master_token else None
     else:
         if len(token or "") < 16:

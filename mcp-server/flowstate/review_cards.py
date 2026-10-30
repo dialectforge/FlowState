@@ -36,8 +36,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from . import approvals, identity, review
-from .conflict_cards import (CARD_WORDS, _connect, _pretty, client_has_ui, own_refusal, taps_for,
-                             tap_refusal)
+from .conflict_cards import _connect, _pretty, client_has_ui, own_refusal, taps_for, tap_refusal
 
 SHOW_MAX = 5
 REASON_MAX = 300

@@ -14,7 +14,7 @@ so the next run is still a true three-way merge rather than a guess.
 
   python3 flowstate-merge.py --anc A.db --mac M.db --pc P.db --out OUT.db [--apply]
 """
-import argparse, os, shutil, sqlite3, sys, datetime
+import argparse, os, shutil, sqlite3, sys
 
 # parents before children: a row is inserted only after whatever it points at
 ORDER = ["projects", "components", "problems", "solution_attempts", "solutions",

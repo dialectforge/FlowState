@@ -1,10 +1,10 @@
-﻿"""FlowState MCP Server - v2 Phase A.
+"""FlowState MCP server: the tools, the `flowstate` entry point and both transports.
 
 Any MCP client (Claude Desktop, Grok Build, Cursor, Codex, Claude Code, ...) gets:
 initialize instructions, a `start_here` brief (<= 4,000 chars), implicit sessions that
 open on first use and close when idle, a project check on every write, and fail-safe
 behaviour (timeouts and errors come back as tool errors, never as broken connections).
-Transports: stdio (default) and streamable HTTP with a bearer token.
+Transports: stdio (default) and streamable HTTP (http_app.py; LAN key/token, tunnel OAuth, relay).
 """
 
 import asyncio
@@ -48,7 +48,7 @@ from . import secrets_scan
 from .autosession import AutoSessions, ensure_schema
 from .brief import build_brief, candidates_text, resolve_project
 from .database import Database, default_db_path
-from .guard import EXEMPT_ACTIONS, GuardError, WRITES, check_write, explicit_project, is_write, writes_text
+from .guard import EXEMPT_ACTIONS, GuardError, check_write, explicit_project, is_write, writes_text
 
 log = logging.getLogger("flowstate")
 

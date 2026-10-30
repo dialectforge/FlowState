@@ -8,8 +8,6 @@ remove it when it ships.
 - **Category filter when listing learnings.** `get_learnings(category=...)` has no listed
   equivalent: `search` lists learnings but cannot filter by category. Add
   `category` to `search` if anyone needs it.
-- **Dead modules.** `mcp-server/flowstate/server_v14.py` and `split_tools.py` are imported
-  by nothing. Remove them in a cleanup change.
 - **Re-check the Glama score** after the next release. The 2026-10-17 score was taken from an
   older build (descriptions such as "Manage problems." that are not on main).
 - **Older names in error messages.** A few error texts still name the internal operation
