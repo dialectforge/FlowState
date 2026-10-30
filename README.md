@@ -843,6 +843,11 @@ protocol is in [docs/relay-protocol.md](docs/relay-protocol.md).
   wrote the same export file (a project both have), this computer's copy wins at its sync: the
   file is made again from this computer's database each time, so after a sync `export/` shows
   this computer's records. Exports of projects this computer doesn't have are left alone.
+- **Data-git syncs one branch.** A new data-git repository starts on `main`, whatever git's
+  own default is. A computer whose repository is on `master` while the remote uses `main` (or
+  the other way round) moves to the remote's branch at its next `sync` and says so. If the
+  remote has both, with changes this computer hasn't got, `sync` changes nothing and tells you
+  which computer to sync first.
 - **Owner-only files.** What FlowState creates (data and backup folders, the database, backups,
   restores, exports, token files, settings) is readable by your account only: 0700 / 0600 on
   macOS and Linux; on Windows an access list for your account and SYSTEM (the default folders

@@ -171,6 +171,7 @@ def _data_git(a, db: Path) -> int:
             except git_ops.UnsafePath:
                 pass
         say(f"Exported {n} project(s). " + (("Pushed." if r.get("pushed") else r.get("message", ""))
+                                             + _moved(r)
                                              if r.get("success") else f"FAILED: {r.get('error')}"))
         return 0 if r.get("success") else 1
     if act == "migrate":
@@ -189,7 +190,7 @@ def _data_git(a, db: Path) -> int:
             say((f"Taken out of git (kept on this disk): {git_ops._list(gone)}. " if gone else "")
                 + (r.get("message") or ("Pushed. " if r.get("pushed") else "")
                    + "Now run `flowstate data-git sync`. Older commits still hold those files; "
-                     "see the README (data-git)."))
+                     "see the README (data-git).") + _moved(r))
             return 0
         say(f"FAILED: {r.get('error')}")
         return 1
@@ -205,6 +206,15 @@ def _data_git(a, db: Path) -> int:
             f"{'Refused' if r.get('refused') else 'FAILED'}: {r.get('error')}")
         return 0 if r.get("success") else 1
     return 2
+
+
+def _moved(r: dict) -> str:
+    """The remote syncs another branch than this computer's repository started on (`master`
+    and `main`, task 83): this computer now follows the remote's."""
+    if not r.get("moved_from"):
+        return ""
+    return (f" This computer now syncs the remote's branch `{r['branch']}` (it was on "
+            f"`{r['moved_from']}`)." + (f" {r['note']}" if r.get("note") else ""))
 
 
 # ---------------------------------------------------------------- erase
@@ -259,6 +269,16 @@ def cmd_tighten(a) -> int:
 
 
 # ---------------------------------------------------------------- rules
+def take_late_text(a, extra: list) -> bool:
+    """`rules add --project P "TEXT"`: argparse before Python 3.12.7 fills the optional `text`
+    (empty) together with `action`, so a TEXT typed after an option is left over. Take it as the
+    text here; True when it was taken (anything else left over stays an error)."""
+    if getattr(a, "fn", None) is not cmd_rules or a.text is not None or len(extra) != 1:
+        return False
+    a.text = extra[0]
+    return True
+
+
 def cmd_rules(a) -> int:
     from . import rules
     from . import server as S

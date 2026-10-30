@@ -983,6 +983,22 @@ Brief and defusing
   (`urls.py`) for the trailing '/' on addresses and issuers; an up-to-date `server.py` header,
   without the byte-order mark at the start of the file.
 
+### Data-git branch and `rules add` on Linux (task 83)
+
+- **Data-git uses one branch on every computer.** `flowstate data-git init` now starts on
+  `main` whatever git's own default is (it was `master` on many Linux gits and `main` on
+  others, so two computers could each sync their own branch and never see each other's
+  changes). `sync`, `migrate` and `clone` follow the remote's own branch: a computer on
+  `master` joining a remote on `main` (or the other way round) moves its changes to the
+  remote's branch, says so, and takes its name. When the remote already has both `main` and
+  `master` with changes this computer doesn't have, nothing is pulled or pushed and the
+  message says which computer to sync first; the old branch is removed from the remote only
+  once all of it is on the other one.
+- **`flowstate rules add --project P "TEXT"`** works on Python 3.11 and 3.12 before 3.12.7,
+  which rejected a rule typed after `--project` ("unrecognized arguments"). The text may come
+  before or after the options; rules with control or invisible characters are refused as
+  before.
+
 ## 2.4.3 - 2026-10-23
 
 - No new dependencies. One additive database migration (023: three new tables for

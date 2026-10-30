@@ -690,7 +690,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
-    a = build_parser().parse_args(argv)
+    ap = build_parser()
+    a, extra = ap.parse_known_args(argv)
+    if extra and not cli_data.take_late_text(a, extra):
+        ap.error(f"unrecognized arguments: {' '.join(extra)}")
     try:
         return a.fn(a)
     except (sqlite3.Error, OSError, ValueError) as e:

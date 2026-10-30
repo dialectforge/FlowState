@@ -58,7 +58,7 @@ def git_init() -> dict:
             paths=_list(unsafe))}
     privatefs.private_dir(utils.data_dir() / "projects")
 
-    success, stdout, stderr = _run_git_command(["init"])
+    success, stderr = _init_on_main()
     if not success:
         return {"success": False, "error": stderr}
 
@@ -74,6 +74,23 @@ def git_init() -> dict:
     _run_git_command(["commit", "-m", "FlowState initialized"])
 
     return git_status()
+
+
+BRANCH = "main"   # every new data-git repository's branch, whatever git's own default is
+TWINS = ("main", "master")   # the two names git has used for a new repository's branch
+
+
+def _init_on_main() -> tuple:
+    """`git init` on BRANCH: with git's own default (`master` on many Linux gits, `main` on
+    others) two computers would each sync their own branch and never see each other's commits.
+    (success, git's error)"""
+    ok, _o, err = _run_git_command(["init", "-b", BRANCH])
+    if ok:
+        return True, ""
+    ok, _o, err = _run_git_command(["init"])   # git before 2.28 has no -b
+    if ok:
+        ok, _o, err = _run_git_command(["symbolic-ref", "HEAD", f"refs/heads/{BRANCH}"])
+    return ok, err
 
 
 README = """# FlowState Data
@@ -505,6 +522,86 @@ def _remote_refusal(checker=None) -> Optional[dict]:
     return None
 
 
+SPLIT = ("The remote has both `{this}` and `{other}`: a computer that started its data-git "
+         "repository on the other branch name syncs `{other}`, so its changes and this "
+         "computer's don't reach each other. Nothing was pulled or pushed{local}. Run `flowstate "
+         "data-git sync` (or `migrate`, if sync asks for it) with FlowState 2.4.4 or newer on the "
+         "computer that syncs `{other}`: it moves its changes to `{this}`. Then sync here again.")
+NO_BRANCH = ("The remote has the branches {heads} but not `{this}`, and doesn't say which one is "
+             "its main branch, so nothing was pulled or pushed{local}. Pick one by hand with git "
+             "(`git branch -m {this} <branch>` in the data folder), then sync again.")
+
+
+def _remote_branches() -> tuple:
+    """(ok, {branch: sha} on origin, the branch origin's HEAD names or None, error)."""
+    ok, out, err = _run_git_command(["ls-remote", "--symref", "origin", "HEAD", "refs/heads/*"])
+    if not ok:
+        return False, {}, None, err
+    heads, default = {}, None
+    for line in out.splitlines():
+        left, _tab, ref = line.partition("\t")
+        if ref == "HEAD" and left.startswith("ref: refs/heads/"):
+            default = left[len("ref: refs/heads/"):]
+        elif ref.startswith("refs/heads/"):
+            heads[ref[len("refs/heads/"):]] = left
+    return True, heads, default, ""
+
+
+def _has(sha: str, rev: str = "HEAD") -> bool:
+    return _run_git_command(["merge-base", "--is-ancestor", sha, rev])[0]
+
+
+def _pick_branch(here: str, local: str = "") -> dict:
+    """Which of origin's branches this computer (on branch `here`) syncs: origin's own (its
+    HEAD, else its only branch), so a computer whose repository started on `master` joins a
+    remote on `main` (and the other way round) instead of pushing a branch nobody else reads.
+    {"branch": ..., "drop": (old branch, its sha) or None}: `drop` is this computer's old branch
+    on the remote, all of it in this computer's history, removed in the same push. Else
+    {"offline": True, "error": git's} or {"refused": True, "error": ...}."""
+    ok, heads, default, err = _remote_branches()
+    if not ok:
+        return {"offline": True, "error": err}
+    if not heads:   # an empty remote: the first push makes the branch
+        return {"branch": here, "drop": None}
+    branch = default if default in heads else next(iter(heads)) if len(heads) == 1 else here
+    if branch not in heads:
+        return {"refused": True, "error": NO_BRANCH.format(
+            heads=", ".join(f"`{h}`" for h in sorted(heads)), this=here, local=local)}
+    drop = None
+    if branch != here and here in heads:
+        if not _has(heads[here]):
+            return {"refused": True, "error": SPLIT.format(this=branch, other=here, local=local)}
+        drop = (here, heads[here])
+    twin = next((t for t in TWINS if t != branch and t != here and t in heads), None)
+    if branch in TWINS and twin and not _has(heads[twin]):
+        return {"refused": True, "error": SPLIT.format(this=branch, other=twin, local=local)}
+    return {"branch": branch, "drop": drop}
+
+
+def _push_args(branch: str, drop: Optional[tuple], rev: str = "HEAD") -> list:
+    """Push `rev` to origin's `branch`; with `drop`, remove that old branch in the same push,
+    only if it still is where this computer saw it (else neither happens)."""
+    track = ["-u"] if rev == "HEAD" else []
+    if not drop:
+        return ["push", *track, "origin", f"{rev}:refs/heads/{branch}"]
+    old, sha = drop
+    return ["push", "--atomic", *track, "origin", f"--force-with-lease=refs/heads/{old}:{sha}",
+            f"{rev}:refs/heads/{branch}", f":refs/heads/{old}"]
+
+
+def _rename_branch(here: str, branch: str) -> Optional[str]:
+    """After a push to origin's `branch`: this computer's branch takes its name. None when
+    done (or nothing to do), else a note for the user."""
+    if here == branch:
+        return None
+    ok, _o, err = _run_git_command(["branch", "-m", here, branch])
+    if ok:
+        _run_git_command(["branch", "-q", f"--set-upstream-to=origin/{branch}"])
+        return None
+    return (f"This computer's branch is still called `{here}` (git said: {_last_line(err)}); "
+            f"FlowState syncs it with the remote's `{branch}`.")
+
+
 def _fetch(branch: str) -> tuple:
     """(ok, tip sha or None, error). Fetches the remote's branch without merging it."""
     ok, heads, err = _run_git_command(["ls-remote", "--heads", "origin", branch])
@@ -593,16 +690,20 @@ def git_sync(commit_message: Optional[str] = None, checker=None,
     if refused:
         return {"success": False, **local_only, **refused}
 
-    # The remote's side, fetched but not merged: reachable? does the branch exist yet?
-    branch = status.get("branch") or "main"
-    ok, tip, err = _fetch(branch)
+    # The remote's side, fetched but not merged: reachable? which branch? does it exist yet?
+    local = " (your changes are committed locally)" if has_changes else ""
+    here = status.get("branch") or BRANCH
+    pick = _pick_branch(here, local)
+    if pick.get("refused"):
+        return {"success": False, "step": "branch", **local_only, **pick}
+    branch = pick.get("branch") or here
+    ok, tip, err = (False, None, pick["error"]) if pick.get("offline") else _fetch(branch)
     if not ok:
         return {"success": False, "step": "connect", **local_only, "offline": True,
                 "error": "Couldn't reach the remote, so nothing was pushed"
                          + (" (your changes are committed locally)" if has_changes else "")
                          + f". Sync again when it is reachable. Git said: {_last_line(err)}"}
     if tip:   # the remote has this branch: check what it would bring, then bring it in
-        local = " (your changes are committed locally)" if has_changes else ""
         problem = _incoming_problem(tip, local)
         if problem:
             return {"success": False, "step": "pull", "refused": True, **local_only, **problem}
@@ -633,17 +734,24 @@ def git_sync(commit_message: Optional[str] = None, checker=None,
                 return {"success": False, "step": "pull", "refused": True, **local_only,
                         "unsafe": unsafe, "error": UNSAFE_HERE.format(paths=_list(unsafe))}
     # (an empty remote, or a new branch there: the first push creates it)
-    ok, out, err = _run_git_command(["push", "-u", "origin", branch])
+    ok, out, err = _run_git_command(_push_args(branch, pick["drop"]))
     if not ok:
         return {"success": False, "step": "push", **local_only,
                 "error": f"git push failed, so nothing is on the remote: {_last_line(err)}"}
-    return {
+    out = {
         "success": True,
         "committed": has_changes,
         "pushed": True,
         "first_push": not tip,
         "message": commit_message or "FlowState sync"
     }
+    if branch != here:
+        out["branch"] = branch
+        out["moved_from"] = here
+        note = _rename_branch(here, branch)
+        if note:
+            out["note"] = note
+    return out
 
 
 def _clashing() -> list:
@@ -705,13 +813,17 @@ def git_migrate(checker=None, db_path: Optional[Path] = None) -> dict:
     ok, head, _ = _run_git_command(["rev-parse", "--verify", "-q", "HEAD^{commit}"])
     head = head.strip() if ok else ""
     status = git_status()
-    branch = status.get("branch") or "main"
-    tip = None
+    here = branch = status.get("branch") or BRANCH
+    tip, old = None, None
     if status.get("has_remote"):
         refused = _remote_refusal(checker)
         if refused:
             return {"success": False, "pushed": False, **refused}
-        ok, tip, err = _fetch(branch)
+        pick = _pick_branch(here)
+        if pick.get("refused"):
+            return {"success": False, "step": "branch", "pushed": False, **pick}
+        branch, old = pick.get("branch") or here, pick.get("drop")
+        ok, tip, err = (False, None, pick["error"]) if pick.get("offline") else _fetch(branch)
         if not ok:
             return {"success": False, "step": "connect", "offline": True, "pushed": False,
                     "error": "Couldn't reach the remote, so nothing was changed. Run it again "
@@ -773,14 +885,20 @@ def git_migrate(checker=None, db_path: Optional[Path] = None) -> dict:
     write_gitignore()
     out = {"success": True, "untracked": drop or (never_tracked_in(head) if head else []),
            "pushed": False, "restored": missing}
-    if tip and drop:
-        ok, _o, err = _run_git_command(["push", "origin", f"{new}:refs/heads/{branch}"])
+    if tip and (drop or old):
+        ok, _o, err = _run_git_command(_push_args(branch, old, new))
         if not ok:
             out.update(success=False, step="push",
                        error="The remote changed while migrating, so nothing was pushed. Run "
                              f"`flowstate data-git migrate` again. Git said: {_last_line(err)}")
             return out
         out["pushed"] = True
+    if tip and branch != here:
+        out["branch"] = branch
+        out["moved_from"] = here
+        note = _rename_branch(here, branch)
+        if note:
+            out["note"] = note
     return out
 
 
@@ -802,6 +920,21 @@ def _commit_gitignore(base: str, env: dict) -> Optional[str]:
     ok, _o, err = _run_git_command(["update-index", "--add", "--cacheinfo",
                                     f"100644,{sha.strip()},.gitignore"], env=env)
     return None if ok else _last_line(err)
+
+
+def _clone_branch(folder: Path) -> None:
+    """A clone whose HEAD has no commit: the remote is empty (start on BRANCH, not git's own
+    default), or its HEAD names a branch it doesn't have (a bare repository made where git's
+    default is `master`, then given `main`): take the branch it has."""
+    ok, out, _e = _run_git_command(["for-each-ref", "--format=%(refname:lstrip=3)",
+                                    "refs/remotes/origin/"], cwd=folder)
+    have = [b for b in out.split() if b != "HEAD"] if ok else []
+    branch = next((t for t in TWINS if t in have), have[0] if len(have) == 1 else BRANCH)
+    _run_git_command(["symbolic-ref", "HEAD", f"refs/heads/{branch}"], cwd=folder)
+    if branch in have:
+        _run_git_command(["update-ref", f"refs/heads/{branch}", f"refs/remotes/origin/{branch}"],
+                         cwd=folder)
+        _run_git_command(["branch", "-q", f"--set-upstream-to=origin/{branch}"], cwd=folder)
 
 
 def _last_line(text: str) -> str:
@@ -844,6 +977,8 @@ def git_clone(remote_url: str, local_path: Optional[str] = None) -> dict:
         return {"success": False, "error": stderr}
 
     out = {"success": True, "path": str(target_path), "remote_url": remote_url}
+    if not _run_git_command(["rev-parse", "-q", "--verify", "HEAD"], cwd=target_path)[0]:
+        _clone_branch(target_path)
     # links (they would make FlowState write elsewhere on this computer) and .gitattributes /
     # .gitmodules are refused before anything is written (task 56, N6): nothing is checked out
     entries = tree_entries("HEAD", cwd=target_path)
