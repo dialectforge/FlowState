@@ -994,6 +994,12 @@ Brief and defusing
   `master` with changes this computer doesn't have, nothing is pulled or pushed and the
   message says which computer to sync first; the old branch is removed from the remote only
   once all of it is on the other one.
+- **A plain `git clone` of a data-git remote checks out the files.** A bare repository made
+  where git's default is `master` has a default branch that doesn't exist once FlowState pushes
+  `main`, so a plain clone came up empty. `sync` now points a bare repository on this computer
+  (a path or `file://` URL) at the pushed branch. A remote FlowState can't change (ssh, https)
+  still syncs, and `sync` says to set its default branch on the host. A default branch that
+  exists is never changed. (task 84)
 - **`flowstate rules add --project P "TEXT"`** works on Python 3.11 and 3.12 before 3.12.7,
   which rejected a rule typed after `--project` ("unrecognized arguments"). The text may come
   before or after the options; rules with control or invisible characters are refused as

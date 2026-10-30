@@ -6,6 +6,8 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 from . import utils
 
 def _run_git_command(args: list[str], cwd: Optional[Path] = None,
@@ -602,6 +604,36 @@ def _rename_branch(here: str, branch: str) -> Optional[str]:
             f"FlowState syncs it with the remote's `{branch}`.")
 
 
+NO_HEAD_BRANCH = ("The remote's default branch points at a branch that doesn't exist, so a plain "
+                  "`git clone` of it checks out nothing. FlowState can't change that on this "
+                  "remote: set its default branch to `{branch}` in the host's repository "
+                  "settings. Your changes were pushed.")
+
+
+def _local_bare(url: str) -> Optional[str]:
+    """The path of a bare repository on this computer that `url` (a path or file:// URL) names;
+    None for anything else (ssh, https, ...)."""
+    path = url2pathname(urlsplit(url).path) if url.startswith("file://") else url
+    ok, out, _e = _run_git_command(["--git-dir", path, "rev-parse", "--is-bare-repository"])
+    return path if ok and out.strip() == "true" else None
+
+
+def _point_remote_head(branch: str) -> Optional[str]:
+    """After a push to origin's `branch`: a remote whose HEAD names a branch it doesn't have (a
+    bare repository made where git's default is `master`) lists no HEAD. One on this computer
+    gets its HEAD pointed at `branch`, so plain clones check it out; for any other, a warning
+    for the user. A HEAD on a branch that exists is listed, and never changed."""
+    ok, listed, _e = _run_git_command(["ls-remote", "origin", "HEAD"])
+    if not ok or listed.strip():
+        return None
+    ok, url, _e = _run_git_command(["remote", "get-url", "origin"])
+    bare = _local_bare(url.strip()) if ok else None
+    if bare and _run_git_command(["--git-dir", bare, "symbolic-ref", "HEAD",
+                                  f"refs/heads/{branch}"])[0]:
+        return None
+    return NO_HEAD_BRANCH.format(branch=branch)
+
+
 def _fetch(branch: str) -> tuple:
     """(ok, tip sha or None, error). Fetches the remote's branch without merging it."""
     ok, heads, err = _run_git_command(["ls-remote", "--heads", "origin", branch])
@@ -745,6 +777,9 @@ def git_sync(commit_message: Optional[str] = None, checker=None,
         "first_push": not tip,
         "message": commit_message or "FlowState sync"
     }
+    warning = _point_remote_head(branch)
+    if warning:
+        out["warning"] = warning
     if branch != here:
         out["branch"] = branch
         out["moved_from"] = here

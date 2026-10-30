@@ -172,6 +172,7 @@ def _data_git(a, db: Path) -> int:
                 pass
         say(f"Exported {n} project(s). " + (("Pushed." if r.get("pushed") else r.get("message", ""))
                                              + _moved(r)
+                                             + (f" {r['warning']}" if r.get("warning") else "")
                                              if r.get("success") else f"FAILED: {r.get('error')}"))
         return 0 if r.get("success") else 1
     if act == "migrate":
