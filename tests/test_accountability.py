@@ -177,14 +177,41 @@ def test_stdio_identity_self_reported_with_workspace(backend, seeded_db, monkeyp
                    ("log_work", "Test App", "model-one", "ws-desk", "self_reported", "todo")]
 
 
+RANDOM_HOST = "a8Kz3Qm1Xv7Lp2Rt9Bn4Wc6Yd0Hf5Jg_sE-u1"   # like some Mac CI runners
+
+
+@pytest.mark.parametrize("host", [RANDOM_HOST, "ab12cd34" * 8])
+def test_a_random_looking_hostname_still_records_a_machine(monkeypatch, host):
+    from flowstate.secrets_scan import GENERIC_KINDS, scan_text
+    assert scan_text(host) in GENERIC_KINDS and identity.clean(host) is None
+    monkeypatch.delenv("FLOWSTATE_WORKSPACE", raising=False)
+    monkeypatch.setattr(socket, "gethostname", lambda: host)
+    machine = identity.stdio_machine()
+    assert re.fullmatch(r"computer-[0-9a-f]{8}", machine) and not scan_text(machine)
+    assert identity.stdio_machine() == machine        # the same on every run
+    assert identity.local("review-page").machine == machine
+
+
+@pytest.mark.parametrize("host", [
+    "host-" + "AKIA" + "ABCDEFGHIJKLMNOP", "ghp_" + "a1B2" * 9, "sk-ant-" + "a1B2c3D4" * 4,
+    "eyJhbGciOiJI.eyJzdWIiOiIx.c2lnbmF0dXJl", "-----BEGIN RSA PRIVATE KEY-----",
+    # a long random part must not hide the real key next to it
+    RANDOM_HOST + "-ghp_" + "a1B2" * 9])
+def test_a_hostname_with_a_real_key_pattern_records_no_machine(monkeypatch, host):
+    monkeypatch.delenv("FLOWSTATE_WORKSPACE", raising=False)
+    monkeypatch.setattr(socket, "gethostname", lambda: host)
+    assert identity.stdio_machine() is None
+
+
 def test_stdio_machine_defaults_to_hostname_and_model_to_env(backend, seeded_db, monkeypatch):
     monkeypatch.delenv("FLOWSTATE_WORKSPACE", raising=False)
     monkeypatch.setenv("FLOWSTATE_MODEL", "env-model")
+    monkeypatch.setattr(socket, "gethostname", lambda: "test-desk")
     _call(backend, [("rules", {"action": "add", "project": "Alpha", "rule": "No force push"})])
     from conftest import approve_rules   # the app's rule waits for the user (audit D2)
     approve_rules(seeded_db)             # approved, it keeps the asking app's identity
     assert _q(seeded_db, "SELECT app, model, machine, identity_source FROM project_rules") == \
-        [("Test App", "env-model", identity.clean(socket.gethostname()), "self_reported")]
+        [("Test App", "env-model", "test-desk", "self_reported")]
     # the argument wins over the environment
     _call(backend, [("handoff", {"action": "leave", "project": "Alpha", "where_i_was": "x",
                                  "next_step": "y", "model": "arg-model"})])

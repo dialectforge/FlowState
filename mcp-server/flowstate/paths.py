@@ -206,16 +206,22 @@ def _lock(p: Path):
             busy()
         try:
             while True:
-                fd = os.open(str(lock), os.O_CREAT | os.O_RDWR, 0o600)
-                if _try_lock(fd):
-                    try:
-                        same = os.path.samestat(os.fstat(fd), os.stat(str(lock)))
-                    except FileNotFoundError:
-                        same = False
-                    if same:
-                        break
-                    _unlock(fd)   # its holder removed it as we opened it: take the new one
-                os.close(fd)
+                # Windows refuses the open (and the stat) while the last holder's removal of
+                # the file is still going through: a busy lock, not an error.
+                try:
+                    fd = os.open(str(lock), os.O_CREAT | os.O_RDWR, 0o600)
+                except PermissionError:
+                    fd = None
+                if fd is not None:
+                    if _try_lock(fd):
+                        try:
+                            same = os.path.samestat(os.fstat(fd), os.stat(str(lock)))
+                        except (FileNotFoundError, PermissionError):
+                            same = False
+                        if same:
+                            break
+                        _unlock(fd)   # its holder removed it as we opened it: take the new one
+                    os.close(fd)
                 if time.monotonic() > deadline:
                     busy()
                 time.sleep(0.02)

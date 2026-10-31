@@ -19,6 +19,7 @@ N-F33  `flowstate update --rollback` to a version before 2.4.4 warns about the p
 Temp databases and folders only (conftest.py)."""
 
 import argparse
+import errno
 import json
 import os
 import re
@@ -293,6 +294,31 @@ def test_a_crashed_settings_writer_doesnt_block_the_next_one(monkeypatch):
         if proc.poll() is None:
             proc.kill()
         proc.stdout.close()
+
+
+def _refuse_lock_opens(monkeypatch, times):
+    """os.open on the lock file answers as Windows does while the last holder removes it."""
+    real_open, left = os.open, {"n": times}
+
+    def fake(path, *a, **k):
+        if str(path).endswith("config.json.lock") and left["n"] > 0:
+            left["n"] -= 1
+            raise PermissionError(errno.EACCES, "Permission denied", str(path))
+        return real_open(path, *a, **k)
+    monkeypatch.setattr(os, "open", fake)
+
+
+def test_a_lock_file_being_removed_counts_as_busy_and_is_retried(monkeypatch):
+    _refuse_lock_opens(monkeypatch, 3)
+    paths.update_config(lambda c: c.__setitem__("retried", 1))
+    assert paths.load_config()["retried"] == 1
+
+
+def test_a_lock_file_that_stays_refused_ends_in_the_busy_message(monkeypatch):
+    monkeypatch.setattr(paths, "LOCK_WAIT", 0.1)
+    _refuse_lock_opens(monkeypatch, 10 ** 6)
+    with pytest.raises(TimeoutError, match="Another FlowState command is changing"):
+        paths.update_config(lambda c: c.__setitem__("never", 1))
 
 
 def test_writers_in_several_processes_keep_every_change_even_after_a_left_lock():

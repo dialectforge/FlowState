@@ -14,7 +14,8 @@ here so nothing records identity in two different ways:
   model            the AI model name, ONLY when the caller supplies it: the `model` argument,
                    else the X-FlowState-Model header (HTTP), else FLOWSTATE_MODEL (stdio).
                    Never guessed; NULL otherwise.
-  machine          stdio: FLOWSTATE_WORKSPACE, else this computer's host name. Shared LAN
+  machine          stdio: FLOWSTATE_WORKSPACE, else this computer's host name (a random-looking
+                   one as "computer-<8 hex>", see _host_name). Shared LAN
                    token: the X-FlowState-Workspace header. Per-app key: "<the key's
                    workspace, else the header> (signed in as <key name>)", or "lan (signed in
                    as <key name>)" with neither. Remote token / OAuth client on the LAN
@@ -39,6 +40,7 @@ self-reported caller.
 """
 
 import contextvars
+import hashlib
 import os
 import re
 import socket
@@ -112,8 +114,22 @@ def clean(value) -> Optional[str]:
     return None if scan_text(text) else text
 
 
+def _host_name() -> Optional[str]:
+    """This computer's name. A random-looking one (some cloud and CI machines) only looks like
+    a token, so it is recorded as a short label that is the same on every run; a name holding a
+    real key pattern records nothing, as clean() does."""
+    host = socket.gethostname()
+    name = clean(host)
+    if name or not isinstance(host, str):
+        return name
+    from .secrets_scan import GENERIC_KINDS, scan_text
+    if scan_text(" ".join(host.split())) in GENERIC_KINDS:
+        return "computer-" + hashlib.sha256(host.encode("utf-8", "replace")).hexdigest()[:8]
+    return None
+
+
 def stdio_machine() -> Optional[str]:
-    return clean(os.environ.get("FLOWSTATE_WORKSPACE")) or clean(socket.gethostname())
+    return clean(os.environ.get("FLOWSTATE_WORKSPACE")) or _host_name()
 
 
 # "(via ...)" and "(signed in as ...)" are how FlowState shows a key's or sign-in's name next

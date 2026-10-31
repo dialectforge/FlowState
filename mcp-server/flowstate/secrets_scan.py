@@ -41,6 +41,8 @@ _PLACEHOLDER = re.compile(r"^(?:[A-Z][A-Z0-9_]+|.*(?:environ|getenv|\(|\[).*)$")
 _HEX64 = re.compile(r"\b[0-9a-fA-F]{64,}\b")
 _LONG = re.compile(r"[A-Za-z0-9_\-+/=]{32,}")
 _CARD = re.compile(r"(?<![\d-])(?:\d[ -]?){12,18}\d(?![\d-])")
+# The kinds found only by how a value looks, not by a known key format.
+GENERIC_KINDS = frozenset(("64-character hex secret", "high-entropy token"))
 
 
 def _entropy(s: str) -> float:
