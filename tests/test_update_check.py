@@ -295,8 +295,8 @@ def test_manual_wording_when_the_code_has_no_update_command(state, monkeypatch):
     monkeypatch.setattr(updates, "has_update_command", lambda: False)
     line = updates.brief_line("2.4.0")
     assert line == ("FlowState 2.5.0 is out (this computer has 2.4.0). Tell the user once; if they "
-                    "want it: git pull in the FlowState folder, then setup_flowstate.py --verify with "
-                    "the same options as before (https://github.com/dialectforge/FlowState/releases/"
+                    "want it: git fetch --tags, git checkout v2.5.0, then setup_flowstate.py --verify "
+                    "with the same options (https://github.com/dialectforge/FlowState/releases/"
                     "tag/v2.5.0). Never update without being asked.")
     assert "\n" not in line and len(line) < 300 and "run flowstate update" not in line
 
@@ -305,11 +305,11 @@ def test_command_wording_only_with_the_command_and_not_opted_out(state, monkeypa
     _saved(state, latest="2.5.0", url="https://github.com/dialectforge/FlowState/releases/tag/v2.5.0")
     monkeypatch.setattr(updates, "has_update_command", lambda: True)
     line = updates.brief_line("2.4.0")
-    assert "run flowstate update --dry-run" in line and "git pull" not in line
+    assert "run flowstate update --dry-run" in line and "git checkout" not in line
     assert "\n" not in line and len(line) < 300 and line.endswith("Never update without being asked.")
     paths.save_config({"self_update": False})
     line = updates.brief_line("2.4.0")
-    assert "git pull" in line and "run flowstate update" not in line
+    assert "git checkout v2.5.0" in line and "git pull" not in line and "run flowstate update" not in line
 
 
 def test_has_update_command_follows_the_running_code(monkeypatch):

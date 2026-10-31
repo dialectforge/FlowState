@@ -162,6 +162,7 @@ class FakePip:
 
     def install(self, py, folder):
         self.calls.append(("install", str(folder)))
+        self.pyproject = (Path(folder) / "mcp-server" / "pyproject.toml").read_text(encoding="utf-8")
         if self.fail:
             raise SU.StepFailed("installing packages", "pip: no matching distribution")
 
@@ -312,6 +313,94 @@ def test_happy_path_with_a_dependency_change(world):
     assert (w.install / ".venv" / "marker.txt").read_text() == "new venv"
     assert (w.install / ".venv.pre-update" / "marker.txt").read_text() == "old venv"
     assert updates.read_state(w.state)["last_update"]["venv_swapped"] is True
+
+
+def test_a_new_venv_gets_the_releases_packages_not_the_installed_copys(world):
+    w = world
+    w.release("2.5.0", deps='["mcp>=1.30,<2", "pydantic>=2.0.0"]')
+    up = make(w)
+    assert up.run(yes=True, user_said="update please") == 0, text(w)
+    assert "mcp>=1.30,<2" in up.pip.pyproject and "1.26" not in up.pip.pyproject
+
+
+def _with_the_old_gitignore(w):
+    """The install as 2.4.3 left it: a .gitignore that doesn't list .venv.pre-update/."""
+    (w.seed / ".gitignore").write_text(".venv/\n", encoding="utf-8")
+    w.commit("the .gitignore releases up to 2.4.3 had")
+    git(w.seed, "push", "-q", "origin", "main", tmp=w.tmp)
+    git(w.install, "pull", "-q", tmp=w.tmp)
+    (w.install / ".venv.pre-update").mkdir()
+    (w.install / ".venv.pre-update" / "marker.txt").write_text("x", encoding="utf-8")
+    assert ".venv.pre-update/" in git(w.install, "status", "--porcelain", tmp=w.tmp)
+    shutil.rmtree(w.install / ".venv.pre-update")
+
+
+def _the_repos_gitignore(w):
+    shutil.copy(Path(__file__).resolve().parents[1] / ".gitignore", w.seed / ".gitignore")
+
+
+def test_the_repos_gitignore_keeps_the_folder_clean_for_the_next_update(world):
+    """A real .gitignore from this repo: after an update that set the old .venv aside, the
+    updater's own preflight passes, so the next update isn't refused as "local changes"."""
+    w = world
+    _with_the_old_gitignore(w)
+    _the_repos_gitignore(w)
+    w.release("2.5.0", deps='["mcp>=1.30,<2", "pydantic>=2.0.0"]')
+    assert make(w).run(yes=True, user_said="update please") == 0, text(w)
+    assert (w.install / ".venv.pre-update" / "marker.txt").exists()
+    assert git(w.install, "status", "--porcelain", "--untracked-files=normal", tmp=w.tmp) == ""
+    make(w, running_version="2.5.0").preflight()
+    w.release("2.6.0", deps='["mcp>=1.31,<2", "pydantic>=2.0.0"]')
+    assert make(w, version="2.6.0", running_version="2.5.0").run(yes=True, user_said="again") == 0, text(w)
+
+
+def test_the_repos_gitignore_lets_rollback_through_after_a_new_venv(world):
+    w = world
+    _with_the_old_gitignore(w)
+    _the_repos_gitignore(w)
+    old = w.head()
+    w.release("2.5.0", deps='["mcp>=1.30,<2", "pydantic>=2.0.0"]')
+    assert make(w).run(yes=True, user_said="update please") == 0, text(w)
+    back = make(w, running_version="2.5.0")
+    assert back.rollback(yes=True, user_said="go back") == 0, text(w)
+    assert w.head() == old
+    assert (w.install / ".venv" / "marker.txt").read_text() == "old venv"
+    assert not (w.install / ".venv.pre-update").exists()
+
+
+def test_every_folder_the_updater_leaves_is_ignored(world):
+    """Whatever a run with a new .venv adds to the folder, git doesn't list it."""
+    w = world
+    _the_repos_gitignore(w)
+    w.release("2.5.0", deps='["mcp>=1.30,<2", "pydantic>=2.0.0"]')
+    assert make(w).run(yes=True, user_said="update please") == 0, text(w)
+    ignored = git(w.install, "status", "--porcelain", "--ignored", tmp=w.tmp).splitlines()
+    assert ignored == ["!! .venv.pre-update/", "!! .venv/"]
+
+
+def test_a_local_commit_after_an_update_on_main_is_still_refused(world):
+    """origin/main stays behind the installed release (only the tag is fetched); that release
+    doesn't count as a local commit, and a commit made on top of it does."""
+    w = world
+    w.release("2.5.0")
+    assert make(w).run(yes=True, user_said="update please") == 0, text(w)
+    assert git(w.install, "rev-list", "--count", "origin/main..HEAD", tmp=w.tmp) == "1"
+    make(w, running_version="2.5.0").preflight()
+    (w.install / "mine.txt").write_text("x", encoding="utf-8")
+    git(w.install, "add", "-A", tmp=w.tmp)
+    git(w.install, "commit", "-q", "-m", "my own commit", tmp=w.tmp)
+    with pytest.raises(SU.Refused, match="main has 1 local commit"):
+        make(w, running_version="2.5.0").preflight()
+
+
+def test_the_plan_sends_the_user_to_their_own_terminal(world):
+    w = world
+    w.release("2.5.0")
+    up = make(w)
+    assert up.run(dry_run=True) == 0, text(w)
+    out = text(w)
+    assert f"quit your AI apps, then run `{up.python} -m flowstate update` in your own terminal" in out
+    assert "must not run it for you" in out
 
 
 def test_dry_run_changes_nothing(world):
@@ -504,6 +593,15 @@ def test_yes_needs_the_users_words(world):
     assert_nothing_changed(w, before, up)
 
 
+def test_manual_steps_work_at_a_release_tag(tmp_path):
+    steps = SU.manual_steps(tmp_path, "v2.5.0")
+    assert "git pull" not in steps
+    for part in ("git fetch --tags", "git checkout v2.5.0", "setup_flowstate.py",
+                 "HTTP and relay services", "reopen your AI apps"):
+        assert part in steps
+    assert "git checkout v<newest version>" in SU.manual_steps(tmp_path)
+
+
 def test_without_yes_and_no_terminal_it_refuses(world, monkeypatch):
     w = world
     w.release("2.5.0")
@@ -665,6 +763,7 @@ def test_dependency_change_from_inside_the_venv_on_windows_is_refused_up_front(w
     w.release("2.5.0", deps='["mcp>=1.30,<2"]')
     monkeypatch.setattr(SU.Updater, "_runs_from_this_venv", lambda self: True)
     _refused(w, make(w), "changes FlowState's Python packages", "same .venv", before=snapshot(w))
+    assert "git fetch --tags" in text(w) and "`git checkout v2.5.0`" in text(w)
     w.out.clear()
     assert make(w).run(dry_run=True) == 1 and "changes FlowState's Python packages" in text(w)
 

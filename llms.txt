@@ -13,7 +13,7 @@ Repository: https://github.com/dialectforge/FlowState
 
 ## Using it
 
-- Local FlowState makes one network call: once a day it asks GitHub whether there is a newer release. It sends nothing about you or your projects (only what any web request reveals: your IP address). Turn it off with `flowstate update check off`. A newer release shows as one line on top of the brief; agents tell the user once and never update FlowState unless asked. When the user asks, the agent runs `flowstate update --dry-run` in a terminal on that computer, shows the plan, then `flowstate update --yes --user-said "<the user's words>"` (installs only a release whose tag is signed with a key the installed copy lists; backs up, migrates, restarts the services, and rolls back on any failure).
+- Local FlowState makes one network call: once a day it asks GitHub whether there is a newer release. It sends nothing about you or your projects (only what any web request reveals: your IP address). Turn it off with `flowstate update check off`. A newer release shows as one line on top of the brief; agents tell the user once and never update FlowState unless asked. When the user asks, the agent runs `flowstate update --dry-run` in a terminal on that computer and shows the plan; it doesn't run `--yes` while its own app is running FlowState, and tells the user to quit their AI apps and run `flowstate update` in their own terminal (installs only a release whose tag is signed with a key the installed copy lists; backs up, migrates, restarts the services, and rolls back on any failure).
 
 - [AGENTS.md#how-agents-should-use-flowstate-once-its-connected](AGENTS.md#how-agents-should-use-flowstate-once-its-connected): the rules the server sends every client
 - [skills/flowstate/SKILL.md](skills/flowstate/SKILL.md): the Agent Skill (the FlowState routine for any AI)
@@ -24,6 +24,7 @@ Repository: https://github.com/dialectforge/FlowState
 
 ## Docs
 
+- [docs/WHAT-TO-ASK.md](docs/WHAT-TO-ASK.md): what you can ask FlowState in plain words, and what happens for each request
 - [AGENTS.md#http-server](AGENTS.md#http-server): HTTP server, per-app keys for local/LAN (`flowstate keys add/list/revoke`), headers X-FlowState-Model / X-FlowState-Workspace
 - [docs/REMOTE-ACCESS.md](docs/REMOTE-ACCESS.md): optional remote access for cloud AIs (Cloudflare Tunnel, OAuth 2.1 approval, per-app tokens, security notes, step-by-step setup)
 - [docs/relay-protocol.md](docs/relay-protocol.md): the optional FlowState Relay (enroll, run, status, certificates, error codes)

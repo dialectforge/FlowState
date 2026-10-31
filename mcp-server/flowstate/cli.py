@@ -22,10 +22,13 @@ Plain-language output; exit code 0 = OK, 1 = failed / refused. Never prints a to
 """
 
 import argparse
+import re
 import sqlite3
 import sys
 from datetime import datetime
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from typing import Optional
 
 from . import paths
 
@@ -58,11 +61,35 @@ def _offsite_cfg() -> dict:
 
 
 # ---------------------------------------------------------------- commands
+MIN_MCP = (1, 30)                  # pyproject.toml's mcp>=1.30 (a test checks)
+
+
+def old_packages() -> Optional[str]:
+    """Why this .venv is too old for this code, else None. `flowstate update` from 2.4.0-2.4.3
+    is that older copy's code: it installs from ITS pyproject.toml, and this migrate is the first
+    code of the new release it runs, so a failure here makes it roll back (it prints the last
+    300 characters)."""
+    try:
+        have = version("mcp")
+    except PackageNotFoundError:
+        return None
+    m = re.match(r"(\d+)\.(\d+)", have)
+    if not m or (int(m.group(1)), int(m.group(2))) >= MIN_MCP:
+        return None
+    return (f"Not migrated: this FlowState needs mcp {MIN_MCP[0]}.{MIN_MCP[1]} or later and its .venv "
+            f"has {have}. Quit your AI apps, git checkout this release and run setup_flowstate.py "
+            f"with your usual options (README, \"Upgrading\", \"By hand\").")
+
+
 def cmd_migrate(a) -> int:
     from .migrations import migrate, pending
     db = _db(a)
     if not db.is_file():
         say(f"No database at {db}.")
+        return 1
+    too_old = None if a.dry_run else old_packages()
+    if too_old:
+        say(too_old)
         return 1
     todo = pending(db)
     if not todo:

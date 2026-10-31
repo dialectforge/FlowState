@@ -12,7 +12,8 @@ running, git 2.34+ and ssh-keygen present; (2) the newest release, fetched fresh
 newer; (3) fetch only that tag and verify its SSH signature against `release_signers` READ
 FROM THIS COPY before anything changes (an empty list, an unsigned tag, an unknown key or any
 verify error: nothing is changed); (4) a `pre-update` backup of the database; (5) stop this
-folder's services; (6) git to the tag (a fresh `.venv` only when the dependencies changed);
+folder's services; (6) git to the tag (when the dependencies changed: a fresh `.venv` first, and
+the packages installed after the move, so pip reads the release's own pyproject.toml);
 (7) migrate with the new code; (8) start the services and check them. Any failure from (5) on
 rolls back on its own: git back to the exact old branch and commit, the old `.venv` back, the
 old services started. The database is never put back or overwritten automatically (migrations
@@ -71,10 +72,11 @@ class StepFailed(Exception):
         self.step, self.detail = step, detail
 
 
-def manual_steps(folder: Path) -> str:
-    return (f"To update by hand: in {folder} run `git pull`, then `python setup_flowstate.py "
-            f"--clients <your apps> --verify` (the same options as when you set it up), then quit "
-            f"and reopen your AI apps.")
+def manual_steps(folder: Path, tag: Optional[str] = None) -> str:
+    return (f"To update by hand: quit your AI apps, then in {folder} run `git fetch --tags`, "
+            f"`git checkout {tag or 'v<newest version>'}` and `python setup_flowstate.py --clients "
+            f"<your apps> --verify` (the same options as when you set it up). Then restart "
+            f"FlowState's HTTP and relay services if you run them, and reopen your AI apps.")
 
 
 def _norm(p) -> str:
@@ -427,7 +429,7 @@ class Updater:
         if not for_rollback:
             if branch == "main":
                 plan.mode = "main"
-                ahead = self.git.out("rev-list", "--count", "origin/main..HEAD")
+                ahead = self.git.out("rev-list", "--count", "HEAD", "--not", "origin/main", *self._last_release())
                 if ahead is None:
                     why.append("there is no origin/main to compare main with")
                 elif ahead != "0":
@@ -442,6 +444,15 @@ class Updater:
         if why:
             raise Refused(*why, dev_setup=dev)
         return plan
+
+    def _last_release(self) -> list:
+        """The commit the last update installed: only the tag is fetched, so origin/main here
+        stays behind it, and it would count as a local commit on main at the next update."""
+        last = updates.read_state(self.state_path).get("last_update") or {}
+        sha = last.get("to_sha")
+        if last.get("result") != "ok" or not sha or self.git.run("cat-file", "-e", f"{sha}^{{commit}}").returncode:
+            return []
+        return [sha]
 
     # ------------------------------------------------------------ target and signature
     def pick_target(self) -> dict:
@@ -633,8 +644,7 @@ class Updater:
         tty = open_terminal()
         if tty is None:
             raise Refused("this asks you to confirm in a terminal, and there is none here (piped input "
-                          "doesn't count). Run it yourself in a terminal window, or have your AI run "
-                          'it with --yes --user-said "<your words>"')
+                          "doesn't count). Quit your AI apps and run it yourself in a terminal window")
         try:
             ans = tty.ask(question + " Type y to go ahead: ")
         finally:
@@ -661,8 +671,9 @@ class Updater:
             lines.append("- Not running, left alone: " + ", ".join(s.name for s in idle) + ".")
         lines.append("- AI apps using this folder's FlowState (not stopped; restart them afterwards): "
                      + (", ".join(f"pid {p['pid']}" for p in plan.apps) or "none") + ".")
-        lines.append(f"- Code: {how}; " + ("the dependencies changed: a new .venv is made (the old one is "
-                                           "kept as .venv.pre-update; every AI app must be quit first)."
+        lines.append(f"- Code: {how}; " + ("the dependencies changed: a new .venv gets the release's packages "
+                                           "(the old one is kept as .venv.pre-update; every AI app must "
+                                           "be quit first)."
                                            if plan.deps_changed else "the dependencies are the same (no pip)."))
         lines.append("- Then: start the services again and check them. Any failure puts the old version back.")
         return lines
@@ -697,8 +708,9 @@ class Updater:
                 self.say(f"FlowState update plan, {self.running} -> {plan.target['latest']} (dry run: nothing was changed):")
                 for line in self._describe(plan):
                     self.say(line)
-                self.say('To do it: flowstate update --yes --user-said "<the user\'s own words>" '
-                         "(only when the user asked for it).")
+                self.say(f"To do it: quit your AI apps, then run `{self.python} -m flowstate update` in "
+                         f"your own terminal. An AI app running FlowState from this folder must not run "
+                         f"it for you; any other uses --yes --user-said \"<the user's own words>\".")
                 return 0
             for line in self._describe(plan):
                 self.say(line)
@@ -710,20 +722,20 @@ class Updater:
                 lock.unlink(missing_ok=True)
                 raise
         except Refused as e:
-            return self._refused(e)
+            return self._refused(e, plan.target.get("tag"))
         try:
             return self._apply(plan, words, app)
         finally:
             lock.unlink(missing_ok=True)
 
-    def _refused(self, e: Refused) -> int:
+    def _refused(self, e: Refused, tag: Optional[str] = None) -> int:
         first = "This is a developer setup; update it by hand. " if e.dev_setup else ""
         reasons = e.reasons
         if len(reasons) == 1 and reasons[0].startswith("FlowState can't verify"):
-            self.say(f"{reasons[0]}. Nothing was changed. {manual_steps(self.folder)}")
+            self.say(f"{reasons[0]}. Nothing was changed. {manual_steps(self.folder, tag)}")
         else:
             self.say(f"{first}Not updated: " + "; ".join(reasons) + ". Nothing was changed.")
-            self.say(manual_steps(self.folder))
+            self.say(manual_steps(self.folder, tag))
         return 1
 
     def _apply(self, plan: Plan, words: str, app: str) -> int:
@@ -758,6 +770,9 @@ class Updater:
                  else self.git.run("checkout", "-q", "--detach", plan.ref))
             if r.returncode != 0:
                 raise StepFailed(step, _last(r.stderr))
+            if plan.deps_changed:           # after the move: pip reads the release's pyproject.toml
+                step = "installing packages"
+                self.pip.install(self.python, self.folder)
             if self.db.is_file():
                 step = "migrating the database"
                 self.migrator.migrate(self.python, self.folder, self.db)
@@ -796,7 +811,6 @@ class Updater:
         done["venv"] = True
         self.say("Making a new .venv (the old one is kept as .venv.pre-update)...")
         self.pip.create_venv(self.venv)
-        self.pip.install(self.python, self.folder)
 
     def _restore(self, plan: Plan, done: dict) -> list:
         """Put the old code, branch and .venv back. Returns problems (empty when all went back)."""
