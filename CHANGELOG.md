@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.4.5 - 2026-10-31
+
+### Fixed
+
+- **A computer with a long random host name is recorded again.** Some cloud and CI machines have
+  a name that looks like a token to the secret check, so the "machine" of a change was left
+  empty. Such a name is now recorded as a short label, `computer-` plus 8 characters, the same on
+  every run. A name that holds a real key format still records nothing.
+- **Windows: settings writers no longer crash when several run at once.** While one writer's lock
+  file was being removed, the next could get "Permission denied" on `config.json.lock`. That now
+  counts as busy: it waits and tries again, then says another FlowState command is changing the
+  settings.
+
+### Tests and CI
+
+- Three tests that could not pass on Windows now run there: the drive-without-permissions test
+  checks what Windows really does (icacls fails on a drive without access lists), the `file://`
+  test builds a proper Windows URL, and the stand-in for ssh is a Python script instead of a `sh`
+  one.
+- The CI test job lists the 25 slowest tests and stops after 150 minutes.
+
 ## 2.4.4 - 2026-10-30
 
 ### Upgrading to 2.4.4

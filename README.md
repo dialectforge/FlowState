@@ -1017,15 +1017,15 @@ afterwards: the setup script doesn't do that for you. Then, in the FlowState fol
 
 ```bash
 git fetch --tags
-git checkout v2.4.4
+git checkout v2.4.5
 python setup_flowstate.py --clients <your apps> --verify
 ```
 
 Use your normal Python (`python3` on macOS and Linux, `py -3` if that is your command on Windows),
 and add the other options you used when you set it up. The script keeps your `.venv`, updates the
-packages in it to what 2.4.4 needs, and migrates your database. Then reopen your AI apps. These
+packages in it to what the release needs, and migrates your database. Then reopen your AI apps. These
 steps work from `main` or from a release tag, and they are how to install the newest release
-(2.4.4) if you don't have 2.4.0 yet. Git stops at the checkout if you have local changes. For a
+(2.4.5) if you don't have 2.4.0 yet. Git stops at the checkout if you have local changes. For a
 later release, use its tag.
 
 ### From v1.1
