@@ -5,6 +5,9 @@ as it is and the sync says so. git is told `init.defaultBranch=master` through t
 so these tests fail without the fix on any computer. Temp folders and local bare repositories
 only; the "ssh" remote runs through a stand-in for ssh, nothing leaves this computer."""
 
+import sys
+from pathlib import Path
+
 import pytest
 
 from flowstate import cli, cli_data
@@ -22,20 +25,31 @@ def _plain_clone(remote, where):
     return where
 
 
+FAKE_SSH = """
+import re, shlex, subprocess, sys
+if sys.argv[1] == "-G":      # git asking which kind of ssh this is: a plain one
+    sys.exit(1)
+verb, path = shlex.split(sys.argv[-1])     # git-upload-pack '/the/path'
+path = re.sub(r"^/(?=[A-Za-z]:)", "", path)    # /C:/the/path on Windows
+sys.exit(subprocess.call(["git", verb.removeprefix("git-"), path]))
+"""
+
+
 @pytest.fixture
 def fake_ssh(tmp_path, monkeypatch):
     """`ssh` that runs the remote command here, so the remote really is an ssh:// one."""
-    script = tmp_path / "fake-ssh.sh"
-    script.write_text('for last; do :; done\nPATH="$(git --exec-path):$PATH"\n'
-                      'exec sh -c "$last"\n', encoding="utf-8")
-    monkeypatch.setenv("GIT_SSH_COMMAND", f"sh '{script.as_posix()}'")
+    script = tmp_path / "fake_ssh.py"
+    script.write_text(FAKE_SSH, encoding="utf-8")
+    monkeypatch.setenv("GIT_SSH_COMMAND",
+                       f'"{Path(sys.executable).as_posix()}" "{script.as_posix()}"')
+    monkeypatch.setenv("MSYS2_ARG_CONV_EXCL", "*")   # Git for Windows' sh: leave the path alone
 
 
 @pytest.mark.parametrize("form", ["path", "file-url"])
 def test_a_plain_clone_after_the_first_push_checks_out_the_files(master_git, tmp_path, form):
     remote = _bare(tmp_path)
     assert _head(remote) == "refs/heads/master"
-    url = remote if form == "path" else f"file://{remote}"
+    url = remote if form == "path" else Path(remote).as_uri()
     a = _computer(tmp_path, "A", url)
     r = on(a, git_ops.git_sync, "A")
     assert r["pushed"] and "warning" not in r, r
@@ -73,7 +87,7 @@ def test_a_head_on_a_branch_that_exists_is_left_alone(master_git, tmp_path):
 def test_a_remote_it_cant_change_still_syncs_and_says_so(master_git, fake_ssh, tmp_path, capsys,
                                                          monkeypatch):
     remote = _bare(tmp_path)
-    url = f"ssh://git.example.invalid{remote}"
+    url = f"ssh://git.example.invalid/{Path(remote).as_posix().lstrip('/')}"
     a = _computer(tmp_path, "A", url)
     r = on(a, git_ops.git_sync, "A")
     assert r["success"] and r["pushed"], r

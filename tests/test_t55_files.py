@@ -56,10 +56,28 @@ def _setup_offsite(monkeypatch):
 
 
 # ================================================================ N-F7 drives without permissions
+def _no_access_lists(monkeypatch):
+    """What Windows does on FAT / exFAT: FlowState never calls chmod there; icacls fails and the
+    volume says it keeps no access lists."""
+    from flowstate import privatefs
+    real_run = subprocess.run
+
+    def run(cmd, **kw):
+        if cmd[0] == "icacls":
+            return subprocess.CompletedProcess(cmd, 1, b"", b"The request is not supported.\r\n")
+        return real_run(cmd, **kw)
+    monkeypatch.setattr(privatefs.subprocess, "run", run)
+    monkeypatch.setattr(privatefs, "_volume", lambda p: ("exFAT", False))
+
+
 @pytest.fixture
 def no_permissions(monkeypatch):
-    """A drive like exFAT / SMB: chmod and fchmod refused, mkdir with a mode refused."""
+    """A drive like exFAT / SMB: chmod and fchmod refused, mkdir with a mode refused, and on
+    Windows no access lists."""
     from flowstate import privatefs
+
+    if not POSIX:
+        _no_access_lists(monkeypatch)
 
     def refuse(*a, **k):
         raise PermissionError(errno.EPERM, "Operation not permitted")
@@ -75,8 +93,7 @@ def no_permissions(monkeypatch):
     monkeypatch.setattr(privatefs, "_warned", set(), raising=False)
 
 
-def test_nf7_database_backup_restore_export_and_settings_work_without_permissions(
-        tmp_path, no_permissions, caplog, monkeypatch):
+def _works_on_the_drive_and_warns_once(tmp_path, caplog, monkeypatch):
     from flowstate import backup, paths, privatefs
     from flowstate.database import init_db
     caplog.set_level(logging.WARNING, logger="flowstate.privatefs")
@@ -95,6 +112,22 @@ def test_nf7_database_backup_restore_export_and_settings_work_without_permission
     warned = [r.getMessage() for r in caplog.records
               if "doesn't support file permissions" in r.getMessage()]
     assert len(warned) == 1 and "may be readable by other users of this computer" in warned[0]
+
+
+def test_nf7_database_backup_restore_export_and_settings_work_without_permissions(
+        tmp_path, no_permissions, caplog, monkeypatch):
+    _works_on_the_drive_and_warns_once(tmp_path, caplog, monkeypatch)
+
+
+def test_nf7_the_windows_path_warns_too_on_a_drive_without_access_lists(tmp_path, caplog,
+                                                                        monkeypatch):
+    """Windows mocked (as in test_t61_tighten), so this runs on every computer."""
+    from flowstate import privatefs
+    monkeypatch.setattr(privatefs, "_windows", lambda: True)
+    monkeypatch.setattr(privatefs, "_account", lambda: "*S-1-5-21-1000-1000-1000-1001")
+    monkeypatch.setattr(privatefs, "_warned", set(), raising=False)
+    _no_access_lists(monkeypatch)
+    _works_on_the_drive_and_warns_once(tmp_path, caplog, monkeypatch)
 
 
 def test_nf7_tighten_and_auto_tighten_tolerate_a_refusing_drive(tmp_path, no_permissions):
