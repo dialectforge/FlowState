@@ -41,7 +41,7 @@ FRESH_SECONDS = 24 * 3600          # check again after a day
 RETRY_SECONDS = 6 * 3600           # ... or after 6 hours when the last check failed
 STAMP_STALE_SECONDS = 120          # a "checking" stamp older than this is ignored
 STATE_NAME = "update.json"
-MANUAL_STEPS = "git pull in the FlowState folder, then setup_flowstate.py --verify with the same options as before"
+MANUAL_STEPS = "git fetch --tags, git checkout v{latest}, then setup_flowstate.py --verify with the same options"
 
 Fetch = Callable[[str, dict, float], tuple]   # (url, headers, timeout) -> (status, headers, body)
 
@@ -386,7 +386,7 @@ def brief_line(running_version: str, path: Optional[Path] = None) -> Optional[st
             how = (f"; if they want it, run flowstate update --dry-run and show them the plan "
                    f"({url}).")
         else:
-            how = f"; if they want it: {MANUAL_STEPS} ({url})."
+            how = f"; if they want it: {MANUAL_STEPS.format(latest=latest)} ({url})."
         line = head + how + " Never update without being asked."
         return line if len(line) < 300 else head + f" ({url}). Never update without being asked."
     except Exception:  # noqa: BLE001

@@ -1,9 +1,12 @@
 """Numbered migrations: fresh DBs, Phase A DBs, idempotence, backup first, additive only."""
 
+import re
 import sqlite3
+from pathlib import Path
 
 import pytest
 
+from flowstate import cli
 from flowstate import migrations as M
 
 
@@ -106,6 +109,44 @@ def test_real_db_copy_migrates_additively(real_db_copy, tmp_path):
     assert before == after
     assert {"review_items", "schema_migrations"} <= _tables(real_db_copy)
     assert M.pending(real_db_copy) == []
+
+
+def _pyproject_mcp():
+    text = (Path(__file__).resolve().parents[1] / "mcp-server" / "pyproject.toml").read_text(encoding="utf-8")
+    return re.search(r'"mcp>=(\d+)\.(\d+),<2"', text).groups()
+
+
+def test_min_mcp_is_the_pyproject_one():
+    assert tuple(map(str, cli.MIN_MCP)) == _pyproject_mcp()
+
+
+@pytest.mark.parametrize("have, too_old", [("1.26.0", True), ("1.29.9", True), ("0.9", True),
+                                           ("1.30.0", False), ("1.31", False), ("2.0.0", False)])
+def test_old_packages_reads_the_installed_mcp(monkeypatch, have, too_old):
+    monkeypatch.setattr(cli, "version", lambda name: have)
+    assert bool(cli.old_packages()) is too_old
+
+
+def test_old_packages_fits_the_older_updaters_300_characters(monkeypatch):
+    monkeypatch.setattr(cli, "version", lambda name: "1.26.0")
+    assert len(cli.old_packages()) < 300 and "setup_flowstate.py" in cli.old_packages()
+
+
+def test_old_packages_without_mcp_metadata_says_nothing(monkeypatch):
+    def missing(name):
+        raise cli.PackageNotFoundError(name)
+    monkeypatch.setattr(cli, "version", missing)
+    assert cli.old_packages() is None
+
+
+def test_migrate_refuses_a_venv_older_than_the_code(seeded_db, monkeypatch, capsys):
+    """What 2.4.0-2.4.3's updater meets: it installs from its own package list, then runs this
+    migrate from the new code. Exit 1 makes it roll back; nothing was migrated."""
+    monkeypatch.setattr(cli, "version", lambda name: "1.26.0")
+    before = _tables(seeded_db)
+    assert cli.main(["migrate", "--db", str(seeded_db)]) == 1
+    assert "needs mcp 1.30 or later" in capsys.readouterr().out and _tables(seeded_db) == before
+    assert cli.main(["migrate", "--db", str(seeded_db), "--dry-run"]) == 0
 
 
 def test_cli_migrate(seeded_db, tmp_path, capsys):

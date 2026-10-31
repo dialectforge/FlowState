@@ -935,7 +935,7 @@ FlowState/
 ├── database/schema.sql     # base SQLite schema (kept the same as mcp-server/flowstate/schema.sql)
 ├── skills/flowstate/       # the Agent Skill
 ├── scripts/                # helpers: HTTP check, Cloudflare Tunnel template, Windows launchers
-├── docs/                   # REMOTE-ACCESS.md and notes
+├── docs/                   # WHAT-TO-ASK.md (plain-word requests), REMOTE-ACCESS.md and notes
 └── tests/                  # pytest suite (temporary folders only; guard_site/ refuses real data)
 ```
 
@@ -957,9 +957,10 @@ project. Update with `flowstate update` or by hand, as shown here.
 **From 2.4.0 on: `flowstate update`.** Ask your AI to "update FlowState" (it needs an app that can
 run terminal commands on the computer where FlowState runs; there is no tool for this). It runs
 `<venv python> -m flowstate update --dry-run` in a terminal on this computer and shows you the
-plan, then `<venv python> -m flowstate update --yes --user-said "<your words>"`. Or run
-`<venv python> -m flowstate update` yourself: it asks you to type `y` in your terminal. To reach
-2.4.4 there are limits, see "Updating to 2.4.4" below. It:
+plan. Then quit your AI apps and run `<venv python> -m flowstate update` in your own terminal: it
+asks you to type `y`. An app that isn't running this FlowState itself can do that step for you
+with `--yes --user-said "<your words>"`; one that is doesn't. To reach 2.4.4 there are limits, see
+"Updating to 2.4.4" below. It:
 
 1. refuses, and changes nothing, unless this folder is a plain clone of
    `github.com/dialectforge/FlowState` with no local changes, at a release tag or on `main`
@@ -971,10 +972,10 @@ plan, then `<venv python> -m flowstate update --yes --user-said "<your words>"`.
 3. backs up your database (labelled `pre-update`, kept at least 7 days);
 4. stops this folder's FlowState services (scheduled tasks, LaunchAgents or systemd user units
    that run from this folder; your AI apps are listed, not stopped), moves the code to the new
-   tag (a fresh `.venv` only when the release changes the Python packages, and then every app
-   must be quit first; on Windows such a release is refused up front, because the command runs
-   from that `.venv`: update it by hand), migrates the database, starts the services again and
-   checks them;
+   tag (a fresh `.venv` with the release's own packages only when the release changes them, and
+   then every app must be quit first; on Windows such a release is refused up front, because the
+   command runs from that `.venv`: update it by hand), migrates the database, starts the services
+   again and checks them;
 5. if anything in step 4 fails, it puts the old version back on its own: the same commit and
    branch, the same `.venv`, the old services. Your database is never put back or overwritten
    (migrations only add tables and columns, so the old version reads it as it is).
@@ -999,16 +1000,16 @@ two security fixes), which limits how you can get there:
   as it does in the usual setup. Such an app can run `--dry-run` and show you the plan, but
   the real update stops at the new `.venv` and puts the old version back. So read the plan, quit
   your AI apps, and run `<venv python> -m flowstate update` in your own terminal. An AI app that
-  doesn't use this folder's `.venv` can run it for you.
+  doesn't use this folder's `.venv` can run it for you. These versions install from their own
+  package list, which allows an older `mcp`. A new `.venv` normally gets the newest 1.x anyway;
+  if it gets one older than 1.30, 2.4.4 refuses to migrate and the update puts the old version
+  back. Then update by hand, below.
 - **2.4.0 to 2.4.3 on Windows:** `flowstate update` refuses 2.4.4, dry run included, and changes
   nothing: the command runs from the `.venv` it would have to replace. Update by hand, below.
 - **Older than 2.4.0:** there is no `flowstate update` yet. Update by hand, below.
 
-After `flowstate update` makes a new `.venv`, git lists `.venv.pre-update/` as a new file, so
-`flowstate update --rollback` and the next `flowstate update` refuse with "the folder has local
-changes". To keep the option of going back, run `echo .venv.pre-update/ >> .git/info/exclude` in
-the FlowState folder. Once you are happy with the new version, you can delete the
-`.venv.pre-update` folder instead; `--rollback` then can't put the old packages back.
+Once you are happy with the new version, you can delete the `.venv.pre-update` folder;
+`--rollback` then can't put the old packages back.
 
 **By hand (and to install 2.4.0 or later the first time).** Quit your AI apps. If FlowState's HTTP
 server or relay runs as a service or scheduled task, stop it first and start it again

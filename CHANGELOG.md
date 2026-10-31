@@ -35,9 +35,10 @@ Most setups need nothing. Check these after updating:
   shared phrase such as a component's name.
 - **2.4.4 needs `mcp` 1.30 or later** (two security fixes), so it comes with a new `.venv`. On
   macOS and Linux `flowstate update` makes it (quit your AI apps first). On Windows
-  `flowstate update` refuses a release that changes the Python packages: quit your AI apps,
-  then in the FlowState folder run `git pull` and `python setup_flowstate.py` with the options
-  you set it up with (README, "Upgrading", "By hand").
+  `flowstate update` refuses a release that changes the Python packages. Quit your AI apps, then
+  in the FlowState folder run `git fetch --tags`, `git checkout v2.4.4` and
+  `python setup_flowstate.py` with the options you set it up with. Restart FlowState's HTTP and
+  relay services if you run them, and reopen your AI apps (README, "Upgrading", "By hand").
 - **Remote access: update cloudflared to 2026.10.2 or later** (`cloudflared --version`). Older
   versions still trust compromised eMudhra certificates
   (https://blog.cloudflare.com/emudhra-certificate-compromise). `flowstate remote status` now
@@ -45,6 +46,17 @@ Most setups need nothing. Check these after updating:
 
 ### Changes
 
+- `flowstate update` now installs a new `.venv`'s packages after moving the code, so they come
+  from the release's own `pyproject.toml`, not the installed copy's. Updates from 2.4.0 to 2.4.3
+  still run their own older steps: `flowstate migrate` now refuses, and the update rolls back, if
+  the `.venv` has an `mcp` older than 1.30 (task 87).
+- `.venv.pre-update/` is ignored by git, so after an update that made a new `.venv`,
+  `flowstate update --rollback` and the next update are no longer refused as "local changes". A
+  release installed on `main` no longer counts as a local commit at the next update.
+  Agents no longer run `flowstate update --yes` while their own app is running FlowState: they
+  show the plan and you run `flowstate update` in your own terminal. The steps to update by hand
+  work at a release tag (`git fetch --tags`, `git checkout v<version>`), not only on `main`
+  (task 87).
 - New guide, "What you can ask FlowState" ([docs/WHAT-TO-ASK.md](docs/WHAT-TO-ASK.md)): plain-word
   requests for each thing FlowState does and what happens; the README has a short version and
   its MCP tools table now lists the four card tools (task 86).

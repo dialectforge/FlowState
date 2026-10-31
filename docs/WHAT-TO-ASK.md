@@ -160,6 +160,10 @@ What happens: the AI deletes only when you ask. FlowState first takes a safety c
 everything removed in the edit history, so undo brings it all back. The answer says in one
 line what went and how to undo it. If you turned approvals on, the delete waits for you.
 
+Apps connected with a per-app key, a remote token or an OAuth sign-in can't delete. They also
+can't ask for a delete or approve one. Delete from an app on the computer where FlowState runs,
+or one using the owner's LAN token.
+
 ## Updating FlowState
 
 - "Is there a new version of FlowState?"
@@ -188,7 +192,7 @@ If the AI does the wrong thing, say it another way.
 ## Where the cards show
 
 Tap cards show in apps that support MCP Apps. On Oct 30, 2026 they were checked in Claude
-Desktop, claude.ai and the Claude iPhone app. (Through the relay or your own tunnel, FlowState
+Desktop and the Claude iPhone app. (Through the relay or your own tunnel, FlowState
 first asks you once on your review page: "Allow tap cards in \<app\>?" Tap Allow.)
 
 Apps that don't draw cards, such as Grok today, show the same items as text plus a review

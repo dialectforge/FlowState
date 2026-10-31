@@ -9,6 +9,7 @@ __pycache__/
 dist/
 *.egg
 .venv/
+.venv.pre-update/
 venv/
 
 # IDE

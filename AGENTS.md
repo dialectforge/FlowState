@@ -132,7 +132,7 @@ All commands run with the venv Python: `<venv python> -m flowstate <command>`.
 | file permissions (user) | `flowstate tighten [--dry-run] [--dir DIR]`: make FlowState's existing files owner-only (`--dir`, repeatable: also a backups folder chosen with `backup --dir`) |
 | LAN remote tokens (user) | `flowstate remote lan-tokens [on\|off]` (off by default: remote tokens are refused on the plain-HTTP LAN listener from other computers) |
 | approvals (user) | `flowstate approvals` shows them; `approvals on [--project P]`: an AI's deletes and turning review off wait for the user (popup, phone link, terminal); `approvals off` asks for `y` on the terminal; `approvals phone on\|off`; `approvals popup add\|remove [--sign-in] NAME`; `approvals cards add\|remove [--sign-in] NAME` (apps whose in-chat card taps count; an app on a network sign-in is also offered them once in the review queue, decided only on the review / phone pages: `approvals cards offers on\|off`, `approvals cards offer-again NAME`; starts with `claude-ai` and `local-agent-mode-*`, which cover Claude Desktop's chat and Cowork mode on this computer only; for an app on a key, token or OAuth sign-in, use `--sign-in` with that sign-in's own name; popups go only to apps on this computer: stdio by app name, the LAN listener by sign-in name); adding an app asks for `y` |
-| update FlowState (only when the user asks) | `flowstate update --dry-run` (the plan; changes nothing), then `flowstate update --yes --user-said "<the user's words>"` (or without `--yes`: the user types `y` in their terminal); `flowstate update --rollback`. Signed releases only; see README "Upgrading" |
+| update FlowState (only when the user asks) | `flowstate update --dry-run` (the plan; changes nothing). Show the plan, then the user quits their AI apps and runs `flowstate update` in their own terminal (they type `y`). Don't run `--yes` while your own app is running FlowState; an app that doesn't can use `flowstate update --yes --user-said "<the user's words>"`. `flowstate update --rollback`. Signed releases only; see README "Upgrading" |
 | update check | `flowstate update check` shows it; `update check on\|off\|now` (once a day from `start_here`, asks GitHub for the newest release; sends nothing about you) |
 | this FlowState's name (user) | `flowstate name` shows it; `flowstate name "New name"` (1-40 characters) / `flowstate name --reset` (back to "Main FlowState"); also on the `flowstate review-page` Settings. Only a label for the user's own pages and (once the user sets one; never the default) flowstatemcp.com; the relay address stays the same |
 | updates by `flowstate update` (user) | `flowstate update self-update` shows whether it may update this computer and why; `update self-update on\|off` changes it (config.json `"self_update"`; a `.flowstate-no-self-update` file keeps it off until the user deletes it) |
@@ -450,9 +450,11 @@ don't show server instructions:
    long gap, use the `manage_history(action="who", since=...)` call it gives. A line on top
    `FlowState X.Y.Z is out (this computer has ...)` comes from the daily update check: tell the
    user once, and never update FlowState unless they ask. When they ask, run
-   `flowstate update --dry-run` in a terminal on that computer, show them the plan, then
-   `flowstate update --yes --user-said "<their words>"` (there is no tool for it, so a remote app
-   can't update anyone's computer). `FlowState was updated to X; this app still runs Y` means:
+   `flowstate update --dry-run` in a terminal on that computer and show them the plan. Don't run
+   `flowstate update --yes` while your own app is running FlowState: a release that changes the
+   Python packages stops at the new `.venv` and rolls back, and even without that your app keeps
+   running the old code. Tell the user to quit their AI apps and run `flowstate update` in their
+   own terminal (there is no tool for it, so a remote app can't update anyone's computer). `FlowState was updated to X; this app still runs Y` means:
    ask the user to restart the app. Local FlowState makes one network
    call: once a day it asks GitHub whether there is a newer release. It sends nothing about you
    or your projects (only what any web request reveals: your IP address). Turn it off with

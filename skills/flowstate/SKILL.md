@@ -39,8 +39,9 @@ since you last looked" mean a shared component changed in another project: tell 
 and look at the update todo. `start_here(..., size="quick")` for a short check-in,
 `size="deep"` after a long break. A line on top saying a newer FlowState is out comes from the
 daily update check: tell the user once; never update FlowState unless they ask. When they do,
-run `flowstate update --dry-run` in a terminal on that computer, show them the plan, then
-`flowstate update --yes --user-said "<their words>"`. "FlowState was updated to X; this app
+run `flowstate update --dry-run` in a terminal on that computer and show them the plan. Don't
+run `flowstate update --yes` while your own app is running FlowState: tell them to quit their
+AI apps and run `flowstate update` in their own terminal. "FlowState was updated to X; this app
 still runs Y" means: ask the user to restart this app.
 
 When the user states a hard rule for a project ("never push to main"), ask for it:
