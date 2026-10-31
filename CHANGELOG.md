@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.4.4 - 2026-10-29
+## 2.4.4 - 2026-10-30
 
 ### Upgrading to 2.4.4
 
@@ -45,6 +45,9 @@ Most setups need nothing. Check these after updating:
 
 ### Changes
 
+- New guide, "What you can ask FlowState" ([docs/WHAT-TO-ASK.md](docs/WHAT-TO-ASK.md)): plain-word
+  requests for each thing FlowState does and what happens; the README has a short version and
+  its MCP tools table now lists the four card tools (task 86).
 - One changed dependency: `mcp>=1.30,<2` (was `>=1.26`), for two security advisories (task 80,
   below), so `flowstate update` to 2.4.4 makes a new `.venv` (the old one is kept as
   `.venv.pre-update`; quit every AI app using FlowState first; on Windows update by hand, see

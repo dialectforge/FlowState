@@ -209,6 +209,18 @@ snippets for every app, if you'd rather edit configs by hand, are in [AGENTS.md]
 
 ---
 
+## What you can ask FlowState
+
+You don't need commands. Talk to your AI app in plain words, and it uses FlowState for you:
+
+- "What was I working on in Atlas?"
+- "Save a decision: we're using Postgres, not SQLite, because of multiple users."
+- "What should I do next in Atlas?"
+- "What did we decide about the database?"
+- "What's waiting for me in FlowState?"
+
+The full list, with what each request does, is in [docs/WHAT-TO-ASK.md](docs/WHAT-TO-ASK.md).
+
 ## The FlowState skill
 
 [`skills/flowstate`](skills/flowstate/SKILL.md) is an Agent Skill: a short set of habits (read
@@ -653,8 +665,9 @@ the venv active). Add `-h` to any command for its options.
 
 ## MCP tools
 
-12 tools by default. Every name starts with a verb; tools that do several things are
-`manage_<things>` and take an `action`. The first three are the ones every agent needs.
+12 tools by default, plus 4 card tools for apps that draw cards (see the end of the table).
+Every name starts with a verb; tools that do several things are `manage_<things>` and take an
+`action`. The first three are the ones every agent needs.
 
 | Tool | What it does |
 |---|---|
@@ -670,6 +683,10 @@ the venv active). Add `-h` to any command for its options.
 | `manage_history` | See edits; undo the last change to a record; `action="who"`: who did what (app, model, machine), with filters |
 | `manage_projects` | Projects and components: list, create, update, list_components, add_component, update_component; delete / delete_component only when you ask (undoable; with approvals on they wait for you) |
 | `manage_memory` | Upkeep: cleanup suggestions and memory imports (to the review queue), stale facts, mark checked, set source; delete one record when you ask (undoable; with approvals on it waits for you) |
+| `show_review_card` | Only in apps that draw cards and are on your card list. Shows what's waiting (one item, or up to 5, oldest first) as cards you tap. Read-only |
+| `show_conflict_card` | Same apps. Shows a disagreement as a card: Keep A, Keep B or Keep both. Read-only |
+| `resolve_review_card` | Same apps. Hidden from the AI: the card calls it when you tap, and it refuses chat text |
+| `resolve_conflict_card` | Same apps. Hidden from the AI: the card calls it when you tap, and it refuses chat text |
 
 With `FLOWSTATE_TOOLS=full` six specialist tools are listed too: `manage_sessions` (sessions
 also run automatically), `manage_files` (file attachments), `manage_data_git` (git for the
@@ -934,17 +951,23 @@ one line on top of the brief; your AI tells you once. Nothing updates on its own
 `flowstate update check off` (or the setting `FLOWSTATE_UPDATE_CHECK=0`) turns the check off
 completely: no request, no line. `flowstate update check on` turns it back on.
 
-**From 2.4.0 on: `flowstate update`.** Ask your AI to "update FlowState". It runs
+FlowState is not on PyPI. Never use `pip install --upgrade flowstate`: that name is an unrelated
+project. Update with `flowstate update` or by hand, as shown here.
+
+**From 2.4.0 on: `flowstate update`.** Ask your AI to "update FlowState" (it needs an app that can
+run terminal commands on the computer where FlowState runs; there is no tool for this). It runs
 `<venv python> -m flowstate update --dry-run` in a terminal on this computer and shows you the
 plan, then `<venv python> -m flowstate update --yes --user-said "<your words>"`. Or run
-`<venv python> -m flowstate update` yourself: it asks you to type `y` in your terminal. It:
+`<venv python> -m flowstate update` yourself: it asks you to type `y` in your terminal. To reach
+2.4.4 there are limits, see "Updating to 2.4.4" below. It:
 
 1. refuses, and changes nothing, unless this folder is a plain clone of
    `github.com/dialectforge/FlowState` with no local changes, at a release tag or on `main`
    with no commits of your own, with one worktree and a real `.venv` folder;
 2. downloads only the newest release's tag and checks that it is signed with a FlowState release
    key listed in the copy you already have (`mcp-server/flowstate/release_signers`). An unsigned
-   tag, an unknown key, a missing `ssh-keygen` or any check error: nothing is changed;
+   tag, an unknown key, a missing `ssh-keygen`, git older than 2.34 or any check error: nothing
+   is changed;
 3. backs up your database (labelled `pre-update`, kept at least 7 days);
 4. stops this folder's FlowState services (scheduled tasks, LaunchAgents or systemd user units
    that run from this folder; your AI apps are listed, not stopped), moves the code to the new
@@ -967,16 +990,42 @@ update it by hand. To turn `flowstate update` off on a computer, run
 `on` turns it back on, and with no word it shows the value), use the review page's Settings, or
 put a `.flowstate-no-self-update` file in the folder (that file wins until you delete it).
 
-**By hand (and to install 2.4.0 or later the first time).** In the FlowState folder run `git pull`, then
-`python setup_flowstate.py --clients <your apps> --verify` with the same options as when you
-set it up, then quit and reopen your AI apps. 2.4.0, the first release that has
-`flowstate update`, has to be installed this way; if you don't have 2.4.0 yet, install the
-newest release (2.4.4) the same way. 2.4.4 needs a newer `mcp` package (1.30 or later, for two
-security fixes), so `flowstate update` to 2.4.4 makes a new `.venv`: on macOS and Linux it does
-that itself (quit your AI apps first); on Windows it refuses, so update by hand as described
-here, after quitting your AI apps. (If your folder is at a release tag instead
-of `main`, `git pull` says you are not on a branch: run `git fetch --tags` and
-`git checkout v2.4.4` instead.)
+**Updating to 2.4.4.** 2.4.4 changes FlowState's Python packages (it needs `mcp>=1.30,<2`, for
+two security fixes), which limits how you can get there:
+
+- **2.4.0 to 2.4.3 on macOS or Linux:** `flowstate update` works and makes a new `.venv` itself
+  (the old one is kept as `.venv.pre-update`). Every program using this folder's `.venv` must be
+  quit first, and that includes the AI app you are asking if its FlowState runs from this folder,
+  as it does in the usual setup. Such an app can run `--dry-run` and show you the plan, but
+  the real update stops at the new `.venv` and puts the old version back. So read the plan, quit
+  your AI apps, and run `<venv python> -m flowstate update` in your own terminal. An AI app that
+  doesn't use this folder's `.venv` can run it for you.
+- **2.4.0 to 2.4.3 on Windows:** `flowstate update` refuses 2.4.4, dry run included, and changes
+  nothing: the command runs from the `.venv` it would have to replace. Update by hand, below.
+- **Older than 2.4.0:** there is no `flowstate update` yet. Update by hand, below.
+
+After `flowstate update` makes a new `.venv`, git lists `.venv.pre-update/` as a new file, so
+`flowstate update --rollback` and the next `flowstate update` refuse with "the folder has local
+changes". To keep the option of going back, run `echo .venv.pre-update/ >> .git/info/exclude` in
+the FlowState folder. Once you are happy with the new version, you can delete the
+`.venv.pre-update` folder instead; `--rollback` then can't put the old packages back.
+
+**By hand (and to install 2.4.0 or later the first time).** Quit your AI apps. If FlowState's HTTP
+server or relay runs as a service or scheduled task, stop it first and start it again
+afterwards: the setup script doesn't do that for you. Then, in the FlowState folder:
+
+```bash
+git fetch --tags
+git checkout v2.4.4
+python setup_flowstate.py --clients <your apps> --verify
+```
+
+Use your normal Python (`python3` on macOS and Linux, `py -3` if that is your command on Windows),
+and add the other options you used when you set it up. The script keeps your `.venv`, updates the
+packages in it to what 2.4.4 needs, and migrates your database. Then reopen your AI apps. These
+steps work from `main` or from a release tag, and they are how to install the newest release
+(2.4.4) if you don't have 2.4.0 yet. Git stops at the checkout if you have local changes. For a
+later release, use its tag.
 
 ### From v1.1
 
