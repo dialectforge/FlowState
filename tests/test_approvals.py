@@ -417,7 +417,7 @@ def test_phone_approve_end_to_end(on, relay):
     assert r.status_code == 200 and r.json()["ok"], r.text
     assert _q(db, "SELECT COUNT(*) FROM todos WHERE id = 1") == [(0,)]
     assert _q(db, "SELECT status, decided_by FROM review_items WHERE id = ?", item) == \
-        [("approved", "phone (testbox)")]
+        [("approved", "phone")]   # no handle (audit D19)
     assert _q(db, "SELECT used_at IS NOT NULL FROM approval_requests WHERE item_id = ?", item) == [(1,)]
     assert _q(db, "SELECT path, decision FROM approval_log WHERE item_id = ?", item) == [("phone", "approved")]
     again = _decide(c, item, grant, body["token"])
@@ -533,3 +533,16 @@ def test_on_going_back_from_off_to_the_default_needs_nothing(on):
     out = call(S, "manage_review", {"action": "set_mode", "project": "Alpha", "clear": True,
                                     "user_request": "User: back to normal review"}, app="Claude Code")
     assert out.get("now", {}).get("mode") == "auto_only", out
+
+
+def test_set_on_logs_how_it_was_set(backend):
+    """(task 39) The terminal's rows are unchanged; the review page's say so."""
+    db = backend.backend.db_path
+    approvals.set_on(db, True)
+    approvals.set_on(db, False, None, "review-page", "set on the FlowState review page")
+    conn = sqlite3.connect(db)
+    rows = conn.execute("SELECT client, caller, user_request FROM review_mode_log "
+                        "WHERE scope = 'approvals' ORDER BY id").fetchall()
+    conn.close()
+    assert rows == [("command-line", "command-line", "set in the user's terminal"),
+                    ("review-page", "review-page", "set on the FlowState review page")]

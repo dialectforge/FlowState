@@ -218,7 +218,7 @@ def test_full_flow_over_relay_and_relay_sees_only_ciphertext(world, caplog):
     c, store, relay = world["client"], world["store"], world["relay"]
     with caplog.at_level(logging.INFO, logger="flowstate.access"):
         s, _, body = c.req("GET", "/health", headers={"CF-Connecting-IP": "198.51.100.1"})
-    assert s == 200 and json.loads(body)["ok"] is True
+    assert s == 404   # the relay address doesn't say whether the computer is on (audit D15)
 
     # the client talked TLS with the agent's certificate, made from the local key
     leaf = x509.load_der_x509_certificate(c.peer_certs[-1])

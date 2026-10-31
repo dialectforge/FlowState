@@ -186,11 +186,13 @@ def test_walk_project_delete_needs_the_typed_name_and_user_only_items_work(backe
                answers=[acc(approve=True, confirm_name="beta"), acc(approve=True)])
     assert "confirm_name" in seen[0].requestedSchema["properties"]
     assert out["walked"][0].startswith(f"#{item}: not done")
-    assert out["walked"][1] == f"#{src_item}: approved"
+    # (task 57) a "did you say this?" item gets no box: only the review page, phone or terminal
+    assert len(out["walked"]) == 1 and len(seen) == 1
+    assert out["said_by_you"] and status(db, src_item) == "pending"
     assert status(db, item) == "pending" and _q(db, "SELECT COUNT(*) FROM projects WHERE name = 'Beta Project'") == [(1,)]
     assert _q(db, "SELECT source_set_by FROM record_meta WHERE record_type = 'learning' AND record_id = 1") \
-        == [("user",)]
-    assert (src_item, "chat", "approved") in log(db)
+        != [("user",)]
+    assert (src_item, "chat", "approved") not in log(db)
 
 
 def test_walk_with_nothing_waiting(backend, relay_dir):
@@ -427,7 +429,7 @@ def test_phone_list_session_cookie_and_decisions(backend, relay):
                headers=JSON_H)
     assert r.status_code == 200 and status(db, b) == "rejected"
     assert log(db) == [(a, "phone", "approved"), (b, "phone", "rejected")]
-    assert _q(db, "SELECT decided_by FROM review_items WHERE id = ?", a) == [("phone (testbox)",)]
+    assert _q(db, "SELECT decided_by FROM review_items WHERE id = ?", a) == [("phone",)]   # no handle (audit D19)
 
 
 def test_phone_session_expires(backend, relay, monkeypatch):
@@ -831,17 +833,18 @@ def test_lan_from_another_computer_gets_no_local_link(backend, relay_dir, no_pag
 
 
 @pytest.mark.parametrize("peer", ["127.0.0.1", "192.0.2.51"])
-def test_relay_gets_the_phone_link_never_the_local_one(backend, relay, no_page, peer):
-    """The relay agent connects from loopback, but the app is on another computer."""
+def test_relay_gets_neither_the_phone_link_nor_the_local_one(backend, relay, no_page, peer):
+    """The relay agent connects from loopback, but the app is on another computer. Since task
+    54 (D19) it gets a plain sentence instead of the phone link with the relay handle."""
     db = backend.backend.db_path
     pile(db, 2)
     brief, walk, listing = http_calls(db, peer, CALLS, relay=True, headers=SPOOF)
     for answer in (brief, walk, listing):
-        assert "127.0.0.1" not in json.dumps(answer)
-    assert "on their phone: https://flowstatemcp.com/review/testbox, in this chat" in brief
+        assert "127.0.0.1" not in json.dumps(answer) and "testbox" not in json.dumps(answer)
+    assert "on their phone, from the FlowState review link they saved, in this chat" in brief
     assert waiting.ELSEWHERE in brief and "?n=" not in brief
-    assert walk["phone"] == "https://flowstatemcp.com/review/testbox" and "review_page" not in walk
-    assert "relay" in walk["how_to_decide"] and walk["phone"] in walk["how_to_decide"]
+    assert walk["phone"] == approvals.PHONE_ELSEWHERE and "review_page" not in walk
+    assert "relay" in walk["how_to_decide"] and "link they saved" in walk["how_to_decide"]
     assert no_page == [] and log(db) == []
     assert _q(db, "SELECT COUNT(*) FROM review_open_nonces") == [(0,)]
 
@@ -867,8 +870,13 @@ def test_on_this_computer_is_decided_by_the_server(backend):
                                  ("lan", "192.0.2.51", False), ("relay", "127.0.0.1", False),
                                  ("public", "127.0.0.1", False)):
         c = TestClient(Gate(app, None, "/mcp", listener=listener), client=(peer, 5000))
-        c.get("/health", headers=SPOOF)
+        own = {k: v for k, v in SPOOF.items() if k.lower().startswith(("x-flowstate", "flowstate"))}
+        c.get("/health", headers=own)
         assert seen[LOCAL_KEY] is want and seen[LISTENER_KEY] == listener, (listener, peer)
+        # (task 57, A) a proxy's forwarding headers on a loopback request: through a proxy
+        # on this computer from somewhere else, so never local
+        c.get("/health", headers=SPOOF)
+        assert seen[LOCAL_KEY] is False, (listener, peer)
     assert popup.on_this_computer() is True                              # stdio
     for scope, want in (({LISTENER_KEY: "lan", LOCAL_KEY: True}, True),
                         ({LISTENER_KEY: "lan", LOCAL_KEY: False}, False), ({LISTENER_KEY: "lan"}, False),

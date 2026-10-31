@@ -8,7 +8,7 @@ Three kinds of caller:
     app, each revocable on its own. For apps that take a fixed "Authorization: Bearer"
     header (Cursor, Claude Code, the xAI API, ...).
   * per-app LAN keys (`flowstate keys add --name NAME [--read-only]`, app_keys.py): the
-    same idea for the local / LAN listener only; the recorded app name comes from the key.
+    same idea for the local / LAN listener only; the key's name is recorded beside the app's.
     Never accepted on the public listener.
   * OAuth clients (claude.ai / ChatGPT connectors): MCP authorization (OAuth 2.1, PKCE
     S256, dynamic client registration, RFC 8707 resource binding, refresh-token rotation).
@@ -30,8 +30,10 @@ import html
 import json
 import logging
 import os
+import re
 import secrets
 import sqlite3
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -44,6 +46,7 @@ from mcp.server.auth.provider import (AccessToken, AuthorizationCode, Authorizat
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
 from . import paths
+from .urls import no_trailing_slash
 
 log = logging.getLogger("flowstate.auth")
 access_log = logging.getLogger("flowstate.access")
@@ -60,6 +63,10 @@ PENDING_TTL = 600                 # consent page must be answered within 10 minu
 MAX_OAUTH_CLIENTS = 100
 PASSPHRASE_MIN = 12
 LOCKOUT_FAILS, LOCKOUT_WINDOW = 5, 900   # 5 wrong passphrases in 15 min -> wait 15 min
+# passphrase hashes (scrypt, 128 MiB each) running at once in this process; a try that can't
+# start within PASSPHRASE_WAIT seconds is answered "busy, try again in a moment" (audit N-F10)
+PASSPHRASE_HASHES, PASSPHRASE_WAIT = 1, 1.5
+_HASH_SLOTS = threading.BoundedSemaphore(PASSPHRASE_HASHES)
 
 # Where OAuth clients may send the browser back to. Hosts of the apps we expect, plus
 # loopback (Claude Code / Cursor desktop). Add more with `flowstate remote allow-redirect`.
@@ -67,6 +74,9 @@ DEFAULT_REDIRECT_HOSTS = ["claude.ai", "claude.com", "chatgpt.com", "www.cursor.
                           "cursor.com", "localhost", "127.0.0.1"]
 
 TOKEN_PREFIX = {"access": "fs_at_", "refresh": "fs_rt_", "static": "fs_ct_", "code": "fs_ac_"}
+# a token's, OAuth app's or key's name: short enough that "<machine> (signed in as <name>)"
+# is always recorded whole (identity.MAX_LEN), so the sign-in still knows its own records
+MAX_NAME = 50
 APP_KEY_PREFIX = "fs_lk_"   # per-app keys for the local / LAN listener (app_keys.py)
 
 
@@ -119,13 +129,20 @@ CREATE TABLE IF NOT EXISTS app_keys (                                 -- see app
     id TEXT PRIMARY KEY, name TEXT NOT NULL, hash TEXT NOT NULL UNIQUE,
     read_only INTEGER NOT NULL DEFAULT 0, workspace TEXT, created_at REAL NOT NULL,
     last_used_at REAL, revoked_at REAL);
+CREATE TABLE IF NOT EXISTS client_names (                             -- names before a rename
+    client_id TEXT NOT NULL, name TEXT NOT NULL, until REAL NOT NULL);
+CREATE INDEX IF NOT EXISTS client_names_client ON client_names(client_id);
+CREATE TABLE IF NOT EXISTS lan_exposures (                            -- audit N-F27
+    client_id TEXT PRIMARY KEY, first_at REAL NOT NULL, last_at REAL NOT NULL,
+    times INTEGER NOT NULL, last_ip TEXT, kept_at REAL);
 """
 
 
 class AuthStore:
     def __init__(self, path: Optional[Path] = None):
         self.path = Path(path) if path else auth_db_path()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        from .privatefs import private_file
+        private_file(self.path)   # its folder 0700 and the file 0600 from the start (N-F31)
         with self._conn() as c:
             c.executescript(_DDL)
         try:
@@ -147,7 +164,7 @@ class AuthStore:
     def set_passphrase(self, passphrase: str) -> None:
         if len(passphrase) < PASSPHRASE_MIN:
             raise ValueError(f"the passphrase must be at least {PASSPHRASE_MIN} characters")
-        salt = secrets.token_bytes(16)
+        salt = _new_salt()
         with self._conn() as c:
             c.execute("INSERT OR REPLACE INTO owner (id, salt, hash, set_at) VALUES (1, ?, ?, ?)",
                       (salt, _scrypt(passphrase, salt), time.time()))
@@ -168,22 +185,123 @@ class AuthStore:
         return max(1, int(rows[-LOCKOUT_FAILS] + LOCKOUT_WINDOW - now))
 
     def check_passphrase(self, passphrase: str) -> bool:
-        with self._conn() as c:
-            row = c.execute("SELECT salt, hash FROM owner WHERE id = 1").fetchone()
-        ok = bool(row) and hmac.compare_digest(_scrypt(passphrase, row["salt"]), row["hash"])
-        if not ok:
+        """True only for the right passphrase (try_passphrase: counted before hashing)."""
+        return self.try_passphrase(passphrase) == "ok"
+
+    def try_passphrase(self, passphrase: str) -> str:
+        """"ok", "wrong", "locked" (too many tries: nothing was hashed) or "busy" (another
+        passphrase is being checked right now: nothing was hashed or counted; try again in a
+        moment). Audit N-F10: each try is counted in the database before the slow hash, in one
+        statement, so tries sent at the same moment can't all slip under the limit (also
+        across processes sharing this file); and only PASSPHRASE_HASHES hashes run at once in
+        this process, so a burst can't take 128 MiB per try. A right passphrase doesn't count
+        (its slot is given back); a wrong one stays counted for LOCKOUT_WINDOW."""
+        if not _HASH_SLOTS.acquire(timeout=PASSPHRASE_WAIT):
+            return "busy"
+        try:
+            now = time.time()
             with self._conn() as c:
-                c.execute("INSERT INTO failures (at) VALUES (?)", (time.time(),))
-        return ok
+                c.execute("DELETE FROM failures WHERE at < ?", (now - LOCKOUT_WINDOW,))
+                cur = c.execute("INSERT INTO failures (at) SELECT ? WHERE (SELECT COUNT(*) FROM "
+                                "failures WHERE at >= ?) < ?",
+                                (now, now - LOCKOUT_WINDOW, LOCKOUT_FAILS))
+                slot = cur.lastrowid if cur.rowcount == 1 else None
+                row = c.execute("SELECT salt, hash FROM owner WHERE id = 1").fetchone()
+            if slot is None:
+                return "locked"
+            ok = bool(row) and hmac.compare_digest(_scrypt(passphrase, row["salt"]), row["hash"])
+            if not ok:
+                return "wrong"
+            with self._conn() as c:
+                c.execute("DELETE FROM failures WHERE rowid = ?", (slot,))
+            if _log2n(row["salt"]) < SCRYPT_LOG2N:   # an older, lighter hash: upgrade it now
+                salt = _new_salt()
+                with self._conn() as c:
+                    c.execute("UPDATE owner SET salt = ?, hash = ? WHERE id = 1 AND salt = ?",
+                              (salt, _scrypt(passphrase, salt), row["salt"]))
+            return "ok"
+        finally:
+            _HASH_SLOTS.release()
+
+    # -- names: who wrote what is matched by the sign-in's name (identity.same_sign_in), and
+    # pause switches are kept by name, so a name is never given to a second token, OAuth app
+    # or per-app LAN key (one list for all three): not one in use, not one revoked, not one an
+    # app had before a rename. Compared by names.skeleton, so case, invisible characters and
+    # lookalike letters ("Сursor" with a Cyrillic С) don't make a different name. Pairs made
+    # before 2.4.4 (a key and a token both "Cursor") keep working as they are.
+    def _name_taken(self, c, name: str, except_id: Optional[str] = None) -> Optional[str]:
+        """The id of the token, OAuth app or key that has (or had) this name, else None. An
+        OAuth registration the owner never approved holds no name (task 56, D: anyone who
+        knows the tunnel or relay address can register one); it gets a number at approval
+        if its name was taken meanwhile (approve)."""
+        from .names import skeleton
+        key = skeleton(name)
+        rows = list(c.execute("SELECT id, name FROM clients WHERE NOT (kind = 'oauth' AND "
+                              "approved_at IS NULL)")) + \
+            list(c.execute("SELECT client_id AS id, name FROM client_names")) + \
+            list(c.execute("SELECT id, name FROM app_keys"))
+        for r in rows:
+            if r["id"] != except_id and skeleton(r["name"] or "") == key:
+                return r["id"]
+        return None
+
+    @staticmethod
+    def check_name(name: str, what: str = "the name") -> str:
+        """The tidied name, or ValueError with a sentence: empty, too long for "(signed in as
+        <name>)" to be recorded whole, secret-looking, with invisible characters, imitating
+        FlowState's "(via ...)" marks, or one FlowState uses itself ("unknown", "phone", ...)."""
+        from . import names
+        from .identity import clean
+        if names.invisible(name or ""):
+            raise ValueError(f"{what} holds invisible characters (zero-width spaces, direction "
+                             f"marks or the like); type it plainly")
+        name = " ".join((name or "").split())
+        if not name:
+            raise ValueError(f"{what} is empty; give the app a name")
+        if names.tidy(name) != name:
+            raise ValueError(f"{what} uses special forms of letters (full-width or the like); "
+                             f"type it plainly: {names.tidy(name)!r}")
+        if len(name) > MAX_NAME:
+            raise ValueError(f"{what} is longer than {MAX_NAME} characters")
+        if clean(name) != name:
+            raise ValueError(f"{what} looks like it holds a secret; pick a plain name")
+        if names.has_marks(name):
+            raise ValueError(f"{what} can't contain \"(via ...)\" or \"(signed in as ...)\": "
+                             f"FlowState adds those itself")
+        if names.reserved(name):
+            raise ValueError(f"{name!r} is a name FlowState uses itself (for you, your phone, "
+                             f"or callers it doesn't know); pick another, e.g. 'My {name}'")
+        return name
+
+    @staticmethod
+    def oauth_name(raw) -> str:
+        """The name an OAuth app gave itself at sign-up, made safe the way check_name checks a
+        typed one (the app can't be asked to retype it): tidied, without "(via ...)" marks,
+        not secret-looking, not one of FlowState's own names, short enough for "(2)"."""
+        from . import names
+        from .identity import clean
+        base = names.strip_marks(raw if isinstance(raw, str) else "")
+        base = base[:MAX_NAME - 5].strip()
+        if not base or clean(base) != base:
+            return "unnamed OAuth app"
+        if names.reserved(base):
+            base = f"OAuth app {base}"[:MAX_NAME - 5].strip()
+        return base
 
     # -- clients
     def add_token_client(self, name: str, scopes: list[str],
                          days: Optional[int] = None) -> tuple[str, str]:
-        """(client_id, token). The token is returned once and only its hash is kept."""
+        """(client_id, token). The token is returned once and only its hash is kept. A name
+        another token or OAuth app has, or had, is refused (ValueError)."""
+        name = self.check_name(name)
         cid = "tok_" + secrets.token_hex(6)
         token = _new("static")
         now = time.time()
         with self._conn() as c:
+            other = self._name_taken(c, name)
+            if other:
+                raise ValueError(f"the name {name!r} is taken (by {other}, now, before a rename "
+                                 f"or before it was revoked); pick another, one per app")
             c.execute("INSERT INTO clients (id, name, kind, scopes, created_at, approved_at) "
                       "VALUES (?, ?, 'token', ?, ?, ?)", (cid, name, " ".join(scopes), now, now))
             c.execute("INSERT INTO tokens (hash, client_id, kind, family, scopes, created_at, "
@@ -203,10 +321,16 @@ class AuthStore:
             if n >= MAX_OAUTH_CLIENTS:
                 raise RegistrationError("invalid_client_metadata",
                                         "too many registered clients; revoke some first")
+            # the app picks its own name here, so a taken one gets a number: "Claude (2)"
+            base = self.oauth_name(info.client_name)
+            name, n = base, 1
+            while self._name_taken(c, name):
+                n += 1
+                name = f"{base} ({n})"
             c.execute("INSERT INTO clients (id, name, kind, scopes, info, created_at) "
                       "VALUES (?, ?, 'oauth', ?, ?, ?)",
-                      (info.client_id, (info.client_name or "unnamed app")[:80],
-                       info.scope or " ".join(SCOPES), info.model_dump_json(), now))
+                      (info.client_id, name, info.scope or " ".join(SCOPES),
+                       info.model_dump_json(), now))
 
     def oauth_client(self, client_id: str) -> Optional[OAuthClientInformationFull]:
         with self._conn() as c:
@@ -224,6 +348,46 @@ class AuthStore:
                              "last_used_at, revoked_at FROM clients ORDER BY created_at").fetchall()
         return [dict(r) for r in rows]
 
+    def rename_client(self, old: str, new: str) -> tuple[str, str, str]:
+        """Give a live app (remote token or OAuth app) a new name, same token: (client id,
+        old name, new name). `old` is its name or id. Refused (ValueError, a sentence to
+        show): no such app, several of that name, an empty or secret-looking new name, or one
+        another app has, or had before a rename. The old name is kept in client_names, so the
+        app is still the one that wrote what it saved under it (identity.same_sign_in)."""
+        old = " ".join((old or "").split())
+        if not old:
+            raise ValueError("say which app: flowstate remote rename <old name> <new name>")
+        wanted = self.check_name(new, "the new name")
+        with self._conn() as c:
+            live = c.execute("SELECT id, name FROM clients WHERE revoked_at IS NULL").fetchall()
+            hits = [r for r in live if r["id"] == old] or \
+                [r for r in live if r["name"] == old] or \
+                [r for r in live if r["name"].casefold() == old.casefold()]
+            if not hits:
+                raise ValueError(f"no active app is named {old!r} (see `flowstate remote clients`)")
+            if len(hits) > 1:
+                raise ValueError(f"{len(hits)} active apps are named {old!r} ("
+                                 + ", ".join(r["id"] for r in hits)
+                                 + "); rename one by its id: flowstate remote rename <id> "
+                                 + repr(wanted))
+            cid, was = hits[0]["id"], hits[0]["name"]
+            if wanted == was:
+                raise ValueError(f"{cid} is already named {was!r}; nothing changed")
+            taken = self._name_taken(c, wanted, except_id=cid)   # revoked apps' names too
+            if taken:
+                raise ValueError(f"the name {wanted!r} is taken (by {taken}, now, before a "
+                                 f"rename or before it was revoked); pick another")
+            c.execute("INSERT INTO client_names (client_id, name, until) VALUES (?, ?, ?)",
+                      (cid, was, time.time()))
+            c.execute("UPDATE clients SET name = ? WHERE id = ?", (wanted, cid))
+        return cid, was, wanted
+
+    def former_names(self, client_id: str) -> list[str]:
+        """The names this app had before `flowstate remote rename`, oldest first."""
+        with self._conn() as c:
+            return [r["name"] for r in c.execute(
+                "SELECT name FROM client_names WHERE client_id = ? ORDER BY until", (client_id,))]
+
     def revoke_client(self, client_id: str) -> bool:
         now = time.time()
         with self._conn() as c:
@@ -233,6 +397,34 @@ class AuthStore:
                       (now, client_id))
             c.execute("DELETE FROM pending WHERE client_id = ?", (client_id,))
         return n > 0
+
+    # -- remote tokens sent over the plain-HTTP LAN listener (audit N-F27)
+    def note_lan_exposure(self, client_id: str, ip: Optional[str]) -> None:
+        """A remote token came in on the LAN listener from another computer and was refused
+        (lan-tokens off). It still crossed the network readable by anyone on it, so the user
+        is told (`flowstate remote clients`, the brief) until they revoke it or keep it. Not
+        revoked here: that would break the user's app without them knowing why, and the token
+        is only as exposed as their own network is."""
+        now = time.time()
+        with self._conn() as c:
+            c.execute("INSERT INTO lan_exposures (client_id, first_at, last_at, times, last_ip) "
+                      "VALUES (?, ?, ?, 1, ?) ON CONFLICT(client_id) DO UPDATE SET "
+                      "last_at = excluded.last_at, times = times + 1, last_ip = excluded.last_ip, "
+                      "kept_at = NULL", (client_id, now, now, (ip or "")[:64] or None))
+
+    def lan_exposures(self) -> dict:
+        """{client id: row} of live tokens sent over the LAN that the user hasn't kept."""
+        with self._conn() as c:
+            return {r["client_id"]: dict(r) for r in c.execute(
+                "SELECT e.*, cl.name FROM lan_exposures e JOIN clients cl ON cl.id = e.client_id "
+                "WHERE cl.revoked_at IS NULL AND e.kept_at IS NULL")}
+
+    def keep_exposed(self, client_id: str) -> bool:
+        """The user's `flowstate remote keep-token`: keep using a token sent over the LAN; the
+        warning goes until it is sent that way again."""
+        with self._conn() as c:
+            return c.execute("UPDATE lan_exposures SET kept_at = ? WHERE client_id = ? AND "
+                             "kept_at IS NULL", (time.time(), client_id)).rowcount > 0
 
     # -- tokens
     def issue(self, kind: str, client_id: str, scopes: list[str], family: str,
@@ -261,6 +453,13 @@ class AuthStore:
         if row["expires_at"] and row["expires_at"] < time.time():
             return None
         return row
+
+    def token_owner(self, token: str):
+        """The token's client, kind and family, live or not (for /revoke: RFC 7009 answers
+        200 for a token that is already invalid, but only its own client may revoke it)."""
+        with self._conn() as c:
+            return c.execute("SELECT client_id, kind, family FROM tokens WHERE hash = ?",
+                             (_h(token),)).fetchone()
 
     def mark_used(self, token: str) -> bool:
         """Single-use tokens (codes, refresh): True only for the first caller."""
@@ -303,12 +502,45 @@ class AuthStore:
 
     def approve(self, client_id: str) -> None:
         with self._conn() as c:
+            row = c.execute("SELECT name, approved_at FROM clients WHERE id = ?",
+                            (client_id,)).fetchone()
+            if row is not None and row["approved_at"] is None:
+                # taken by a key, token or app approved since it registered: "Cursor (2)"
+                base = re.sub(r" \(\d+\)$", "", row["name"] or "") or "unnamed OAuth app"
+                name, n = row["name"], 1
+                while self._name_taken(c, name, except_id=client_id):
+                    n += 1
+                    name = f"{base} ({n})"
+                if name != row["name"]:
+                    c.execute("UPDATE clients SET name = ? WHERE id = ?", (name, client_id))
             c.execute("UPDATE clients SET approved_at = COALESCE(approved_at, ?) WHERE id = ?",
                       (time.time(), client_id))
 
 
+# Passphrase hashing (2.4.4, audit D21): new and changed passphrases use scrypt N=2^17, r=8,
+# p=1 (OWASP's current advice); hashes from older versions used N=2^14 and still work, and are
+# re-hashed with the new settings at the next successful sign-in. The cost travels in the salt
+# column (no schema change): b"FSN" + one byte log2(N) + 16 random bytes; a plain 16-byte salt
+# is the old N=2^14.
+SCRYPT_LOG2N = 17
+_SALT_TAG = b"FSN"
+
+
+def _new_salt() -> bytes:
+    return _SALT_TAG + bytes([SCRYPT_LOG2N]) + secrets.token_bytes(16)
+
+
+def _log2n(salt: bytes) -> int:
+    salt = bytes(salt)
+    if len(salt) == 20 and salt[:3] == _SALT_TAG and 14 <= salt[3] <= 20:
+        return salt[3]
+    return 14
+
+
 def _scrypt(passphrase: str, salt: bytes) -> bytes:
-    return hashlib.scrypt(passphrase.encode(), salt=salt, n=2 ** 14, r=8, p=1, dklen=32)
+    n, r = 2 ** _log2n(salt), 8
+    return hashlib.scrypt(passphrase.encode(), salt=bytes(salt), n=n, r=r, p=1, dklen=32,
+                          maxmem=256 * n * r + (1 << 20))
 
 
 # ---------------------------------------------------------------- OAuth provider
@@ -316,6 +548,15 @@ class FSAccessToken(AccessToken):
     client_name: str = ""
     identity_source: str = ""        # see identity.py: app_key, oauth_client, remote_token, ...
     workspace: Optional[str] = None  # per-app LAN keys: the machine / workspace it was made for
+    former_names: list[str] = []     # its names before `flowstate remote rename` (identity.aka)
+
+
+def oauth_issuer(public_url: str) -> str:
+    """The one issuer string for a public address (task 78): Pydantic's URL clean-up (lower-case
+    host, default port dropped) without the '/' it adds to a bare host. The metadata documents
+    and the consent link both use it (task 79)."""
+    from pydantic import AnyHttpUrl
+    return no_trailing_slash(str(AnyHttpUrl(public_url)))
 
 
 class FlowStateOAuthProvider:
@@ -325,11 +566,11 @@ class FlowStateOAuthProvider:
 
     def __init__(self, store: AuthStore, issuer_url: str, resource_url: str):
         self.store = store
-        self.issuer_url = issuer_url.rstrip("/")
+        self.issuer_url = oauth_issuer(issuer_url)
         self.resource_url = resource_url
 
     def _same_resource(self, resource: Optional[str]) -> bool:
-        return resource is None or resource.rstrip("/") == self.resource_url.rstrip("/")
+        return resource is None or no_trailing_slash(resource) == no_trailing_slash(self.resource_url)
 
     async def get_client(self, client_id: str):
         return self.store.oauth_client(client_id)
@@ -408,7 +649,7 @@ class FlowStateOAuthProvider:
             return None
         if row["kind"] == "access" and row["resource"] != self.resource_url:
             return None  # audience check: only tokens issued for this server
-        return _token_obj(token, row)
+        return _token_obj(token, row, self.store)
 
     async def revoke_token(self, token) -> None:
         row = self.store.lookup(token.token, ("access", "refresh"))
@@ -423,16 +664,98 @@ class FlowStateOAuthProvider:
                                  "explicit": params.redirect_uri_provided_explicitly})
 
 
-def _token_obj(token: str, row) -> FSAccessToken:
+class RevocationHandler:
+    """POST /revoke, RFC 7009 (task 81), in place of the SDK's. The SDK's request model
+    requires a `client_secret` form field, so a public client (`none`) or one using HTTP Basic
+    got 400 invalid_request, and Basic alone (no `client_id` in the form) got 401. Here the
+    client authenticates the way it registered (Basic, form secret, or `client_id` alone for a
+    public client); the token is looked up whatever its type (`token_type_hint` is only a
+    hint), and only the client it was issued to may revoke it. Revoking an access or refresh
+    token ends that whole grant (both tokens), as refresh-token reuse does."""
+
+    def __init__(self, provider: FlowStateOAuthProvider):
+        self.provider = provider
+
+    async def handle(self, request):
+        from starlette.responses import JSONResponse, Response
+        try:
+            form = await request.form()
+        except Exception:  # noqa: BLE001 - a malformed body is the client's error
+            return JSONResponse({"error": "invalid_request",
+                                 "error_description": "form body expected"}, status_code=400)
+        basic = request.headers.get("authorization", "")[:6].lower() == "basic "
+        client = await self._client(request, form)
+        if client is None:
+            return JSONResponse(
+                {"error": "invalid_client", "error_description": "client authentication failed"},
+                status_code=401,
+                headers={"WWW-Authenticate": 'Basic realm="FlowState"'} if basic else None)
+        token = form.get("token")
+        if not isinstance(token, str) or not token:
+            return JSONResponse({"error": "invalid_request",
+                                 "error_description": "token is required"}, status_code=400)
+        store = self.provider.store
+        row = await asyncio.to_thread(store.token_owner, token)
+        if row and row["kind"] != "code":
+            if row["client_id"] != client.client_id:
+                return JSONResponse({"error": "unauthorized_client", "error_description":
+                                     "the token was not issued to this client"}, status_code=400)
+            if row["kind"] in ("access", "refresh"):
+                await asyncio.to_thread(store.revoke_family, row["family"])
+                log.info("OAuth tokens revoked by client %s", client.client_id)
+        # unknown, already revoked or expired: 200 all the same (RFC 7009 section 2.2)
+        return Response(status_code=200, headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
+
+    async def _client(self, request, form) -> Optional[OAuthClientInformationFull]:
+        import base64
+        import binascii
+        from urllib.parse import unquote
+        auth = request.headers.get("authorization", "")
+        basic_id = basic_secret = None
+        if auth[:6].lower() == "basic ":
+            try:
+                basic_id, basic_secret = base64.b64decode(auth[6:].strip(), validate=True) \
+                    .decode("utf-8").split(":", 1)
+            except (ValueError, UnicodeDecodeError, binascii.Error):
+                return None
+            basic_id, basic_secret = unquote(basic_id), unquote(basic_secret)
+        form_id, form_secret = form.get("client_id"), form.get("client_secret")
+        if basic_id is not None and form_id and form_id != basic_id:
+            return None
+        cid = basic_id or form_id
+        if not isinstance(cid, str) or not cid:
+            return None
+        client = await self.provider.get_client(cid)
+        if client is None:
+            return None
+        method = client.token_endpoint_auth_method or "client_secret_post"
+        if method == "client_secret_basic":
+            given = basic_secret
+        elif method == "client_secret_post":
+            given = form_secret if basic_id is None and isinstance(form_secret, str) else None
+        else:
+            given = None
+        if client.client_secret:
+            if not given or not hmac.compare_digest(client.client_secret.encode(), given.encode()):
+                return None
+            if client.client_secret_expires_at and client.client_secret_expires_at < time.time():
+                return None
+        return client
+
+
+def _token_obj(token: str, row, store: Optional[AuthStore] = None) -> FSAccessToken:
     return FSAccessToken(token=token, client_id=row["client_id"], scopes=row["scopes"].split(),
                          expires_at=int(row["expires_at"]) if row["expires_at"] else None,
                          resource=row["resource"], client_name=row["client_name"],
-                         identity_source="oauth_client" if row["kind"] == "access" else "remote_token")
+                         identity_source="oauth_client" if row["kind"] == "access" else "remote_token",
+                         former_names=store.former_names(row["client_id"]) if store else [])
 
 
 class TokenChecker:
     """Bearer check for /mcp: owner token (if allowed), per-client tokens, OAuth tokens, and
-    (LAN listener only, app_keys=True) per-app LAN keys."""
+    (LAN listener only, app_keys=True) per-app LAN keys. Also the SDK's TokenVerifier
+    (verify_token): it reports each token's audience as `resource` and the SDK's bearer check
+    in Gate refuses one not issued for this server (AuthSettings.validate_token_resource, task 80)."""
 
     def __init__(self, store: Optional[AuthStore], master: Optional[str],
                  provider: Optional[FlowStateOAuthProvider] = None, app_keys: bool = False):
@@ -440,11 +763,17 @@ class TokenChecker:
         self.master = master.encode() if master and len(master) >= 16 else None
         self.app_keys = app_keys
 
+    async def verify_token(self, token: str) -> Optional[FSAccessToken]:
+        return await asyncio.to_thread(self.check, token.strip())
+
     def check(self, token: str) -> Optional[FSAccessToken]:
+        # the owner token and per-client tokens are kept by this server alone and open only
+        # it, so their audience is this server's resource (None on the LAN listener: no OAuth)
+        own = self.provider.resource_url if self.provider else None
         if self.master and hmac.compare_digest(token.encode(), self.master):
             return FSAccessToken(token="", client_id="owner", client_name="owner (LAN token)",
                                  scopes=[SCOPE_READ, SCOPE_WRITE, SCOPE_LOCAL],
-                                 identity_source="shared_token")
+                                 identity_source="shared_token", resource=own)
         if self.store and token.startswith(APP_KEY_PREFIX):
             if not self.app_keys:
                 return None   # LAN keys never open the public listener
@@ -455,11 +784,12 @@ class TokenChecker:
         row = self.store.lookup(token, ("access", "static"))
         if not row:
             return None
-        if row["kind"] == "access":
-            if not self.provider or row["resource"] != self.provider.resource_url:
-                return None
+        if row["kind"] == "access" and not self.provider:
+            return None   # OAuth tokens never open the LAN listener
         self.store.touch(row["client_id"])
-        return _token_obj(token, row)
+        tok = _token_obj(token, row, self.store)
+        # an OAuth token's audience is the resource it was issued for (the SDK compares it)
+        return tok if row["kind"] == "access" else tok.model_copy(update={"resource": own})
 
 
 # ---------------------------------------------------------------- consent page
@@ -558,8 +888,14 @@ def consent_routes(provider: FlowStateOAuthProvider):
         if locked:
             return page(429, name=name, redirect_host=host, scopes=params.scopes, pid=pid,
                         locked=locked)
-        ok = await asyncio.to_thread(store.check_passphrase, str(form.get("passphrase", "")))
-        if not ok:
+        got = await asyncio.to_thread(store.try_passphrase, str(form.get("passphrase", "")))
+        if got == "busy":
+            return page(503, name=name, redirect_host=host, scopes=params.scopes, pid=pid,
+                        error="Another passphrase is being checked; try again in a moment.")
+        if got == "locked":
+            return page(429, name=name, redirect_host=host, scopes=params.scopes, pid=pid,
+                        locked=max(1, store.locked_for()))
+        if got != "ok":
             log.warning("wrong owner passphrase on the consent page (client %s)", cid)
             return page(403, name=name, redirect_host=host, scopes=params.scopes, pid=pid,
                         error="Wrong passphrase.", locked=store.locked_for())
@@ -617,6 +953,21 @@ LOCAL_KEY = "flowstate.on_this_computer"
 CLIENT_IP_KEY = "flowstate.client_ip"
 
 
+# Headers a proxy or tunnel adds. A loopback request that carries one came through a proxy
+# on this computer from somewhere else (task 56, A): it doesn't count as "on this computer"
+# (no 127.0.0.1 review link, no phone link with the handle, no popups, and a remote token on
+# it is treated as sent over the LAN). FLOWSTATE_LAN_PROXY=1 says the LAN listener sits
+# behind such a proxy, for one that adds none of them: then no caller counts as local.
+PROXY_HEADERS = (b"forwarded", b"x-forwarded-for", b"x-forwarded-host", b"x-real-ip",
+                 b"cf-connecting-ip", b"true-client-ip", b"via", b"x-client-ip")
+
+
+def proxied(headers: dict) -> bool:
+    if os.environ.get("FLOWSTATE_LAN_PROXY", "").strip().lower() in ("1", "true", "yes", "on"):
+        return True
+    return any(h in headers for h in PROXY_HEADERS)
+
+
 def is_loopback(peer) -> bool:
     """The socket peer address is this computer (127.0.0.0/8, ::1, ::ffff:127.x)."""
     import ipaddress
@@ -628,6 +979,72 @@ def is_loopback(peer) -> bool:
     return (mapped or ip).is_loopback
 
 
+LAN_REMOTE_REFUSED = (
+    "This is a remote-access token (for the relay or tunnel), and the LAN listener is plain, "
+    "unencrypted HTTP, so FlowState doesn't accept it from another computer: anyone on the "
+    "network could copy it and use it over the internet. Use a LAN key (`flowstate keys "
+    "add`), or the user can allow it with `flowstate remote lan-tokens on`.")
+
+
+def lan_remote_tokens_allowed() -> bool:
+    """The user's own `flowstate remote lan-tokens on` (config.json "lan_remote_tokens")."""
+    from . import paths
+    try:
+        return paths.load_config().get("lan_remote_tokens") is True
+    except Exception:  # noqa: BLE001 - an unreadable settings file means the safe default
+        return False
+
+
+def exposure_text(cid: str, name: str, at: float, for_user: bool = True) -> str:
+    """The warning about a remote token sent over the LAN. `for_user` (the user's own
+    `flowstate remote clients`): with the command that keeps it anyway. The brief (an AI reads
+    it) only says the user decides, in their terminal (task 56, E)."""
+    from datetime import datetime
+    day = datetime.fromtimestamp(at).strftime("%Y-%m-%d")
+    keep = (f"to keep it anyway: `flowstate remote keep-token --client {cid}` (asks for your y)."
+            if for_user else "keeping it anyway is the user's own choice, in their terminal "
+                             "(`flowstate remote clients` shows how).")
+    return (f"The remote token {name!r} ({cid}) was sent over plain HTTP from another computer "
+            f"on your network on {day}; FlowState refused it, but anyone on that network could "
+            f"have read it and could use it over the internet. Revoke it with `flowstate remote "
+            f"revoke --client {cid}` and make a new one (or give that app a LAN key: `flowstate "
+            f"keys add`); {keep}")
+
+
+def exposure_lines() -> list[str]:
+    """The brief's warning lines for remote tokens sent over the LAN (exposure_text), read
+    without creating the settings database; [] when there is none or it can't be read."""
+    path = auth_db_path()
+    if not path.exists():
+        return []
+    try:
+        conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=1.0)
+        try:
+            if not conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND "
+                                "name = 'lan_exposures'").fetchone():
+                return []
+            rows = conn.execute(
+                "SELECT e.client_id, cl.name, e.last_at FROM lan_exposures e JOIN clients cl "
+                "ON cl.id = e.client_id WHERE cl.revoked_at IS NULL AND e.kept_at IS NULL "
+                "ORDER BY e.last_at DESC LIMIT 3").fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return []
+    return ["Security warning (tell the user once): " + exposure_text(*r, for_user=False)
+            for r in rows]
+
+
+def lan_warning(host: str) -> Optional[str]:
+    """The start-up line for a LAN listener on anything but this computer (audit D4)."""
+    if host in ("localhost",) or is_loopback(host):
+        return None
+    return (f"LAN mode on {host}: this is plain HTTP, NOT encrypted. The token and every record "
+            f"cross the network readable by anyone on it. Use it only on a network you trust "
+            f"(not public Wi-Fi), with per-app LAN keys (flowstate keys add). Remote-access "
+            f"tokens are refused here unless you allow them (flowstate remote lan-tokens on).")
+
+
 class Gate:
     """Outermost layer: Host allow-list, rate limits, one access-log line per request
     (method, path without query, status, time, client, IP; never bodies or headers), and
@@ -636,8 +1053,12 @@ class Gate:
     def __init__(self, app, checker: TokenChecker, mcp_path: str,
                  allowed_hosts: Optional[set[str]] = None, trust_proxy: bool = False,
                  resource_metadata_url: Optional[str] = None, peer_resolver=None,
-                 listener: str = "lan"):
+                 listener: str = "lan", resource_server_url=None):
+        from mcp.server.auth.middleware.bearer_auth import BearerAuthBackend
         self.app, self.checker, self.mcp_path = app, checker, mcp_path
+        # the SDK's bearer check; with resource_server_url (AuthSettings with
+        # validate_token_resource) it refuses a token issued for another resource (task 80)
+        self.bearer = BearerAuthBackend(checker, resource_server_url=resource_server_url)
         # which listener this is (lan / public / relay), set here for every request so the
         # popup and the review walk know it from the server's own side, never from a header
         self.listener = listener
@@ -670,11 +1091,11 @@ class Gate:
         scope[LISTENER_KEY] = self.listener
         # the real socket peer (uvicorn runs with proxy_headers=False), never a header; the relay
         # agent also connects from loopback, so only the LAN listener can count as local
-        scope[LOCAL_KEY] = self.listener == "lan" and is_loopback((scope.get("client") or ("",))[0])
-        from starlette.authentication import AuthCredentials
-        from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
+        from starlette.requests import HTTPConnection
         t0 = time.monotonic()
         headers = dict(scope.get("headers") or [])
+        scope[LOCAL_KEY] = self.listener == "lan" and \
+            is_loopback((scope.get("client") or ("",))[0]) and not proxied(headers)
         ip = self._ip(scope, headers)
         scope[CLIENT_IP_KEY] = ip
         path = scope.get("path", "")
@@ -694,7 +1115,8 @@ class Gate:
             if path.rstrip("/") == self.mcp_path:
                 auth = headers.get(b"authorization", b"").decode("latin-1")
                 tok = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
-                info = await asyncio.to_thread(self.checker.check, tok) if tok else None
+                found = await self.bearer.authenticate(HTTPConnection(scope)) if tok else None
+                info = found[1].access_token if found else None
                 if info is None:
                     ok, wait = self.per_ip.allow("ip:" + ip)
                     if not ok:
@@ -707,14 +1129,32 @@ class Gate:
                     await _json(send_wrapped, 401, {"error": "unauthorized"},
                                 [(b"www-authenticate", challenge.encode())])
                     return
+                if (self.listener == "lan" and info.identity_source == "remote_token"
+                        and not scope.get(LOCAL_KEY)   # another computer, or through a proxy (A)
+                        and not lan_remote_tokens_allowed()):
+                    # LAN traffic is plain HTTP: a remote token seen on the Wi-Fi would work
+                    # from anywhere through the relay or tunnel (audit D4); it has crossed the
+                    # network already, so the user is told (audit N-F27)
+                    try:
+                        await asyncio.to_thread(self.checker.store.note_lan_exposure,
+                                                info.client_id, ip)
+                    except Exception as e:  # noqa: BLE001 - the refusal must still go out
+                        log.warning("could not record a remote token sent over the LAN: %s",
+                                    type(e).__name__)
+                    log.warning("remote token %s was sent over plain HTTP from another "
+                                "computer and refused; revoke it (flowstate remote clients)",
+                                info.client_id)
+                    await _json(send_wrapped, 401, {"error": "remote_token_on_lan", "message":
+                                LAN_REMOTE_REFUSED},
+                                [(b"www-authenticate", b'Bearer error="invalid_token"')])
+                    return
                 who = f"{info.client_id}({info.client_name})"
                 ok, wait = self.per_client.allow("client:" + info.client_id)
                 if not ok:
                     await _json(send_wrapped, 429, {"error": "rate_limited"},
                                 [(b"retry-after", str(wait).encode())])
                     return
-                scope["user"] = AuthenticatedUser(info)
-                scope["auth"] = AuthCredentials(info.scopes)
+                scope["auth"], scope["user"] = found
             elif path != "/health":
                 ok, wait = self.per_ip.allow("ip:" + ip)
                 if not ok:

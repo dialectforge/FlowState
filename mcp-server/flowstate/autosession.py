@@ -288,9 +288,20 @@ class AutoSessions:
         name = conn.execute("SELECT name FROM projects WHERE id = ?",
                             (row["project_id"],)).fetchone()
         project = name[0] if name else f"project #{row['project_id']}"
-        summary = build_summary(row["client"], project, events, trimmed)
+        # The records it saved, by id (run ledger): stored with the review item so every page
+        # shows them next to the short summary line (session_contents.py). The line itself
+        # stays short: it is what Keep saves as the session's record.
+        from . import session_contents
+        try:
+            recs = session_contents.refs(conn, row["session_id"])
+        except sqlite3.Error:
+            recs = None
+        summary = build_summary(row["client"], project, events, trimmed,
+                                _taken_back(conn, recs))
         outcomes = {"auto_captured": True, "needs_review": True, "close_reason": reason,
                     "client": row["client"], "calls": row["call_count"]}
+        if recs:
+            outcomes["records"] = len(recs)
         from .review_mode import get_with
         if not trimmed and is_housekeeping(events):
             # Nothing new was saved (reads, undo, review decisions...): a plain record for
@@ -312,10 +323,19 @@ class AutoSessions:
         if cur.rowcount and outcomes["needs_review"]:
             from .review import add_item
             from .identity import on_behalf_of
+            run = conn.execute(
+                "SELECT app, model, machine, identity_source FROM session_runs "
+                "WHERE session_id = ? ORDER BY rowid LIMIT 1",
+                (row["session_id"],)).fetchone() if _has_runs(conn) else None
+            # the app its session recorded (with the sign-in it came in on), else the client
+            who = (on_behalf_of(run["app"] or row["client"], run["machine"],
+                                run["identity_source"], run["model"]) if run is not None
+                   else on_behalf_of(row["client"]))
             item = add_item(self.db_path, row["project_id"], "session_summary", summary,
-                            payload={"close_reason": reason, "calls": row["call_count"]},
+                            payload={"close_reason": reason, "calls": row["call_count"],
+                                     **({"records": recs} if recs else {})},
                             source=row["client"], session_id=row["session_id"], conn=conn,
-                            ident=on_behalf_of(row["client"]))
+                            ident=who)
             if item is not None:
                 outcomes["review_item_id"] = item
                 conn.execute("UPDATE sessions SET outcomes = ? WHERE id = ?",
@@ -346,6 +366,8 @@ HOUSEKEEPING = {
     "history/undo": "undo",
     "review_approve": "review decision",
     "review_reject": "review decision",
+    "resolve_review_card": "review decision",     # a tap on a review card (re-audit N-F15)
+    "resolve_conflict_card": "review decision",   # a tap on a disagreement card
     "handoff/pickup": "handoff picked up",
     "session/start": None,
     "todo/claim": "todo claim",
@@ -363,7 +385,7 @@ _WORDS = {"todo/update": "todo update", "todo/block": "todo blocked",
           "todo/unblock": "todo unblocked", "todo/handoff": "todo handed off",
           "problem/solve": "problem solved", "attempt/log": "fix attempt",
           "attempt/outcome": "fix attempt result", "link/add": "new link",
-          "link/remove": "link removed", "rules/add": "new rule", "rules/remove": "rule removed",
+          "link/remove": "link removed", "rules/add": "hard rule request", "rules/remove": "rule removal request",
           "handoff/leave": "handoff note", "verify/mark": "fact checked",
           "verify/source": "source changed", "review_mode/set": "review mode change",
           "delete_request/record": "delete", "delete_request/project": "project delete",
@@ -391,9 +413,31 @@ def _and(parts: list) -> str:
     return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
 
 
-def build_summary(client: str, project: str, events: list, trimmed: bool = False) -> str:
+def _taken_back(conn, recs) -> dict:
+    """kind -> how many records the session saved that are no longer there when it closes
+    (an undo took one back, or the session deleted it): the summary counts what is still
+    there (audit 53, N-F39). From the run ledger's records; empty without one."""
+    from .history import TABLES
+    out: dict = {}
+    for rtype, rid, verb in recs or []:
+        if rtype not in _KINDS or str(verb).split(", ")[0] != "saved":
+            continue
+        try:
+            there = conn.execute(f'SELECT 1 FROM "{TABLES[rtype]}" WHERE id = ?',
+                                 (int(rid),)).fetchone()
+        except (sqlite3.Error, KeyError, ValueError, TypeError):
+            continue
+        if there is None:
+            out[rtype] = out.get(rtype, 0) + 1
+    return out
+
+
+def build_summary(client: str, project: str, events: list, trimmed: bool = False,
+                  taken_back: Optional[dict] = None) -> str:
     """Short, plain summary from the event log: what the session saved, counted by kind.
-    Starts with AUTO_TAG (the caller swaps it for OFF_TAG / SKIP_TAG)."""
+    Starts with AUTO_TAG (the caller swaps it for OFF_TAG / SKIP_TAG). Which records they
+    are is shown beside it (session_contents.py), not in it. `taken_back`: kind -> saved
+    records no longer there (_taken_back), not counted as saved."""
     saved, suggested, other, chores = {}, {}, {}, {}
     for e in events:
         if e.startswith("read:"):
@@ -412,6 +456,11 @@ def build_summary(client: str, project: str, events: list, trimmed: bool = False
         else:
             words = _WORDS.get(what) or what.replace("/", " ").replace("_", " ")
             other[words] = other.get(words, 0) + 1
+    for k, n in (taken_back or {}).items():
+        if k in saved:
+            saved[k] -= n
+            if saved[k] <= 0:
+                del saved[k]
     parts = []
     if saved:
         parts.append("saved " + _and([_n(saved[k], k) for k in _KINDS if k in saved]))

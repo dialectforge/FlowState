@@ -76,7 +76,7 @@ def test_approve_with_edit_reject_and_html_escaping(page):
     html = c.get("/").text
     assert "&lt;b&gt;bold&lt;/b&gt;" in html and "<b>bold</b>" not in html
     r = c.post("/approve", data={"item_id": a, "csrf": csrf, "summary": "Edited idea", "details": ""})
-    assert r.status_code == 303 and "Approved" in r.headers["location"].replace("+", " ")
+    assert r.status_code == 303 and "Approved" in c.get(r.headers["location"]).text
     assert _q(db, "SELECT title, priority FROM todos WHERE title = 'Edited idea'") == [("Edited idea", "high")]
     c.post("/reject", data={"item_id": b, "csrf": csrf, "reason": "wrong"})
     rows = _q(db, "SELECT id, status, decided_by, reject_reason, user_request FROM review_items ORDER BY id")
@@ -108,29 +108,59 @@ def test_never_bound_beyond_loopback():
 
 
 # ---------------------------------------------------------------- (task 38) the shortcut's command
-def test_review_page_command_reuses_the_page_already_open_for_this_database(backend, seeded_db, monkeypatch):
+def test_review_page_command_opens_an_editable_page_even_with_the_link_page_running(
+        backend, seeded_db, monkeypatch):
+    """Audit 46 H3: with FlowState's read-only link page on the usual port, `flowstate
+    review-page` used to open that page and stop, so Settings could never be changed. Now it
+    starts its own key-protected page on a free port, under a secret path."""
     import socket
     import webbrowser
     import uvicorn
     from flowstate import review_page, waiting
     opened, ran = [], []
     monkeypatch.setattr(webbrowser, "open", lambda url: opened.append(url))
-    monkeypatch.setattr(uvicorn.Server, "run", lambda self, sockets=None: ran.append(sockets))
+    monkeypatch.setattr(uvicorn.Server, "run", lambda self, sockets=None: ran.append(
+        (sockets, self.config.app)))
+    import threading
+
+    class Now:   # the browser opens at once, not a second later
+        def __init__(self, _wait, fn):
+            self.fn = fn
+
+        def start(self):
+            self.fn()
+    monkeypatch.setattr(threading, "Timer", Now)
     busy = socket.socket()
     busy.bind(("127.0.0.1", 0))
     busy.listen(1)
     port = busy.getsockname()[1]
     try:
-        # a FlowState here already serves this database's page on that port: open it, start nothing
-        monkeypatch.setattr(waiting, "_ping", lambda p, db: p == port)
-        review_page.serve(seeded_db, port, open_browser=True)
-        assert opened == [f"http://127.0.0.1:{port}/"] and ran == []
-        # something else holds the port: the page starts on another free port, 127.0.0.1 only
-        monkeypatch.setattr(waiting, "_ping", lambda p, db: False)
-        review_page.serve(seeded_db, port, open_browser=False)
-        assert len(ran) == 1
-        host, other = ran[0][0].getsockname()
-        assert host == "127.0.0.1" and other != port
-        ran[0][0].close()
+        for link_page_running in (True, False):
+            monkeypatch.setattr(waiting, "_ping", lambda p, db, on=link_page_running: on and p == port)
+            opened.clear()
+            review_page.serve(seeded_db, port, open_browser=True)
+            sockets, app = ran[-1]
+            host, other = sockets[0].getsockname()
+            assert host == "127.0.0.1" and other != port
+            [url] = opened
+            assert url.startswith(f"http://127.0.0.1:{other}/s/") and "?key=" in url
+            from starlette.testclient import TestClient
+            c = TestClient(app, base_url=f"http://127.0.0.1:{other}", follow_redirects=False)
+            path = url.split(str(other), 1)[1]
+            r = c.get(path)
+            assert r.status_code == 303 and "Path=/s/" in r.headers["set-cookie"]
+            html = c.get(r.headers["location"]).text
+            assert "/settings/name" in html and "can only be changed" not in html   # editable
+            sockets[0].close()
     finally:
         busy.close()
+
+
+def test_settings_section_on_the_command_page_only(page):
+    """(task 39) The page `flowstate review-page` opens has the Settings section with its
+    forms; tests/test_settings_page.py covers it in full."""
+    p, c, _db = page
+    _csrf, html = _login(p, c)
+    assert p.settings == "edit" and "<h2>Settings</h2>" in html
+    assert "/settings/approvals" in html and "/settings/popup" in html
+    assert "width=device-width" in html          # readable on a phone

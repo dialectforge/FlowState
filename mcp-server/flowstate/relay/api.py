@@ -20,6 +20,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from .. import __version__
+from ..urls import no_trailing_slash
 from . import HOST_SUFFIX, RESERVED_HANDLES, RelayError, RelayWaitlisted
 
 AGENT = f"flowstate/{__version__}"
@@ -134,7 +135,7 @@ def enroll(api_base: str, code: str, ctx: Optional[ssl.SSLContext] = None) -> di
     code = (code or "").strip()
     if not CODE_RE.match(code):
         raise RelayError("that does not look like an enrollment code (letters, digits, dashes)")
-    data = _json_call("POST", check_url(api_base.rstrip("/") + "/api/enroll"),
+    data = _json_call("POST", check_url(no_trailing_slash(api_base) + "/api/enroll"),
                       {"code": code, "agent": AGENT, "protocol": 1}, ctx=ctx)
     handle, token = data.get("handle"), data.get("device_token")
     if not isinstance(handle, str) or not HANDLE_RE.match(handle) or handle in RESERVED_HANDLES:
@@ -159,5 +160,5 @@ def dns_challenge(api_base: str, token: str, hostname: str, value: Optional[str]
     body = {"action": "set" if value is not None else "clear", "name": challenge_name(hostname)}
     if value is not None:
         body["value"] = value
-    return _json_call("POST", check_url(api_base.rstrip("/") + "/api/dns-challenge"), body,
+    return _json_call("POST", check_url(no_trailing_slash(api_base) + "/api/dns-challenge"), body,
                       token=token, ctx=ctx)

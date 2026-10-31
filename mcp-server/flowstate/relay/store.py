@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Optional
 
 from .. import paths
+from ..urls import no_trailing_slash
 from . import API_BASE, HOST_SUFFIX, TUNNEL_HOST, TUNNEL_PORT, RelayError
 
 CONFIG = "relay.json"
@@ -116,7 +117,7 @@ class RelayStore:
                         tunnel_sni: str = TUNNEL_HOST, staging: bool = False,
                         ca_file: Optional[str] = None) -> dict:
         cfg = {"version": 1, "handle": handle, "hostname": f"{handle}.{HOST_SUFFIX}",
-               "api": api.rstrip("/"), "tunnel_host": tunnel_host, "tunnel_port": int(tunnel_port),
+               "api": no_trailing_slash(api), "tunnel_host": tunnel_host, "tunnel_port": int(tunnel_port),
                "tunnel_sni": tunnel_sni, "staging": bool(staging), "enabled": True,
                "enrolled_at": int(time.time()), "known_spki": []}
         if ca_file:

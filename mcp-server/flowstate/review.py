@@ -23,6 +23,11 @@ KEEP_QUESTION = "Keep this session summary?"
 KEEP_HOW = ("Keep saves it as the session's record. Don't keep marks it rejected, and the "
             "session keeps only a note saying so; nothing is deleted.")
 KEEP, DONT_KEEP = "Keep", "Don't keep"
+# With records listed (session_records.py): Keep keeps the summary and every record not removed.
+KEEP_ALL = "Keep all"
+KEEP_ALL_HOW = ("Keep all saves the summary as the session's record and marks every record you "
+                "haven't removed kept. Don't keep marks the summary rejected and leaves the "
+                "records as they are; nothing is deleted.")
 
 
 def _now() -> str:
@@ -110,10 +115,12 @@ def list_items(db_path: Path, project_id: Optional[int] = None, status: str = "p
             where.append("r.id > ?")
             params.append(int(after))
         limit = max(1, min(int(limit or 20), 100))
+        who = ", ".join(f"r.{c}" if identity.has_column(conn, "review_items", c) else f"NULL AS {c}"
+                        for c in ("app", "machine", "identity_source"))
         rows = conn.execute(
             f"""SELECT r.id, r.project_id, p.name AS project, r.kind, r.status, r.summary,
                        r.details, r.source, r.session_id, r.created_at, r.decided_at,
-                       r.reject_reason, r.result_table, r.result_id, r.payload
+                       r.reject_reason, r.result_table, r.result_id, r.payload, {who}
                 FROM review_items r JOIN projects p ON p.id = r.project_id
                 WHERE {' AND '.join(where)} ORDER BY r.id LIMIT ?""",
             (*params, limit + 1)).fetchall()
@@ -139,7 +146,17 @@ def _norm(text: str) -> str:
 
 
 def _own(item: Optional[dict], ident) -> bool:
-    """Did this caller's app (on the same machine, when recorded) queue the item?"""
+    """Did this caller's app (on the same machine, when recorded) queue the item? With a key,
+    token or sign-in (LAN, relay, own tunnel) the app name is the app's own say-so, so the same
+    sign-in counts as the same caller whatever name it sends now, and under any name the token
+    had (`flowstate remote rename`; identity.same_sign_in). FlowState's own items are no app's."""
+    if identity.is_system(item):
+        return False
+    if item and getattr(ident, "credential", None) and (
+            (item.get("machine") and item["machine"] == ident.machine)
+            or identity.same_sign_in(item.get("app"), item.get("machine"),
+                                     item.get("identity_source"), ident)):
+        return True
     if not item or ident is None or not item.get("app") or item["app"] != ident.app:
         return False
     return not (item.get("machine") and ident.machine and item["machine"] != ident.machine)
@@ -177,6 +194,12 @@ def _claim(db_path: Path, item_id: int, status: str, client: str, user_request: 
             conn.rollback()
             raise ReviewError("already_decided",
                               f"Review item #{item_id} is already {row['status']}.")
+        if row["kind"] == "session_summary":
+            from . import session_records
+            if session_records.busy(dict(row)):   # a record's Remove is under way
+                conn.rollback()
+                raise ReviewError("busy", f"A record of review item #{item_id} is being removed "
+                                          f"right now; try again in a moment.")
         sets, who = identity.set_sql(conn, "review_items", client, prefix="decided_")
         conn.execute(f"""UPDATE review_items SET status = ?, decided_at = ?, decided_by = ?,
                         user_request = ?, reject_reason = ?{sets} WHERE id = ?""",
@@ -218,6 +241,16 @@ def _set_session(db_path: Path, session_id: int, summary: str, decision: str,
         conn.close()
 
 
+def _with_removed(db_path: Path, item: dict, text: str) -> str:
+    """The session's saved note, plus which of its records the user removed (session_records)."""
+    from . import session_records
+    try:
+        extra = session_records.note_for(db_path, item)
+    except sqlite3.Error:
+        extra = ""
+    return f"{text} {extra}" if extra else text
+
+
 def strip_tag(text: str) -> str:
     text = (text or "").strip()
     return text[len(AUTO_TAG):].strip() if text.startswith(AUTO_TAG) else text
@@ -225,7 +258,8 @@ def strip_tag(text: str) -> str:
 
 def approve(db_path: Path, item_id: int, user_request: str, client: str,
             apply: Callable[[dict, dict], tuple[str, Optional[int]]],
-            edits: Optional[dict] = None, others: Optional[dict] = None) -> dict:
+            edits: Optional[dict] = None, others: Optional[dict] = None,
+            path: Optional[str] = None) -> dict:
     """Approve (optionally after editing summary/details). `apply(item, payload)` creates
     the record for log_work kinds and returns (table, id). `others` maps further item kinds
     (cleanup, edit) to `fn(item, edits) -> (table, id)`."""
@@ -237,7 +271,11 @@ def approve(db_path: Path, item_id: int, user_request: str, client: str,
         if item["kind"] == "session_summary":
             if item["session_id"] is None:
                 raise ReviewError("session_missing", "The session for this summary no longer exists.")
-            _set_session(db_path, item["session_id"], strip_tag(summary), "approved", item_id)
+            from . import session_records   # Keep all: every record not removed is kept too
+            session_records.keep_rest(db_path, item, client, path)
+            _set_session(db_path, item["session_id"], _with_removed(db_path, item,
+                                                                    strip_tag(summary)),
+                         "approved", item_id)
             table, rid = "sessions", item["session_id"]
         elif item["kind"] in RECORD_KINDS:
             payload = json.loads(item["payload"] or "{}")
@@ -255,8 +293,12 @@ def approve(db_path: Path, item_id: int, user_request: str, client: str,
         raise
     conn = _conn(db_path)
     try:
+        from . import history
+        before = history._row(conn, "review_items", item_id)
         conn.execute("""UPDATE review_items SET summary = ?, details = ?, result_table = ?,
                         result_id = ? WHERE id = ?""", (summary, details, table, rid, item_id))
+        if edits and before and (before["summary"], before["details"]) != (summary, details):
+            history.record_row(conn, "review_items", item_id, before, "queue/review_edit", client)
         conn.commit()
     finally:
         conn.close()
@@ -271,8 +313,8 @@ def reject(db_path: Path, item_id: int, reason: str, user_request: str, client: 
     item = _claim(db_path, item_id, "rejected", client, user_request, reason[:500])
     if item["kind"] == "session_summary" and item["session_id"] is not None:
         # The text stays in the review item; the session says what happened to it.
-        _set_session(db_path, item["session_id"],
-                     f"[auto-captured summary rejected: {reason[:200]}; kept as review item "
-                     f"#{item_id}]", "rejected", item_id)
+        _set_session(db_path, item["session_id"], _with_removed(
+                     db_path, item, f"[auto-captured summary rejected: {reason[:200]}; kept as "
+                                    f"review item #{item_id}]"), "rejected", item_id)
     return {"rejected": item_id, "kind": item["kind"], "reason": reason[:500],
             "note": "Kept in the review queue as rejected; nothing was deleted."}

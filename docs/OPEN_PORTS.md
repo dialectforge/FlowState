@@ -8,8 +8,6 @@ remove it when it ships.
 - **Category filter when listing learnings.** `get_learnings(category=...)` has no listed
   equivalent: `search` lists learnings but cannot filter by category. Add
   `category` to `search` if anyone needs it.
-- **Dead modules.** `mcp-server/flowstate/server_v14.py` and `split_tools.py` are imported
-  by nothing. Remove them in a cleanup change.
 - **Re-check the Glama score** after the next release. The 2026-10-17 score was taken from an
   older build (descriptions such as "Manage problems." that are not on main).
 - **Older names in error messages.** A few error texts still name the internal operation
@@ -20,12 +18,11 @@ remove it when it ships.
 Closed: the "user-gated hard delete" follow-on. Deletes ship as user-approved requests
 (`deletes.py`, see `docs/TOOL_CONSOLIDATION.md`).
 
-- **Erase for good.** An approved delete is kept in `record_history` (that is how undo works)
-  and in backups, so the text stays in the database file. If someone needs a real erasure
-  (privacy), add a user-only purge of a delete's copies (CLI or review page, never a tool).
-- **Attachment file on delete.** Approving an attachment's delete removes the row and keeps
-  the bundle copy of the file (so undo is complete). The older `delete_file=true` is ignored
-  in the request flow; add a user-side "also delete the file" if wanted.
+- **Erase for good: closed in 2.4.4** (`flowstate erase`, erase.py; CLI only, the user's `y`).
+  Still open: it can't reach older backups, the off-site copy until the next push, or data-git
+  history (README "Erasing for good"); a review-page button for it.
+- **Attachment file on delete.** Deleting keeps the bundle copy of the file (so undo is
+  complete); the answer now says so, and `flowstate erase` removes it.
 - **Unknown project name on reads.** A read naming a project that matches nothing (for
   example `manage_history(action="list", project=<a deleted project>)`) answers
   `project_required` instead of `project_not_found`. Wording bug in server.py's read path.
@@ -62,6 +59,22 @@ Closed: the "user-gated hard delete" follow-on. Deletes ship as user-approved re
 Closed in task 31: "Docs say the phone keys are placeholders". CHANGELOG 2.4.0, README's
 honest limits and docs/APPROVALS.md section 3 now say what `approvals.py` does: it pins
 `fsa-1` and `fsa-2`.
+
+## From per-record Keep / Remove on session summaries (task 48, branch `feature/review-card`)
+
+- **The phone approve page never gets a session summary today.** Per-item phone links
+  (`/approve/<item>`) are made only for user-only items (`approvals.verify_grant`), so a
+  summary reaches the phone through the phone list (`/review`, which has `/review/record`).
+  `/approve/<item>/record` is in place and tested for the day summaries get their own links.
+- **"Changed since" sees FlowState's own edits only.** A record counts as changed after the
+  session when the edit history has a row for it after the session ended (other than the
+  user's own Remove / Bring back). An edit made outside FlowState, or one in the same second
+  the session ended, isn't seen.
+- **The chat walk's box is Keep all only.** It can't hold a button per record; it says to use
+  the review page or the phone for one record.
+- **Bring back only while the summary waits.** After Keep all / Don't keep the records show
+  their state without buttons; a removed one comes back with `manage_history(action="undo")`.
+- **The card shows the first 10 records with buttons**; the rest are on the review page.
 
 ## From the update check and `flowstate update` (tasks 40/41, branches `dev/t40-update-check`, `dev/t40-self-update`)
 

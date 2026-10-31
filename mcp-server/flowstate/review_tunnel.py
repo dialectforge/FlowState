@@ -46,6 +46,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from . import review_page
+from .urls import no_trailing_slash
 
 log = logging.getLogger("flowstate.review_tunnel")
 
@@ -204,13 +205,15 @@ def routes(db_path_fn, store, public_url: str):
     from .remote_auth import CLIENT_IP_KEY
 
     global PUBLIC_URL
-    PUBLIC_URL = public_url.rstrip("/")
+    PUBLIC_URL = no_trailing_slash(public_url)
     u = urlparse(PUBLIC_URL)
     origin = f"{u.scheme}://{u.netloc}".lower()
     sessions = Sessions()
     page = review_page.Page(db_path_fn, port=0, base=PATH, client=CLIENT, user_words=USER_WORDS,
-                            stylesheet=f"{PATH}/page.css", sign_out=f"{PATH}/sign-out")
-    acts = {"approve": page.approve, "reject": page.reject, "mode": page.set_mode,
+                            stylesheet=f"{PATH}/page.css", sign_out=f"{PATH}/sign-out",
+                            settings="off")   # never the Settings section on the public page
+    acts = {"approve": page.approve, "reject": page.reject, "record": page.record,
+            "mode": page.set_mode,
             "app": page.set_app, "undo": page.undo}
 
     def html(body: str, status: int = 200, extra=None):
@@ -273,8 +276,17 @@ def routes(db_path_fn, store, public_url: str):
             return html(signin_html(sessions.form_token(), f"Too many tries. Try again in about "
                                                             f"{wait} minute(s)."), 429,
                         {"Retry-After": str(locked or SIGNIN_WINDOW)})
-        ok = await asyncio.to_thread(store.check_passphrase, form.get("passphrase", ""))
-        if not ok:
+        got = await asyncio.to_thread(store.try_passphrase, form.get("passphrase", ""))
+        if got == "busy":
+            return html(signin_html(sessions.form_token(), "Another passphrase is being checked; "
+                                                            "try again in a moment."), 503,
+                        {"Retry-After": "2"})
+        if got == "locked":
+            locked = max(1, store.locked_for())
+            return html(signin_html(sessions.form_token(), f"Too many tries. Try again in about "
+                                                            f"{max(1, locked // 60)} minute(s)."),
+                        429, {"Retry-After": str(locked)})
+        if got != "ok":
             log.warning("wrong owner passphrase on the tunnel review page")
             return html(signin_html(sessions.form_token(), "Wrong passphrase."), 403)
         log.info("owner signed in to the tunnel review page")

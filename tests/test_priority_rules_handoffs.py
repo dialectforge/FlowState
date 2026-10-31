@@ -128,12 +128,18 @@ def test_priority_in_brief_next_log_work_and_review(backend, seeded_db):
 def test_rules_add_list_remove_and_shown_first(backend, seeded_db):
     S = backend
     r = _j(call(S, "rules", {"action": "add", "project": "Alpha", "rule": "Never push to main"}))
-    rid = r["rule"]["id"]
+    # an app's rule waits for the user (audit D2); asking again finds the same waiting item
+    assert r["queued_for_review"] and "HARD RULES" not in brief(S)
+    assert _j(call(S, "rules", {"action": "add", "project": "Alpha", "rule": "never push to MAIN"}))[
+        "queued_for_review"] == r["queued_for_review"]
+    from conftest import approve_rules
+    rid = approve_rules(seeded_db)[0]
     assert _j(call(S, "rules", {"action": "add", "project": "Alpha", "rule": "never push to MAIN"}))[
         "note"] == "This rule already exists."
     call(S, "rules", {"action": "add", "project": "Alpha", "rule": "Do not touch Cloudflare"})
+    approve_rules(seeded_db)
     lines = brief(S).splitlines()
-    assert lines[1].startswith("HARD RULES") and lines[2] == f"- R{rid}: Never push to main"
+    assert lines[1].startswith("HARD RULES") and lines[2] == f"- R{rid} (set by the user): Never push to main"
     assert "Never push" not in brief(S, "Beta Project")           # per project
 
     lst = _j(call(S, "rules", {"action": "list", "project": "Alpha"}))
@@ -144,12 +150,16 @@ def test_rules_add_list_remove_and_shown_first(backend, seeded_db):
     wrong = call(S, "rules", {"action": "remove", "project": "Beta Project", "rule_id": rid,
                               "user_request": "remove it"})
     assert wrong.isError and _j(wrong)["error"] == "project_mismatch"
-    ok = _j(call(S, "rules", {"action": "remove", "project": "Alpha", "rule_id": rid,
-                              "user_request": "drop the main rule please"}))
-    assert ok["removed"] == rid
+    # task 54: an app's remove only queues it for the user, who approves it themselves
+    asked = _j(call(S, "rules", {"action": "remove", "project": "Alpha", "rule_id": rid,
+                                 "user_request": "drop the main rule please"}))
+    assert asked["queued_for_review"] and "Never push" in brief(S)
+    from flowstate import review, review_apply
+    review_apply.approve(seeded_db, review.get_item(seeded_db, asked["queued_for_review"]), {},
+                         "I removed it myself", "command-line", {})
     assert "Never push" not in brief(S)
     assert _q(seeded_db, "SELECT removed_request FROM project_rules WHERE id = ?", rid) == \
-        [("drop the main rule please",)]                         # soft delete, kept on record
+        [("approved by the user (terminal)",)]                   # soft delete, kept on record
     everything = _j(call(S, "rules", {"action": "list", "project": "Alpha", "include_removed": True}))
     assert everything["count"] == 2
 
@@ -161,13 +171,17 @@ def test_rules_limits_and_secret_scan(backend):
     S = backend
     long = call(S, "rules", {"action": "add", "project": "Alpha", "rule": "x" * 301})
     assert long.isError and _j(long)["error"] == "rule_too_long"
-    for i in range(6):
+    from conftest import approve_rules
+    db = S.backend.db_path
+    for i in range(6):   # the caps count active rules (task 55: waiting ones have their own)
         r = call(S, "rules", {"action": "add", "project": "Alpha", "rule": f"Rule {i} " + "y" * 290})
         assert not r.isError
+        approve_rules(db)
     full = call(S, "rules", {"action": "add", "project": "Alpha", "rule": "One more " + "z" * 250})
     assert full.isError and _j(full)["error"] == "rules_full"
     for i in range(25):
         assert not call(S, "rules", {"action": "add", "project": "Beta Project", "rule": f"r{i}"}).isError
+        approve_rules(db)
     many = call(S, "rules", {"action": "add", "project": "Beta Project", "rule": "one too many"})
     assert many.isError and "25 rules" in _j(many)["message"]
     sec = call(S, "rules", {"action": "add", "project": "Alpha",
@@ -187,12 +201,15 @@ def test_rules_never_truncated_others_give_way(backend, seeded_db, size, cap):
     rules = [f"Rule {i}: " + "r" * 280 for i in range(6)]   # 1,700+ characters of rules
     for t in rules:
         assert not call(S, "rules", {"action": "add", "project": "Alpha", "rule": t}).isError
+    from conftest import approve_rules   # an app's rule waits for the user (audit D2)
+    approve_rules(seeded_db)
     call(S, "handoff", {"action": "leave", "project": "Alpha", "where_i_was": "h" * 1000,
                         "next_step": "n" * 500})
     text = brief(S, size=size)
     for t in rules:
         assert t in text                                   # every rule, in full
-    assert len(text) <= max(cap, sum(len(t) + 10 for t in rules) + 700)
+    # each rule line also says who set it (audit D2): "- R1 (set by the user): "
+    assert len(text) <= max(cap, sum(len(t) + 26 for t in rules) + 700)
     if size != "quick":
         assert len(text) <= cap
     assert "H1" in text                                     # the handoff still shows (maybe trimmed)
@@ -202,6 +219,8 @@ def test_rules_never_truncated_others_give_way(backend, seeded_db, size, cap):
 def test_handoff_shown_after_rules_until_picked_up(backend, seeded_db):
     S = backend
     call(S, "rules", {"action": "add", "project": "Alpha", "rule": "Never push to main"})
+    from conftest import approve_rules   # an app's rule waits for the user (audit D2)
+    approve_rules(seeded_db)
     h = _j(call(S, "handoff", {"action": "leave", "project": "Alpha",
                                "where_i_was": "Half-way through the export rewrite; tests 3/5 pass",
                                "next_step": "Fix the unicode test"}, client="Grok Build"))

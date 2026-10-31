@@ -35,7 +35,7 @@ def _closed_port() -> int:
 def test_unreachable_remote_is_not_reported_as_pushed(data, where):
     url = (f"http://127.0.0.1:{_closed_port()}/flowstate.git" if where == "closed port"
            else "https://flowstate-e2e.invalid/flowstate.git")    # .invalid never resolves
-    git_ops.git_set_remote(url)
+    git_ops.git_set_remote(url, allow_unchecked=True)   # local test remotes: the user's --unchecked
     r = git_ops.git_sync("offline sync")
     assert r["success"] is False and r["pushed"] is False and r.get("offline") is True, r
     assert r["committed"] is True and "committed locally" in r["error"]
@@ -45,7 +45,7 @@ def test_unreachable_remote_is_not_reported_as_pushed(data, where):
 def test_first_sync_to_an_empty_remote_pushes(data, tmp_path):
     remote = tmp_path / "remote.git"
     _git("init", "-q", "--bare", str(remote), cwd=tmp_path)
-    git_ops.git_set_remote(str(remote))
+    git_ops.git_set_remote(str(remote), allow_unchecked=True)
     r = git_ops.git_sync("first")
     assert r["success"] is True and r["pushed"] is True and r["first_push"] is True, r
     branch = _git("branch", "--show-current", cwd=data).strip()
@@ -59,7 +59,7 @@ def test_first_sync_to_an_empty_remote_pushes(data, tmp_path):
 def test_a_real_conflict_is_labelled_and_left_clean(data, tmp_path):
     remote = tmp_path / "remote.git"
     _git("init", "-q", "--bare", str(remote), cwd=tmp_path)
-    git_ops.git_set_remote(str(remote))
+    git_ops.git_set_remote(str(remote), allow_unchecked=True)
     assert git_ops.git_sync("base")["pushed"]
     other = tmp_path / "other"
     _git("clone", "-q", str(remote), str(other), cwd=tmp_path)

@@ -5,12 +5,48 @@ import shutil
 import hashlib
 from pathlib import Path
 from typing import Optional
-from datetime import datetime
 from .utils import get_db, data_dir
 
+def _inside(base: Path, path: Path) -> Path:
+    """`path` when it stays inside `base` (links resolved), else ValueError (audit N-F25: a
+    project named `../../x`, or a link under projects/, must not lead outside the data folder)."""
+    base_r, path_r = base.resolve(), path.resolve()
+    if path_r != base_r and base_r not in path_r.parents:
+        raise ValueError("That path would lead outside FlowState's projects folder; refused.")
+    return path
+
+
+def _copy_new(src: Path, dest: Path) -> None:
+    """Copy into a file that doesn't exist yet, never through a link (task 56, N6: a link
+    pointing nowhere made shutil.copy2 write wherever it pointed). Owner-only, like FlowState's
+    other files."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) \
+        | getattr(os, "O_BINARY", 0)
+    fd = os.open(str(dest), flags, 0o600)
+    try:
+        with open(src, "rb") as fin, os.fdopen(fd, "wb") as fout:
+            fd = None
+            shutil.copyfileobj(fin, fout)
+    except BaseException:
+        if fd is not None:
+            os.close(fd)
+        try:
+            dest.unlink()
+        except OSError:
+            pass
+        raise
+    try:
+        st = os.stat(src)
+        os.utime(dest, ns=(st.st_atime_ns, st.st_mtime_ns))
+    except OSError:
+        pass
+
+
 def _get_project_bundle_path(project_name: str) -> Path:
-    """Get the path to a project's bundle directory."""
-    return data_dir() / "projects" / f"{project_name.lower().replace(' ', '-')}.flowstate"
+    """Get the path to a project's bundle directory (always inside data_dir()/projects)."""
+    base = data_dir() / "projects"
+    slug = project_name.lower().replace(' ', '-').replace("\0", "")
+    return _inside(base, base / f"{slug}.flowstate")
 
 
 def _compute_file_hash(file_path: Path) -> str:
@@ -65,7 +101,6 @@ def attach_file(
     if not source_path.exists():
         raise FileNotFoundError(f"File not found: {file_path}")
     
-    # Get project info
     project = db.get_project(project_id)
     if not project:
         raise ValueError(f"Project not found: {project_id}")
@@ -79,19 +114,20 @@ def attach_file(
     # Determine storage path
     if copy_to_bundle:
         bundle_path = _get_project_bundle_path(project.name)
-        attachments_dir = bundle_path / "attachments"
+        attachments_dir = _inside(bundle_path.parent, bundle_path / "attachments")
         attachments_dir.mkdir(parents=True, exist_ok=True)
-        
+        _inside(data_dir() / "projects", attachments_dir)   # (a link made meanwhile)
+
         # Copy file to bundle
         dest_path = attachments_dir / file_name
-        # Handle name collision
+        # Handle name collision (a link counts as taken, even one pointing nowhere)
         counter = 1
-        while dest_path.exists():
+        while os.path.lexists(dest_path):
             stem = source_path.stem
             dest_path = attachments_dir / f"{stem}_{counter}{source_path.suffix}"
             counter += 1
-        
-        shutil.copy2(source_path, dest_path)
+
+        _copy_new(source_path, dest_path)
         stored_path = str(dest_path.relative_to(bundle_path))
         is_external = False
     else:
@@ -194,7 +230,7 @@ def remove_attachment(
             project = db.get_project(attachment['project_id'])
             if project:
                 bundle_path = _get_project_bundle_path(project.name)
-                file_path = bundle_path / attachment['file_path']
+                file_path = _inside(bundle_path, bundle_path / attachment['file_path'])
                 if file_path.exists():
                     os.remove(file_path)
         
@@ -227,7 +263,8 @@ _CODE_TYPES = _TEXT_TYPES - {"txt", "md", "markdown", "rst", "csv", "tsv", "log"
 def _file_of(row, project_name: str) -> Path:
     if row["is_external"]:
         return Path(row["file_path"])
-    return _get_project_bundle_path(project_name) / row["file_path"]
+    bundle = _get_project_bundle_path(project_name)
+    return _inside(bundle, bundle / row["file_path"])
 
 
 def _read_text(path: Path, file_type: str) -> Optional[str]:
@@ -267,7 +304,10 @@ def _sections(text: str, headings: bool = False):
 
 def _index(conn, row, project_name: str) -> int:
     """Index one attachment's text (inside the caller's transaction). Returns sections."""
-    text = _read_text(_file_of(row, project_name), row["file_type"])
+    try:
+        text = _read_text(_file_of(row, project_name), row["file_type"])
+    except ValueError:   # a stored path leading outside the projects folder: never read
+        text = None
     conn.execute("DELETE FROM content_locations WHERE attachment_id = ? AND location_type = 'line' "
                  "AND related_problem_id IS NULL AND related_learning_id IS NULL", (row["id"],))
     n = 0

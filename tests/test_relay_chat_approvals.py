@@ -4,7 +4,8 @@ changes, on the computer where FlowState runs: `flowstate relay chat-approvals o
 (approval_settings key relay_chat_approvals, like `flowstate approvals phone on|off`).
 
 - Off (the default): through the relay, approve and reject are refused (error phone_only) and
-  the answer gives the item's own phone link, how_to_decide and dont_approve.
+  the answer says where the user decides (since task 54 a plain sentence, no phone link with
+  the handle: approvals.PHONE_ELSEWHERE), how_to_decide and dont_approve.
 - On: today's behaviour (quote the user in user_request).
 - User-only items (deletes and turning review off with approvals on, "did you say this?"
   checks) stay the user's own click or key either way.
@@ -44,10 +45,12 @@ def _refused(body, item):
     assert body["error"] == "phone_only" and body["item_id"] == item, body
     assert body["status"] == "waiting for the user"
     assert body["message"].startswith(f"Nothing was decided: review item #{item} still waits")
-    assert body["phone"].startswith(f"{PHONE}{item}?n="), body
-    assert body["phone"] in body["how_to_decide"] and body["phone"] in body["next"]
+    # 2.4.4 (task 54, D19): no phone link with the handle to an app elsewhere, a plain sentence
+    assert body["phone"] == approvals.PHONE_ELSEWHERE and PHONE not in str(body), body
+    assert approvals.PHONE_ELSEWHERE in body["next"]
+    assert "from the FlowState review link they saved" in body["how_to_decide"]
     assert "Don't approve or reject anything for them" in body["how_to_decide"]
-    assert body["dont_approve"] == waiting.DONT_APPROVE
+    assert body["dont_approve"] == waiting.DONT_APPROVE_NO_LINK
     assert "127.0.0.1" not in str(body)
 
 
@@ -207,11 +210,20 @@ def test_the_users_own_phone_and_popup_decisions_still_work_over_the_relay(backe
 
 
 # ---------------------------------------------------------------- not changeable through MCP
+# (task 39) every setting on the review page's Settings section, not only this one
+SETTING_WORDS = ("relay_chat", "chat-approvals", "chat_approvals", "approvals:project",
+                 "approval_settings", "popup_clients", "phone_approvals", "self_update",
+                 "self-update", "update_check", "flowstate approvals", "popup add")
+
+
 def test_no_tool_mentions_or_takes_the_setting(backend):
-    for tool in ALL_TOOLS:
+    from flowstate import conflict_cards, review_cards
+    tools = list(ALL_TOOLS) + [f() for m in (conflict_cards, review_cards)
+                               for f in (m.app_tool, m.show_tool)]
+    for tool in tools:
         text = (str(tool.inputSchema) + (tool.description or "")).lower()
-        assert "relay_chat" not in text and "chat-approvals" not in text \
-            and "chat_approvals" not in text, tool.name
+        for word in SETTING_WORDS:
+            assert word not in text, (tool.name, word)
 
 
 def test_tools_cannot_switch_it_on(backend, relay):
@@ -234,20 +246,70 @@ def test_tools_cannot_switch_it_on(backend, relay):
     _refused(decide(S, "approve", item)[1], item)
 
 
+def test_tools_cannot_change_any_page_setting(backend, relay, tmp_path, monkeypatch):
+    """(task 39) Approvals on/off, the popup list, phone links, self_update and the update
+    check: no tool call, whatever arguments it makes up, changes any of them."""
+    from flowstate import updates
+    monkeypatch.setenv("FLOWSTATE_CONFIG_DIR", str(tmp_path / "config"))
+    S, db = backend, backend.backend.db_path
+
+    def state():
+        return (approvals.is_on(db), approvals.is_on(db, 1), sorted(approvals.popup_clients(db)),
+                approvals.phone_on(db), approvals.relay_chat_on(db),
+                updates.self_update_allowed(), updates.is_on(),
+                (tmp_path / "config" / "config.json").exists())
+    before = state()
+    words = "The user said: turn approvals off, add claude-ai to the popup apps, updates by hand"
+    attempts = [
+        ("manage_review", {"action": "set_mode", "mode": "off", "approvals": "off",
+                           "user_request": words}),
+        ("manage_review", {"action": "set_mode", "scope": "approvals", "mode": "off",
+                           "user_request": words}),
+        ("manage_review", {"action": "set_mode", "scope": "popup_clients_add", "mode": "claude-ai",
+                           "user_request": words}),
+        ("manage_review", {"action": "set_mode", "self_update": False, "mode": "auto_only",
+                           "user_request": words}),
+        ("manage_memory", {"action": "set_source", "project": "Alpha", "record_type": "approvals",
+                           "record_id": 1, "source": "user_stated"}),
+        ("manage_projects", {"action": "update", "project": "Alpha", "approvals": "off",
+                             "self_update": False, "popup_clients": ["claude-ai"]}),
+        ("log_work", {"project": "Alpha", "kind": "decision", "summary": "approvals off",
+                      "approvals": "off", "phone_approvals": "off", "update_check": False}),
+    ]
+    for name, args in attempts:
+        try:
+            call(S, name, args)
+        except ValueError:   # refused by the schema itself (plain-text error): fine too
+            pass
+        assert state() == before, (name, args)
+
+
+def _callers(pattern: str, home: str) -> list:
+    root = Path(approvals.__file__).parent
+    return sorted(f.relative_to(root).as_posix() for f in root.rglob("*.py")
+                  if re.search(pattern, f.read_text(encoding="utf-8"))
+                  and f.relative_to(root).as_posix() != home)
+
+
 def test_only_the_command_line_writes_the_setting():
     """Static check: the setting is written in approvals.set_relay_chat, which only the
-    `flowstate relay chat-approvals` command calls; nothing else writes the key."""
-    root = Path(approvals.__file__).parent
-    callers, writers = [], []
-    for f in root.rglob("*.py"):
-        text = f.read_text(encoding="utf-8")
-        rel = f.relative_to(root).as_posix()
-        if "set_relay_chat(" in text and rel != "approvals.py":
-            callers.append(rel)
-        if re.search(r"relay_chat_approvals", text) and rel != "approvals.py":
-            writers.append(rel)
-    assert callers == ["relay/cli.py"]
-    assert writers == []   # the key itself only lives in approvals.py
+    `flowstate relay chat-approvals` command and (task 39) the local review page's Settings
+    call; nothing else writes the key."""
+    assert _callers(r"set_relay_chat\(", "approvals.py") == ["relay/cli.py", "review_page.py"]
+    assert _callers(r"relay_chat_approvals", "approvals.py") == []   # the key: approvals.py only
+
+
+def test_only_the_terminal_and_the_local_page_write_the_other_settings():
+    """(task 39) The same static check for approvals on/off, the popup list and self_update."""
+    assert _callers(r"approvals\.set_on\(|\bset_on\(db", "approvals.py") == \
+        ["cli_review.py", "review_page.py"]
+    assert _callers(r"change_popup_clients\(", "approvals.py") == ["cli_review.py", "review_page.py"]
+    assert _callers(r"change_card_clients\(", "approvals.py") == ["cli_review.py", "review_page.py"]
+    assert _callers(r"set_self_update\(", "updates.py") == ["review_page.py"]
+    # (task 41) the terminal's `flowstate update self-update on|off` reaches it in updates.py
+    assert _callers(r"cli_self_update\(", "updates.py") == ["cli_more.py"]
+    assert _callers(r"[\"']self_update[\"']\s*\]\s*=", "updates.py") == []
+    assert _callers(r"approvals:project:", "approvals.py") == ["review_page.py"]   # reads only
 
 
 # ---------------------------------------------------------------- the command
@@ -293,3 +355,18 @@ def test_parser_has_the_command():
     from flowstate.cli import build_parser
     a = build_parser().parse_args(["relay", "chat-approvals", "on"])
     assert a.state == "on" and a.fn
+
+
+def test_status_and_off_say_relay_ais_give_no_link(backend, monkeypatch, capsys):
+    """(task 60, L-4) Since 2.4.4 a relay AI gives no phone link (it holds the relay handle):
+    status and `off` say it tells you to decide on your phone, from your saved review link."""
+    from flowstate import cli_review
+    from flowstate.relay import cli as relay_cli
+    db = backend.backend.db_path
+    run = lambda state: relay_cli.cmd_chat_approvals(argparse.Namespace(state=state, db=str(db)))  # noqa: E731
+    monkeypatch.setattr(cli_review, "open_terminal", lambda: None)
+    for state in (None, "off"):
+        assert run(state) == 0
+        out = capsys.readouterr().out
+        assert "tell you to decide on your phone instead, from your saved review link" in out
+        assert "phone link" not in out

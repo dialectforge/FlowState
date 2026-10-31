@@ -70,17 +70,51 @@ claude.ai or ChatGPT work through Cloudflare Access Managed OAuth; whether the p
    passphrase → Approve". Only you know the passphrase. 5 wrong tries within 15 minutes lock
    approvals for up to 15 minutes.
 4. **Per-app tokens** for apps that take a fixed header (Cursor, the xAI API, Claude Code):
-   `flowstate remote add-client --name "Cursor" [--read-only] [--days N]`.
+   `flowstate remote add-client --name "my-laptop-app" [--read-only] [--days N]`.
+   **Use one token per app** and name it after where it's used. A token pasted into several
+   apps can't tell them apart: FlowState records the name each app sends and shows the token's
+   name next to it ("Grok Bot (via my-laptop-app)"), but pausing or revoking the token stops
+   all of them.
 5. **Every app can be cut off on its own:** `flowstate remote clients` lists them with
-   "last used"; `flowstate remote revoke --client <id>` stops it at once.
+   "last used"; `flowstate remote revoke --client <id>` stops it at once. To give a token
+   (or an OAuth app) a better name, `flowstate remote rename "<old name>" "<new name>"` (the
+   old name may be its id from `remote clients`): the same token keeps working, nothing in the
+   app changes. A name another app has, or had before a rename, is refused. What the app saved
+   before keeps the old name; what it saves from now on shows the new one. A paused token stays
+   paused under its new name, and it is still the same app for its own review items and undo.
+   To replace one token that several apps share, find it in `flowstate remote clients`, give
+   each app its own (`remote add-client --name "<new name>"`), then revoke the old one.
 
    **LAN keys vs remote tokens.** `flowstate keys add --name "<app>" [--read-only]` makes a
    per-app key for the **local/LAN** listener only (prefix `fs_lk_`); it is refused on the
    public URL, just like the LAN token. `flowstate remote add-client` makes a per-app
-   **remote** token (prefix `fs_ct_`) for the public listener (it also works on the LAN
-   listener, as before). Both record the app's name from the key or token, not from what the
-   app says; for remote apps the machine recorded is the client's name. Changes made with the
-   shared LAN token are marked "shared token (legacy)". Every change keeps the app, the model
+   **remote** token (prefix `fs_ct_`) for the public listener. On the LAN listener a remote
+   token works only from this computer (127.0.0.1): **LAN traffic is plain HTTP and not
+   encrypted**, so a token sent over the Wi-Fi can be copied by anyone on that network, and a
+   remote token would then work from anywhere through the relay or tunnel. FlowState refuses it
+   from other computers (401 `remote_token_on_lan`) unless you run `flowstate remote lan-tokens
+   on` (it asks for your `y`). Give LAN apps LAN keys instead. FlowState also prints a warning
+   when it starts on a LAN address. A key or token is often shared by several apps (or named after another
+   app), so everywhere (LAN, your own tunnel, the relay) the app recorded is the name the
+   connecting app sends, and the key's or token's name is recorded beside it, in the machine
+   column: "<the key's workspace> (signed in as <key name>)" (or "lan (signed in as ...)"
+   without a workspace) for a LAN key, "lan (signed in as <token name>)" for a remote token on
+   the LAN, "tunnel (signed in as ...)" / "relay (signed in as ...)" on the tunnel and the
+   relay. An app that sends no name is recorded as the key's or token's name on the LAN, and
+   as "Tunnel (unknown app)" / "Relay (unknown app)" on the tunnel and the relay. In-chat
+   review cards come to an app on the tunnel or the relay only once you add its sign-in's own
+   name with `flowstate approvals cards add --sign-in "<name>"`, or tap Allow on the one-time
+   "Allow tap cards in <app>?" item FlowState puts in your review queue the first time the app
+   could show a card (or the review page's
+   Settings); see docs/APPROVALS.md. The relay only carries the encrypted bytes, so the card,
+   its one-use tap code and your tap go from the app to your own FlowState, which checks the
+   code. Pages, cards
+   and the brief show both names when they differ, e.g. "Grok Bot (via my-laptop-app)", and
+   one name when they are the same; pausing either name stops its writes, and a different name
+   on the same key or token still counts as the same app (it can't decide its own review items
+   or take back another app's records). Changes recorded before 2.4.4 show as they were saved
+   (on the LAN: the key's or token's name as the app). Changes made with the shared LAN token
+   are marked "shared token (legacy)" and show the name the app sends, as before. Every change keeps the app, the model
    (only when the app supplies it, for example with an `X-FlowState-Model` header) and how the
    app was identified; see "Who did what" on the review page.
 6. **Guard rails:**
@@ -98,7 +132,9 @@ claude.ai or ChatGPT work through Cloudflare Access Managed OAuth; whether the p
      `FLOWSTATE_AUTH_DB`), not in your data folder;
    - access tokens last 1 hour; refresh tokens last 30 days and change on every use;
    - the log has one line per request with no bodies, no query strings and no tokens;
-   - `GET /health` answers `{"ok": true, ...}` without a token and says nothing about your data.
+   - `GET /health` answers `{"ok": true, ...}` without a token and says nothing about your data
+     (on your own tunnel and the LAN; not through the relay, whose addresses are public in the
+     certificate logs).
 7. **Optional second lock (recommended):** a Cloudflare Access rule on the path `/consent`
    only, allowing just your own login (for example a one-time code sent to you). Then even
    someone who learns the passphrase can't approve an app. Don't put Access on `/mcp`,
@@ -129,6 +165,9 @@ Below, `<venv python> -m flowstate ...` can also be written `flowstate ...` with
 2. **Install cloudflared** from Cloudflare's official download page
    (https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/).
    Check the published checksum before you install it.
+   Use cloudflared 2026.10.2 or later (check with `cloudflared --version`). Older versions
+   still trust compromised eMudhra certificates; see Cloudflare's notice:
+   https://blog.cloudflare.com/emudhra-certificate-compromise
 3. **Create the tunnel** (opens a browser to log in to Cloudflare; pick your domain):
    ```
    cloudflared tunnel login
@@ -158,7 +197,8 @@ Below, `<venv python> -m flowstate ...` can also be written `flowstate ...` with
      `https://flowstate.example.com/mcp` → Connect → FlowState page → approve.
    - ChatGPT: Settings → Connectors (developer mode) → add `https://flowstate.example.com/mcp`,
      OAuth → approve.
-   - Cursor: `<venv python> -m flowstate remote add-client --name "Cursor"`; put the token in
+   - Cursor: `<venv python> -m flowstate remote add-client --name "my-laptop-app"` (a token
+     for this one app; make another for each other app); put the token in
      an environment variable and use
      `"headers": {"Authorization": "Bearer ${env:FLOWSTATE_CURSOR_TOKEN}"}`.
    - Grok app: try a custom connector with the URL. If it asks for OAuth and fails, look in the
@@ -200,7 +240,8 @@ any browser, your phone included:
   treated exactly like one with none. An agent that holds a token for `/mcp` can't approve
   its own work through this page.
 - **Where it exists:** only on the public listener (`--public-url`). The relay has its own
-  signed-in phone list (`https://flowstatemcp.com/review/<handle>`), and on your computer the
+  signed-in phone list (`https://flowstatemcp.com/review/<handle>`; FlowState gives that link
+  only to apps on your computer, so open it from where you saved it), and on your computer the
   "FlowState review" desktop shortcut (made by `setup_flowstate.py`) or `flowstate
   review-page` opens the 127.0.0.1 page. The LAN and relay listeners answer 404 on
   `/review/tunnel`.

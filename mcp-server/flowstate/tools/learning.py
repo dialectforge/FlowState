@@ -1,8 +1,6 @@
 """Learning and skill tracking tools."""
 
 from typing import Optional
-import json
-from datetime import datetime
 from .utils import get_db, _compact_list
 
 def log_learning(

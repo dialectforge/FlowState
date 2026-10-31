@@ -6,6 +6,41 @@ off wait for the user's own click or key: popup, phone, or terminal (see `approv
 This page is the phone part, which needs the site: the approve link for one item (sections
 1-4) and the review list of everything waiting (section 5).
 
+## Changing the settings: terminal or the local review page
+
+Every approvals setting has two ways to change it, both on the computer where FlowState runs.
+No MCP tool reads or writes any of them (tests check the tool list and that only the files
+named here call the writers).
+
+| Setting | Terminal | Review page (`flowstate review-page`, Settings) |
+|---|---|---|
+| Approvals on / off, install or `--project` | `flowstate approvals on\|off [--project P] [--clear]` (off asks for `y`) | Approvals row: Turn on / Turn off / Remove the project's own setting; off (or removing a project's own setting while it is on) asks on a confirm page |
+| Phone approval links | `flowstate approvals phone on\|off` | Phone approval links row (relay only) |
+| Popup apps | `flowstate approvals popup add\|remove [--sign-in] NAME` (add asks for `y`) | Popup row: Add / Remove (a tick marks a sign-in name); claude.ai and Anthropic names never get a popup whatever the list says; `--sign-in`: a LAN key's or token's own name, for an app on this computer |
+| Review card apps | `flowstate approvals cards add\|remove [--sign-in] NAME` (add asks for `y`) | Review card row: Add / Remove (a tick marks a sign-in name); starts with `claude-ai` and `local-agent-mode-*` (Claude Desktop's chat and its Cowork mode on this computer; an entry ending in `*` matches names that start with it, stdio only); a network app counts only by its key's, token's or OAuth app's own name on the sign-in part (`--sign-in`); an OAuth app that registered again as "Claude (2)" keeps the place "Claude" had |
+| Chat approvals through the relay | `flowstate relay chat-approvals on\|off` (on asks for `y`) | Chat approvals row (relay only); on asks on a confirm page |
+
+- **The confirm page** replaces the terminal's `y`. The first POST answers with a plain-words
+  page ("Only do this if ..."); its Yes form carries a fresh token (kept only as a hash) that is
+  used up on the first try, belongs to that browser session, names that exact change (setting,
+  scope and state, compared with what is posted) and expires after 5 minutes
+  (`review_page.CONFIRM_SECONDS`). A replayed, expired, other-session or other-change token, or
+  No, changes nothing. Approvals on and relay chat approvals off need no confirm, as in the
+  terminal.
+- **Only the launch-key page changes them.** The page FlowState starts for the link in the
+  brief and the walk (`waiting.py`, no one-time key: anything on this computer can open it)
+  shows them read-only with "open `flowstate review-page` to change these" and answers any
+  settings POST with "nothing changed". The tunnel page (`review_tunnel.py`), the phone pages
+  (`review_phone.py`, `approve_page.py`) and the relay have no Settings section and no
+  `/settings/...` routes.
+- **Without the relay** (`approvals.relay_set_up()` false: not enrolled on this computer) the
+  two relay rows are greyed out with their controls disabled, and a POST to them is ignored.
+- **Logged**: every page change goes into `review_mode_log` with client and caller
+  `review-page`, `user_request` "set on the FlowState review page" and the identity fields
+  (`identity.insert`); terminal changes keep "set in the user's terminal".
+- Same honest limit as the terminal's `y`: a program that drives the user's own logged-in
+  browser on this computer could click through the confirm page.
+
 ## Where the user sees what's waiting (no terminal needed)
 
 Whatever the approvals setting, the user can see and decide the whole review queue three ways
@@ -17,13 +52,21 @@ Whatever the approvals setting, the user can see and decide the whole review que
   boolean `approve` (ticked = approve, unticked = reject), an optional note (the reject reason)
   and, for a project delete, the project's name. Decline skips the item; cancel, no answer
   within 120 s or a failure stops the walk. Each decision goes through `popup.as_user` with the
-  label `chat (<app>)`. Nothing the calling app passes (`user_request`, extra arguments) is an
-  answer.
+  label `chat (<app>)`, or `chat (<app>, signed in as <key or token name>)` for a LAN app.
+  Nothing the calling app passes (`user_request`, extra arguments) is an answer.
   - **No boxes from outside this computer.** Requests that came through the relay listener or
-    the public (tunnel) listener never get a box, here or as the approvals popup
-    (`popup.no_box`): there the app's name is only its own say-so. `remote_auth.Gate` marks
-    every request with its listener (`lan` / `public` / `relay`; the relay agent builds its
-    app with `relay=True`), in the server, never from a header.
+    the public (tunnel) listener, or to the LAN listener from another computer, never get a
+    box, here or as the approvals popup (`popup.no_box`). `remote_auth.Gate` marks every
+    request with its listener (`lan` / `public` / `relay`; the relay agent builds its app with
+    `relay=True`) and whether its socket peer is this computer, in the server, never from a
+    header.
+  - **A LAN app counts by its sign-in, never by the name it sends** (2.4.4, task 57). On stdio
+    the popup list is checked against the MCP client name (an app this computer starts). A LAN
+    app on this computer gets boxes only when its key's or token's own name is on the popup
+    list's sign-in part (`flowstate approvals popup add --sign-in NAME`, or the tick on the
+    review page's Popup row), so a key calling itself `claude-code` gets none. The shared LAN
+    token never gets boxes. An app name on the list never trusts a sign-in of the same name,
+    and the same holds for the card list (`approvals cards add --sign-in NAME`).
   - **Too fast = not shown.** A box answered in under 1 second (`popup.HUMAN_SECONDS`) was not
     seen by a person (an app that auto-declines, for example): the walk stops at once, nothing
     is logged for it, and the answer is the plain list. The approvals popup does the same and
@@ -53,11 +96,15 @@ Whatever the approvals setting, the user can see and decide the whole review que
   `X-FlowState-*` change nothing). The relay listener (its agent connects from loopback), the
   public listener, a LAN peer elsewhere and unmarked requests are not this computer: no
   127.0.0.1 URL anywhere in the brief or the walk, and the page isn't started for them. They
-  get the phone link when the relay is set up, and the text "on the computer where FlowState
+  get no phone link either (2.4.4, task 54: it contains the relay handle), but
+  `approvals.PHONE_ELSEWHERE` ("Open the review list on your phone from the FlowState link you
+  saved, or run `flowstate review-page` on your computer.") as `phone` when the relay is set
+  up, "on their phone, from the FlowState review link they saved" in the wording, and the text
+  "on the computer where FlowState
   runs (the FlowState review shortcut, or `flowstate review-page`), or on its tunnel review
   page if it has one" in the brief's line and the walk's `how_to_decide`.
-- **Phone list (relay users):** the bookmarkable `https://flowstatemcp.com/review/<handle>`;
-  section 5.
+- **Phone list (relay users):** the bookmarkable `https://flowstatemcp.com/review/<handle>`,
+  given only to apps on this computer (like the 127.0.0.1 link); section 5.
 - **Desktop shortcut:** `setup_flowstate.py` puts "FlowState review" on the desktop (Windows
   `FlowState review.cmd`, macOS `FlowState review.command`, Linux `flowstate-review.desktop`).
   It runs `flowstate review-page`; when a FlowState on the computer already serves this
@@ -91,14 +138,15 @@ chat by default. What the code enforces (`waiting.phone_only`, called first in
   is pending, the call is refused whatever `user_request` says (also with none). The answer:
   `error` `phone_only`, `message` ("Nothing was decided: review item #N still waits for the
   user. ..."), `item_id`, `kind`, `status` "waiting for the user", `next` (the one line to pass
-  on, with the item's phone link), `phone` (the item's own `/approve/<handle>/<id>?n=...` link
-  when phone links are available, else the review list's, else no link), `how_to_decide` (the
+  on), `phone` (since 2.4.4 never a link here: `approvals.PHONE_ELSEWHERE` when phone links
+  are available, else absent; a relay caller is never on this computer), `how_to_decide` (the
   walk's wording) and `dont_approve`. Nothing is changed or logged as a decision. A missing or
   already decided item gets the usual answer.
 - The setting: `approval_settings` key `relay_chat_approvals` (`approvals.relay_chat_on`),
-  `on` or absent / `off` (the default). Only `flowstate relay chat-approvals on|off` changes it
-  (`approvals.set_relay_chat`, logged in `review_mode_log` with scope `relay_chat_approvals`);
-  turning it on asks for `y` on the user's own terminal (`cli_review.open_terminal`; piped input
+  `on` or absent / `off` (the default). Only `flowstate relay chat-approvals on|off` and the
+  local review page's Settings change it (`approvals.set_relay_chat`, logged in
+  `review_mode_log` with scope `relay_chat_approvals`); turning it on asks for `y` on the
+  user's own terminal (or on the page's confirm page, above) (`cli_review.open_terminal`; piped input
   doesn't count), off needs nothing. No MCP tool reads or writes the key (a test checks).
 - On: relay requests are checked exactly as before (quote the user in `user_request`; the
   queuing app needs the user's own words). User-only items stay locked either way: deletes
@@ -107,21 +155,78 @@ chat by default. What the code enforces (`waiting.phone_only`, called first in
 - Not affected: stdio, the LAN listener and the public (own tunnel) listener; the phone page,
   the phone review list and the popup (they decide as the user, with no app identity).
 - A disagreement card is the same rule when an agent uses `manage_review` approve / reject:
-  chat approvals off means `phone_only` and the review link; on means the agent may pass
+  chat approvals off means `phone_only` and where the user decides (a sentence, no link); on means the agent may pass
   `keep="a"`, `"b"` or `"both"` with the user's words. The in-chat card is drawn when the
   AI calls `show_conflict_card` (read-only; its tool definition names the card's `ui://`
   resource, which is how MCP Apps hosts decide what to draw). The card's buttons call
   `resolve_conflict_card` instead. That tool is app-only (`_meta.ui.visibility` is `["app"]`,
   so it is left off the model's tool list unless the host advertises MCP Apps) and it refuses
   `user_request`, `message`, `text` and `reason`. A client that doesn't advertise MCP Apps
-  can't show the card, so the tool refuses it (`not_a_card_tap`); through the relay it
-  follows the same chat-approvals setting (off: `phone_only` with the phone link). Its audit
+  can't show the card, so the tool refuses it (`not_a_card_tap`). Through the relay a tap
+  with the card's code counts as it does on this computer or the tunnel (since task 65): the
+  card is only there for a connector whose sign-in the user put on the card list, so the
+  chat-approvals setting (which gates the AI's own `manage_review` approve / reject) doesn't
+  apply to the card's buttons. Until the user adds it, an app that says it shows cards gets the
+  text card plus `cards_off`: the command the user runs to turn cards on for that sign-in.
+  Since task 65b the first such answer also queues the **card offer**, a review item of kind
+  `card_offer`: "Allow tap cards in <app> (signed in as <sign-in>)?". It is user-only and
+  narrower than the other user-only items: only the review page (this computer's, or the
+  tunnel review page) and the phone pages decide it; every AI tool (chat approvals on or off),
+  the chat walk, popups, card taps and `flowstate approve` are refused (`card_offer.refusal`,
+  checked first in `_review_decide`). Allow adds the sign-in name FlowState stored in the item
+  (never the name the app sends) to the card sign-in list; both the decision (approval_log) and
+  the list change (settings log) are logged. One offer per sign-in: it goes on an "already
+  offered" list when queued, and a sign-in removed from the card list is put there too, so a
+  No or a revoke is final until the user offers it again (Settings, or
+  `flowstate approvals cards offer-again NAME`); `flowstate approvals cards offers off` stops
+  new offers. Its audit
   path is `card`. The review page
   and the phone page audit as `review page`; an agent quoting the user audits as `chat`. A
   card closed because a decision was replaced, or because the user said the old possible-conflict
-  pair fits together, is audited as `automatic`. Card taps are not cryptographically proven to
-  be a person yet. That check is a known follow-up; a host that lets the model call the
-  app-only tool by name can still save a resolution.
+  pair fits together, is audited as `automatic`.
+- **What makes a card tap the user's** (both cards, since the 2.4.4 audit):
+  - only apps on the review card list (table above) get the cards and the app-only tools; the
+    MCP Apps flag an app sends is its own claim, so the list is the user's say. On stdio the
+    list is checked against the client name the app sends; an app that signs in over the
+    network (LAN key, remote token on the LAN, tunnel or relay, OAuth app) is checked by its
+    key's, token's or OAuth app's own name, never the name it sends, and the shared LAN token
+    or an unsigned HTTP caller never gets cards (`card_trust.py`, since task 55). Codes are
+    bound to that sign-in; showing a card again replaces only that card's older codes;
+  - every card with buttons gets a one-use code (`card_taps.py`) in the tool result's `_meta`
+    (`flowstate/taps`), which MCP Apps hosts pass to the card's page and keep out of the
+    model's context. It is never in the text or the card data. The card sends it back with the
+    tap; a tap without it, with another card's or app's code, a used one or one older than 15
+    minutes is refused (`not_a_card_tap`), so a model that calls the hidden tool by name
+    decides nothing. A tap only reserves its code: it is used up when the decision is saved and
+    given back when the tap fails or is refused (a second tap meanwhile gets `tap_in_progress`);
+  - the app that queued an item doesn't decide it on its own card (`own_item`, and no buttons),
+    as in the chat. Session summaries are queued by FlowState itself and keep their buttons;
+  - the decision's request reads "Approve tapped on the review card in <app> (its one-use card
+    code checked)", and every card decision is recorded as "card (<app>)", plus "signed in as
+    <key>" for a network sign-in: FlowState records what it checked, never "the user".
+  - Honest limit: a local stdio program that pretends to be a listed card host (it connects with
+    that name and reads `_meta` itself) gets the codes too, as a program could pretend to be a popup app.
+- Review cards (2.4.4) are the same design for every other kind in the queue (session
+  summaries, suggestions, imports, clean-ups, markdown edits, possible conflicts). The AI calls
+  `show_review_card` (read-only, listed only to MCP Apps hosts; its definition names
+  `ui://flowstate/review-card.html`): one item, or up to 5 waiting ones, oldest first, with
+  `more`. A disagreement is never shown there: the answer points to `show_conflict_card`. The
+  buttons, Approve and Reject (with an optional reason typed in the card, at most 300
+  characters), call the app-only `resolve_review_card`. It refuses `user_request`, `message`,
+  `text` and `reason` (`not_a_card_tap`; only the card's own `reject_reason` is taken), refuses
+  clients without MCP Apps, and through the relay follows chat approvals (off: `phone_only`,
+  telling the user to decide on their phone from their saved link). User-only items (`user_only` above) and every delete are drawn without
+  buttons, with the phone link or, on this computer, the review page link; `resolve_review_card`
+  refuses them (`user_only`) even if called. A decision runs the same apply step as
+  `manage_review` approve / reject (`review_apply.py`) and every one is logged in `approval_log`
+  with path `card`, whatever the kind. The same tap rules apply (above). A session summary
+  record's Remove and Bring back on the card follow the delete rules: refused for apps that may
+  not delete (remote tokens, LAN keys, OAuth apps, the relay), and with approvals on only on the
+  review page or the phone.
+- The review link page (no key; any program on this computer can open it) never approves a
+  user-only item, does Remove / Bring back, or turns review off while approvals are on: it
+  points to the page `flowstate review-page` opens (a secret address and its own cookie) or the
+  terminal.
 
 ## What a queued delete shows
 
@@ -161,8 +266,11 @@ quoting the user); FlowState stores and shows which app did it, and can't check 
 `https://flowstatemcp.com/approve/<handle>/<item>?n=<nonce>`
 
 - `handle`: this device's relay handle (`relay.json`); only shown when the relay agent is
-  enrolled and on and phone links are on (`flowstate approvals phone on|off`). This release
-  pins the site's published keys (section 3), so that condition is met.
+  enrolled and on and phone links are on (`flowstate approvals phone on|off`), and only to
+  apps on this computer (`popup.on_this_computer`; 2.4.4, task 54). Apps elsewhere (relay,
+  public listener, LAN from another computer) get `approvals.PHONE_ELSEWHERE` instead, so the
+  handle stays out of cloud chat logs. This release pins the site's published keys (section
+  3), so the key condition is met.
 - `item`: the review item id (integer).
 - `nonce`: 43 url-safe characters (`secrets.token_urlsafe(32)`), made on this computer, one
   per item, bound to the item, the action `approve_review` and an expiry (7 days; a fresh one
@@ -316,7 +424,7 @@ What FlowState does (`review_phone.py`):
 - `POST /review/decide` `{"token", "item_id", "decision": "approve" | "reject",
   "confirm_name"?, "reason"?}` (JSON, same origin): the cookie and the page token must match a
   live session. Approve or Reject goes through the same user-only path as the approve page
-  (`popup.as_user`, label `phone (<handle>)`) and is logged (`approval_log`, path `phone`).
+  (`popup.as_user`, label `phone`, never the handle) and is logged (`approval_log`, path `phone`).
   Answers with the updated list and total.
 
 Errors are JSON `{"error", "message"}` with status 403 (`phone_approvals_unavailable`,

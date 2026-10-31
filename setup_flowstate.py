@@ -15,7 +15,7 @@ What it does, in order (safe to re-run; it only changes what is out of date):
   4. registers FlowState as an MCP server in each chosen client's config file,
      after backing that file up (<file>.flowstate-backup-<time>); other servers and
      settings are left exactly as they were; a file it can't parse is left untouched
-  5. optionally (--offsite-github OWNER/NAME) checks that GitHub repo is PRIVATE and
+  5. optionally (--offsite-github OWNER/NAME) checks that GitHub repo is PRIVATE and (encrypted copies)
      saves it for off-site backups; asks on a terminal, skip with --no-offsite
   6. optionally (--schedule-backups) adds a nightly local backup to the OS scheduler
   7. optionally (--install-skill, or asked on a terminal) installs the "flowstate"
@@ -37,6 +37,7 @@ import platform
 import queue
 import re
 import shutil
+import stat
 import sqlite3
 import subprocess
 import sys
@@ -193,7 +194,13 @@ def ensure_db(db: Path, dry: bool) -> str:
         return "migrated"
     say(f"[db] creating new database: {db}")
     if not dry:
-        db.parent.mkdir(parents=True, exist_ok=True)
+        if not db.parent.exists():   # FlowState's own folder: owner-only (audit D9)
+            _mkdir_private(db.parent)
+            if os.name != "nt":
+                _chmod(db.parent, 0o700)
+        os.close(os.open(str(db), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+        if os.name != "nt":
+            _chmod(db, 0o600)
         conn = sqlite3.connect(str(db))
         try:
             conn.executescript(SCHEMA.read_text(encoding="utf-8"))
@@ -238,6 +245,7 @@ def setup_offsite(a, py: Path, places: "Places") -> bool:
             and sys.stdin.isatty() and sys.stdout.isatty()):
         say("[offsite] FlowState can also push a nightly backup to a PRIVATE GitHub repo you own")
         say("          (it checks the repo is private before every push; uses your gh/git login).")
+        say("          The copy is encrypted on this computer first; save the recovery code it shows.")
         try:
             repo = input("          GitHub repo as owner/name, or Enter to skip: ").strip()
         except EOFError:
@@ -249,7 +257,9 @@ def setup_offsite(a, py: Path, places: "Places") -> bool:
         say(f"[offsite] would check github.com/{repo} is private and save it (dry run)")
         return True
     ok = flowstate_cmd(py, places, "offsite", "setup", "--repo", repo) == 0
-    say(f"[offsite] {'set up' if ok else 'NOT set up'}")
+    say(f"[offsite] {'set up' if ok else 'NOT set up'}" + (
+        " (encrypted on this computer before each push; run `flowstate offsite key` in your own "
+        "terminal to see and save the recovery code)" if ok else ""))
     return ok
 
 
@@ -412,15 +422,108 @@ def backup(path: Path) -> Path:
     while dest.exists():
         dest = path.with_name(f"{path.name}.flowstate-backup-{stamp}-{n}")
         n += 1
-    shutil.copy2(path, dest)
+    shutil.copyfile(path, dest)
+    try:   # its dates and mode too; a drive without file permissions refuses the mode (task 56)
+        shutil.copystat(path, dest)
+    except OSError:
+        _chmod(dest, 0o600)
     return dest
 
 
+_warned_perms = []
+
+
+def _chmod(path, mode: int, fd: "int | None" = None) -> None:
+    """chmod / fchmod that never stops setup: a drive without file permissions (USB, exFAT,
+    many SMB shares) refuses it; the file is still written, and setup says so once (N-F7)."""
+    try:
+        os.fchmod(fd, mode) if fd is not None else os.chmod(path, mode)
+    except OSError:
+        if not _warned_perms:
+            _warned_perms.append(path)
+            say(f"[note] this drive doesn't support file permissions; {path} may be readable "
+                f"by other users of this computer")
+
+
+def _mkdir_private(d: Path) -> None:
+    """mkdir -p with mode 0700; a drive that refuses the mode gets a plain folder (N-F7)."""
+    try:
+        d.mkdir(parents=True, exist_ok=True, mode=0o700)
+    except OSError:
+        if not d.is_dir():
+            d.mkdir(parents=True, exist_ok=True)
+        _chmod(d, 0o700)
+
+
+def _windows() -> bool:
+    return os.name == "nt"
+
+
+def _save_acl(path: Path) -> "Path | None":
+    """Windows: the file's own access list, saved with `icacls /save` so it can be put back
+    after the file is replaced (os.replace gives the new file the folder's list; N-F30)."""
+    if not _windows() or not path.exists():
+        return None
+    out = path.with_name(path.name + ".flowstate-acl")
+    try:
+        out.unlink(missing_ok=True)
+        r = subprocess.run(["icacls", str(path), "/save", str(out), "/q"],
+                           stdin=subprocess.DEVNULL, capture_output=True, timeout=20,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        return out if r.returncode == 0 and out.exists() else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _restore_acl(path: Path, saved: "Path | None") -> None:
+    if saved is None:
+        return
+    try:
+        r = subprocess.run(["icacls", str(path.parent), "/restore", str(saved), "/q"],
+                           stdin=subprocess.DEVNULL, capture_output=True, timeout=20,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if r.returncode != 0:
+            say(f"[note] couldn't put back the access list of {path} after writing it")
+    except (OSError, subprocess.SubprocessError):
+        say(f"[note] couldn't put back the access list of {path} after writing it")
+    finally:
+        try:
+            saved.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def atomic_write(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    """Write `path` via a temp file that already has the right permissions: the original
+    file's own mode, or owner-only (0600) for a new file, so a private config never becomes
+    readable by other accounts, not even for a moment (audit D3). The apps that read these
+    files run as you, so they are unaffected. Windows: the temp file sits in the same folder
+    and gets that folder's access list; the original file's own list is saved first and put
+    back after the replace (re-audit N-F30)."""
+    _mkdir_private(path.parent)
     tmp = path.with_name(path.name + ".flowstate-tmp")
-    tmp.write_text(text, encoding="utf-8", newline="\n")
-    os.replace(tmp, path)
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode)
+    except FileNotFoundError:
+        mode = 0o600
+    acl = _save_acl(path)
+    tmp.unlink(missing_ok=True)
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    try:
+        if not _windows():
+            _chmod(tmp, mode, fd)   # whatever the umask
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            fd = None
+            f.write(text)
+        os.replace(tmp, path)
+        _restore_acl(path, acl)
+        acl = None
+    finally:
+        if fd is not None:
+            os.close(fd)
+        tmp.unlink(missing_ok=True)
+        if acl is not None:
+            acl.unlink(missing_ok=True)
 
 
 def register_json(path: Path, entry: dict, dry: bool) -> str:
@@ -593,7 +696,7 @@ def main(argv=None) -> int:
                     help="add a nightly local backup to the OS scheduler")
     ap.add_argument("--backup-time", default="02:30", help="time for the nightly backup (HH:MM)")
     ap.add_argument("--offsite-github", metavar="OWNER/NAME",
-                    help="also back up nightly to this PRIVATE GitHub repo (opt-in)")
+                    help="also back up nightly to this PRIVATE GitHub repo, encrypted (opt-in)")
     ap.add_argument("--no-offsite", action="store_true", help="don't ask about GitHub backups")
     ap.add_argument("--install-skill", action="store_true",
                     help="install the flowstate Agent Skill to ~/.agents/skills and ~/.claude/skills")

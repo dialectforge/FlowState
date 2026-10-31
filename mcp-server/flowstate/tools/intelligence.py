@@ -1,8 +1,5 @@
 """Intelligence layer tools (v1.3) - tool tracking, patterns, metrics."""
 
-from typing import Optional
-import json
-from datetime import datetime
 from .utils import get_db
 
 def register_tool(

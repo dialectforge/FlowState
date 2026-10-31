@@ -20,7 +20,10 @@ but **cannot decrypt them**:
 
 What the relay can see: the hostname (SNI), client IP addresses and ports, connection times,
 byte counts and timing. TLS 1.3 encrypts the server certificate, so the relay does not even
-see that.
+see that. From the agent itself (section 3.1) it also gets the FlowState version (`agent` in
+the hello, e.g. `flowstate/2.4.4`) and, only once the user has set one, the display name the
+user gave this FlowState (`flowstate name`); it keeps both with the device and clears them when
+the device is removed, revoked or unenrolled, or the account is deleted.
 
 What the relay could do if it turned malicious: because it controls DNS for
 `fsmcp.com`, it could obtain its own certificate for a user's hostname and
@@ -199,6 +202,24 @@ The relay MUST check that `token` is valid and belongs to `handle`. One control 
 handle: when a new one is welcomed, the relay SHOULD send `{"type": "goaway"}` on the old one
 and close it.
 
+From FlowState 2.4.4 the hello also carries `"name"`: the name the user gave this FlowState
+(`flowstate name`; 1-40 characters of plain text, no control, format, surrogate or private-use
+characters; characters newer than a side's Unicode version are allowed, so both sides agree),
+or `null`
+when the user has not set one or went back to the default with `flowstate name --reset` (the
+local default, "Main FlowState", is never sent). When the user renames or resets it while the
+agent is connected, the agent sends `{"type": "name", "name": "<new name>"}` (or `"name": null`)
+on the control connection before its next `ping`. `null` means "no name": the relay clears the
+one it kept and the site shows its own wording. A hello without the key (older agents) leaves
+the kept name as it is.
+It is only a label for the owner's own pages on flowstatemcp.com; the handle stays the address,
+the routing and the sign-in. A relay that keeps it MUST take it only from a control connection
+whose token checked out and is still the device's current one, for a device that is still
+active, MUST apply the same checks (ignoring anything else), and SHOULD NOT log it. It needn't
+store a name that didn't change, and may store at most one change every few seconds, as long as
+the newest one is kept. Relays that don't know it ignore the field and the message type (section 3.2: unknown
+types are ignored).
+
 ### 3.2 Heartbeats
 
 `heartbeat` (seconds) from `welcome` is clamped by the agent to 5..120 (default 25).
@@ -295,6 +316,13 @@ hostname, downloads each new certificate (`https://crt.sh/?d=<id>`, at most 50 p
 compares the SHA-256 of its SubjectPublicKeyInfo with the local key(s). Any mismatch is an
 alert: an ERROR log line, `flowstate relay status` (exit code 2), and a warning line at the top
 of every `start_here` result until the user runs `flowstate relay ct-ack --id <crt.sh id>`.
+These requests send a plain `User-Agent: flowstate` (no version); like any web request they
+show crt.sh the computer's IP address, and the hostname names the user's relay address. Every
+certificate is public in the CT logs anyway, so anyone can list relay hostnames. From 2.4.4
+the device doesn't answer `GET /health` through its relay hostname (404). That does not hide
+whether the computer is connected: anyone who knows the address can still tell, because the
+relay closes the connection when the device is offline and `/mcp` answers 401 when it is
+online.
 
 ## 7. Limits and timeouts (summary)
 

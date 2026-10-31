@@ -8,12 +8,11 @@ This module provides:
 """
 
 import sqlite3
-from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass
 
 from . import dbconn
-from .embeddings import get_embedding_service, EmbeddingService
+from .embeddings import get_embedding_service
 
 
 @dataclass

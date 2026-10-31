@@ -42,9 +42,10 @@ async def _call(c, name, args):
 
 
 def _two_windows(db, steps, apps=("claude-code", "claude-code")):
-    """Two windows = two real stdio server processes on one database; steps(a, b) is async."""
+    """Two windows = two real stdio server processes on one database; steps(a, b) is async.
+    Full tool profile: manage_sessions is a specialist tool (refused outside it since 2.4.4)."""
     params = StdioServerParameters(command=sys.executable, args=["-m", "flowstate"],
-                                   env=server_env(db), cwd=str(SERVER_DIR))
+                                   env=server_env(db, FLOWSTATE_TOOLS="full"), cwd=str(SERVER_DIR))
 
     async def go():
         async with stdio_client(params) as (r1, w1), stdio_client(params) as (r2, w2):
@@ -107,8 +108,8 @@ def test_rule_receipt_names_the_rule(backend):
                 backend.server, client_info=types.Implementation(name="cursor", version="1")) as c:
             return json.loads(await _call(c, "manage_rules", {"action": "add", "project": "Alpha",
                                                               "rule": "Never log card numbers."}))
-    r = asyncio.run(go())
-    assert r["receipt"]["saved"] == [f"rule #{r['rule']['id']}"], r["receipt"]
+    r = asyncio.run(go())   # an app's rule waits for the user (audit D2): the receipt says so
+    assert r["receipt"]["saved"] == [f"review_item #{r['queued_for_review']}"], r["receipt"]
 
 
 def test_attached_file_text_is_searchable(backend, tmp_path):

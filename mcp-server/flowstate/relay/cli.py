@@ -24,10 +24,12 @@ from datetime import datetime
 from pathlib import Path
 
 from . import API_BASE, TUNNEL_HOST, TUNNEL_PORT, RelayError, RelayWaitlisted
+from .. import term
 
 
 def say(msg: str) -> None:
-    print(msg, flush=True)
+    # text from apps and records is in many lines: no escape code reaches the terminal (NEW-7)
+    print(term.safe(msg, newlines=True), flush=True)
 
 
 def _store():
@@ -243,8 +245,9 @@ def cmd_ct_ack(a) -> int:
 CHAT_ON = ("AIs connected through the relay can approve and reject review items in the chat "
            "when they quote you (except deletes and turning review off while approvals are on, "
            "and \"did you say this?\" checks: those stay yours alone).")
-CHAT_OFF = ("AIs connected through the relay can't approve or reject review items; they give "
-            "you the phone link instead (the default). Apps on this computer are not affected.")
+CHAT_OFF = ("AIs connected through the relay can't approve or reject review items; they tell "
+            "you to decide on your phone instead, from your saved review link (the default). "
+            "Apps on this computer are not affected.")
 
 
 def cmd_chat_approvals(a) -> int:

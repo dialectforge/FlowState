@@ -60,7 +60,10 @@ SCHEMA_PATH = schema_path()
 def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
     """Get a database connection with row factory."""
     path = db_path or default_db_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    # a new database (and the folders made for it) starts owner-only (audit D9); SQLite gives
+    # its -wal / -shm files the same mode
+    from .privatefs import private_file
+    private_file(path)
     
     conn = dbconn.connect(str(path), timeout=5.0)
     conn.row_factory = sqlite3.Row
@@ -927,7 +930,6 @@ class Database:
             cutoff = datetime.now() - timedelta(days=days)
             cutoff_str = cutoff.isoformat()
             
-            # Get the component
             component = self.get_component(component_id)
             if not component:
                 return {}
@@ -1109,7 +1111,6 @@ class Database:
             if not project:
                 return {}
             
-            # Get all components
             components = self.list_components(project_id)
             
             # Get all problems with their solutions
@@ -1151,7 +1152,6 @@ class Database:
                 (project_id,)
             ).fetchall()
             
-            # Get all learnings
             learnings = self.get_learnings(project_id=project_id)
             
             # Get all sessions
@@ -1199,7 +1199,6 @@ class Database:
             if not problem:
                 return {}
             
-            # Get component info
             component = self.get_component(problem.component_id)
             
             # Get all attempts
@@ -1212,7 +1211,6 @@ class Database:
             # Build tree structure
             attempts_list = [SolutionAttempt(**dict(a)).model_dump() for a in attempts]
             
-            # Get solution if exists
             solution = self.get_solution(problem_id)
             
             # Get related learnings (learnings created around the time of the solution)
@@ -2135,7 +2133,6 @@ class Database:
             # Get tool recommendations
             tools = self.get_tools(min_success_rate=0.5)
             
-            # Get active patterns
             patterns = self.get_patterns(project_id=project_id, min_confidence=0.5)
             
             # Get previous state chain for context

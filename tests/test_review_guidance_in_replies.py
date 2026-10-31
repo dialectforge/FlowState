@@ -1,7 +1,8 @@
 """2.4.2: every answer that puts something in the review queue says how the user decides it,
 the way manage_review(action="walk") does (waiting.queue_guidance, reusing waiting.links and
-waiting.how_to_decide): the phone link when the relay link is known, the local page for apps
-on this computer, and a plain line not to approve it for the user.
+waiting.how_to_decide): the phone link when the relay link is known (for apps on this
+computer only since task 54; elsewhere a plain sentence), the local page for apps on this
+computer, and a plain line not to approve it for the user.
 
 The live bug (Oct 23, 2026): log_work suggested=true through the relay answered only
 {queued_for_review, note, receipt}, so the AI offered to approve the item itself in the chat.
@@ -56,15 +57,18 @@ def _status(db, item):
 
 
 def _guided_for_relay(body):
-    assert body["phone"] == LINK, body
-    assert LINK in body["how_to_decide"] and "relay" in body["how_to_decide"]
+    # 2.4.4 (task 54, D19): an app through the relay gets a plain sentence, not the phone
+    # link with the user's relay handle in it
+    assert body["phone"] == approvals.PHONE_ELSEWHERE and LINK not in json.dumps(body), body
+    assert "from the FlowState review link they saved" in body["how_to_decide"]
+    assert "relay" in body["how_to_decide"]
     assert "Don't approve or reject anything for them" in body["how_to_decide"]
     assert waiting.ELSEWHERE in body["how_to_decide"]
-    assert body["dont_approve"] == waiting.DONT_APPROVE
+    assert body["dont_approve"] == waiting.DONT_APPROVE_NO_LINK
     assert "review_page" not in body and "127.0.0.1" not in json.dumps(body)
 
 
-def test_suggested_log_work_over_the_relay_gets_the_phone_link_and_guidance(backend, relay):
+def test_suggested_log_work_over_the_relay_gets_guidance_without_the_phone_link(backend, relay):
     S = backend
     r, body = call(S, "log_work", {"project": "Alpha", "kind": "decision", "suggested": True,
                                    "summary": "Use the phone link for reviews"})
@@ -79,9 +83,9 @@ def test_same_text_as_the_walk(backend, relay):
     _r, queued = call(S, "log_work", {"project": "Alpha", "kind": "todo", "suggested": True,
                                       "summary": "Something to decide"})
     _r, walk = call(S, "manage_review", {"action": "walk"})
-    assert walk["phone"] == queued["phone"] == LINK
-    # one code path: only "this list" / "the link" differ
-    assert queued["how_to_decide"] == walk["how_to_decide"].replace("this list", "the link")
+    assert walk["phone"] == queued["phone"] == approvals.PHONE_ELSEWHERE
+    # one code path: only "this list" / "where to decide it" differ (no link: task 54)
+    assert queued["how_to_decide"] == walk["how_to_decide"].replace("this list", "where to decide it")
 
 
 def test_stdio_app_gets_the_local_page_and_no_phone_without_relay(backend, no_relay):
@@ -142,7 +146,7 @@ def test_plain_saves_and_errors_get_no_guidance(backend, relay):
         == [4, 5, 6]
 
 
-def test_relay_app_cannot_approve_by_default_and_gets_the_phone_link(backend, relay):
+def test_relay_app_cannot_approve_by_default_and_gets_no_phone_link(backend, relay):
     """John's decision (2.4.2): through the relay, approve and reject are phone only by default
     (`flowstate relay chat-approvals on` brings back quoting the user in user_request). Before,
     this test pinned that the queuing app could approve over the relay with the user's words.
@@ -154,8 +158,8 @@ def test_relay_app_cannot_approve_by_default_and_gets_the_phone_link(backend, re
     r, body = call(S, "manage_review", {"action": "approve", "project": "Alpha", "item_id": item,
                                         "user_request": f"Approve review item {item}"})
     assert body["error"] == "phone_only" and body["item_id"] == item, body
-    assert body["phone"].startswith(f"https://flowstatemcp.com/approve/testbox/{item}?n=")
-    assert body["phone"] in body["how_to_decide"] and body["dont_approve"] == waiting.DONT_APPROVE
+    assert body["phone"] == approvals.PHONE_ELSEWHERE and "testbox" not in json.dumps(body)
+    assert body["dont_approve"] == waiting.DONT_APPROVE_NO_LINK
     assert _status(S.backend.db_path, item) == "pending"
     approvals.set_relay_chat(S.backend.db_path, True)   # the user's terminal: as before
     r, body = call(S, "manage_review", {"action": "approve", "project": "Alpha", "item_id": item,

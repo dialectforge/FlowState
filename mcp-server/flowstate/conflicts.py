@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import dbconn
-from . import identity, meaning, review
+from . import history, identity, meaning, review
 
 SIMILAR = 0.55            # tuned on tests/test_decision_conflicts.py fixtures (see there)
 OTHER_COMPONENT = 0.65    # both decisions name a component, and not the same one
@@ -97,6 +97,12 @@ def decision_text(key_decisions: Optional[str], fallback: Optional[str]) -> list
     return [text[len("Decision:"):].strip() if text.startswith("Decision:") else text]
 
 
+def _whole(s: str) -> str:
+    """A decision quoted in a review item: on one line, never cut (task 70), so `flowstate
+    erase` finds and removes the whole quote; pages and lists shorten it when they show it."""
+    return " ".join((s or "").split())
+
+
 def _one_line(s: str, n: int) -> str:
     s = " ".join((s or "").split())
     return s if len(s) <= n else s[: n - 3].rstrip() + "..."
@@ -156,6 +162,7 @@ def find(conn, pid: int, new_id: int, summary: str, comp_id: Optional[int]) -> l
         sem = cos.get(c["id"], 0.0)
         if kw >= bar or sem >= MEANING_MIN + (bar - SIMILAR):
             hits.append({"decision_id": c["id"], "summary": _one_line(c["lines"][0], 90),
+                         "text": _whole(c["lines"][0]),
                          "score": round(max(kw, sem), 3), "same_component": same,
                          "matched_by": "keywords" if kw >= bar else "meaning"})
     hits.sort(key=lambda h: (not h["same_component"], -h["score"], -h["decision_id"]))
@@ -193,13 +200,15 @@ def check(db_path: Path, pid: int, new_id: int, summary: str, comp_id: Optional[
                                  (*who, cid))
                 item = review.add_item(
                     db_path, pid, "conflict",
-                    f'Possible conflict: D{new_id} "{_one_line(summary, 70)}" vs '
-                    f'D{h["decision_id"]} "{_one_line(h["summary"], 70)}"',
+                    f'Possible conflict: D{new_id} "{_whole(summary)}" vs '
+                    f'D{h["decision_id"]} "{h["text"]}"',
                     "FlowState found these decisions read alike; it can't tell if they really "
                     "conflict. Approve = they conflict (stays in the brief until one replaces the "
                     "other). Reject = they are compatible (dismissed).",
                     {"conflict_id": cid, "new_id": new_id, "old_id": h["decision_id"],
-                     "score": h["score"]}, client, conn=conn)
+                     "score": h["score"],
+                     "decisions": [{"record_type": "decision", "record_id": i}
+                                   for i in (new_id, h["decision_id"])]}, client, conn=conn)
                 if item is not None:
                     conn.execute("UPDATE decision_conflicts SET review_item_id = ? WHERE id = ?",
                                  (item, cid))
@@ -268,9 +277,12 @@ def resolve_replaced(db_path: Path, by_decision: int, replaced: int,
                                 "(new_id = ? OR old_id = ?)", (replaced, replaced)).fetchall()
             sets, who = identity.set_sql(conn, "decision_conflicts", client, prefix="resolved_")
             for r in rows:
+                before = history._row(conn, "decision_conflicts", r["id"])
                 conn.execute(f"""UPDATE decision_conflicts SET status = 'resolved_replaced',
                                 resolved_at = ?, resolved_by_decision = ?{sets} WHERE id = ?""",
                              (_now(), by_decision, *who, r["id"]))
+                history.record_row(conn, "decision_conflicts", r["id"], before,
+                                   "queue/conflict_replaced", client)
             _close_items(conn, rows, lambda r: f"closed automatically: D{by_decision} replaced "
                                                f"D{replaced}", client)
             conn.execute("COMMIT")
@@ -299,7 +311,7 @@ def _pair_of(conn, item: dict):
     return row
 
 
-def confirm(db_path: Path, item: dict) -> tuple[str, int]:
+def confirm(db_path: Path, item: dict, client: Optional[str] = None) -> tuple[str, int]:
     """review approve: the user says they really conflict. The pair stays open (and in the
     brief) until a decision replaces one of them."""
     conn = _connect(db_path)
@@ -309,8 +321,17 @@ def confirm(db_path: Path, item: dict) -> tuple[str, int]:
             raise review.ReviewError("already_resolved",
                                      f"D{row['new_id']} vs D{row['old_id']} is already "
                                      f"{row['status'].replace('_', ' ')}.")
-        conn.execute("UPDATE decision_conflicts SET confirmed_at = ? WHERE id = ?",
-                     (_now(), row["id"]))
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            before = history._row(conn, "decision_conflicts", row["id"])
+            conn.execute("UPDATE decision_conflicts SET confirmed_at = ? WHERE id = ?",
+                         (_now(), row["id"]))
+            history.record_row(conn, "decision_conflicts", row["id"], before,
+                               "queue/conflict_confirmed", client)
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
         return "decision_conflicts", row["id"]
     finally:
         conn.close()
@@ -325,9 +346,18 @@ def dismiss(db_path: Path, item_id: int, client: Optional[str] = None) -> dict:
         if row["status"] != "open":
             return {}
         sets, who = identity.set_sql(conn, "decision_conflicts", client, prefix="resolved_")
-        conn.execute(f"""UPDATE decision_conflicts SET status = 'dismissed_compatible',
-                        resolved_at = ?{sets} WHERE id = ? AND status = 'open'""",
-                     (_now(), *who, row["id"]))
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            before = history._row(conn, "decision_conflicts", row["id"])
+            conn.execute(f"""UPDATE decision_conflicts SET status = 'dismissed_compatible',
+                            resolved_at = ?{sets} WHERE id = ? AND status = 'open'""",
+                         (_now(), *who, row["id"]))
+            history.record_row(conn, "decision_conflicts", row["id"], before,
+                               "queue/conflict_dismissed", client)
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
         new_id, old_id = row["new_id"], row["old_id"]
     finally:
         conn.close()
@@ -340,19 +370,46 @@ def dismiss(db_path: Path, item_id: int, client: Optional[str] = None) -> dict:
 
 
 # ---------------------------------------------------------------- the brief
-def brief_line(conn, pid: int) -> Optional[str]:
-    """ "Possible conflicts: D31 vs D12, ..." (open pairs, newest first, at most BRIEF_MAX),
-    or None when there are none."""
+def open_pairs(conn, pid: int) -> list:
+    """Open pairs (new_id, old_id, confirmed_at), newest first: status open and neither side
+    replaced by a supersedes link. The brief's line and its unsettled tags both use this."""
     if not available(conn):
-        return None
+        return []
     gone = ("NOT EXISTS (SELECT 1 FROM record_links s WHERE s.to_type='decision' AND "
             "s.to_id={} AND s.link_type='supersedes' AND s.removed_at IS NULL)")
-    rows = conn.execute(
+    return conn.execute(
         f"""SELECT c.new_id, c.old_id, c.confirmed_at FROM decision_conflicts c
             JOIN conversations n ON n.id = c.new_id JOIN conversations o ON o.id = c.old_id
             WHERE c.project_id = ? AND c.status = 'open'
               AND {gone.format('c.new_id')} AND {gone.format('c.old_id')}
             ORDER BY c.new_id DESC, c.old_id DESC""", (pid,)).fetchall()
+
+
+def card_pairs(conn, pid: int) -> list:
+    """Open disagreement cards between two decisions (flagged with conflicts_with or
+    manage_links flag_conflict), as (new_id, old_id) like open_pairs: neither side replaced by
+    a supersedes link. The brief tags them the same way (audit N-F16)."""
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='conflict_cards'"
+                    ).fetchone() is None:
+        return []
+    gone = ("NOT EXISTS (SELECT 1 FROM record_links s WHERE s.to_type='decision' AND "
+            "s.to_id={} AND s.link_type='supersedes' AND s.removed_at IS NULL)")
+    has_links = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                             "AND name='record_links'").fetchone() is not None
+    rows = conn.execute(
+        f"""SELECT a_id, b_id FROM conflict_cards c WHERE project_id = ? AND status = 'open'
+            AND a_type = 'decision' AND b_type = 'decision' AND a_id != b_id
+            AND EXISTS (SELECT 1 FROM conversations WHERE id = c.a_id)
+            AND EXISTS (SELECT 1 FROM conversations WHERE id = c.b_id)
+            {('AND ' + gone.format('c.a_id') + ' AND ' + gone.format('c.b_id')) if has_links else ''}
+            ORDER BY id DESC""", (pid,)).fetchall()
+    return [(max(a, b), min(a, b)) for a, b in rows]
+
+
+def brief_line(conn, pid: int) -> Optional[str]:
+    """ "Possible conflicts: D31 vs D12, ..." (open pairs, newest first, at most BRIEF_MAX),
+    or None when there are none."""
+    rows = open_pairs(conn, pid)
     if not rows:
         return None
     shown = ", ".join(f"D{r['new_id']} vs D{r['old_id']}"

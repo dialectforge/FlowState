@@ -4,8 +4,9 @@
     flowstate keys list
     flowstate keys revoke --id ID | --name NAME
 
-Each app gets its own key, so FlowState records the app's name from the key, not from what
-the app says about itself. A read-only key can call read tools only. Revoking a key stops it
+Each app gets its own key. FlowState records the name the app sends and, beside it, the key's
+name (identity.resolve: machine "<workspace> (signed in as <key name>)"), which the app can't
+change; pages show "Grok Bot (via <key name>)" when the two differ. A read-only key can call read tools only. Revoking a key stops it
 at once (the next request gets 401). Keys work on the LAN listener only, never on the
 public (tunnel) listener; the old shared LAN token keeps working as before.
 
@@ -30,12 +31,18 @@ def _new_key() -> str:
 def add(store: "RA.AuthStore", name: str, read_only: bool = False,
         workspace: Optional[str] = None) -> tuple[str, str]:
     """(key id, key). The key is returned once; only its hash is kept."""
-    name = " ".join((name or "").split())[:MAX_NAME]
-    if not name:
+    if not " ".join((name or "").split()):
         raise ValueError("give the app a name, e.g. --name \"Cursor on the laptop\"")
+    name = store.check_name(name)
     workspace = " ".join((workspace or "").split())[:MAX_NAME] or None
     kid, key = "key_" + secrets.token_hex(6), _new_key()
     with store._conn() as c:
+        # one name per key, token or OAuth app, ever: who wrote what is matched by it, and
+        # a pause switch is kept by name (remote_auth.AuthStore._name_taken)
+        other = store._name_taken(c, name)
+        if other:
+            raise ValueError(f"the key name {name!r} is taken (by {other}, now, before a rename "
+                             f"or before it was revoked); pick another, one per app")
         c.execute("INSERT INTO app_keys (id, name, hash, read_only, workspace, created_at) "
                   "VALUES (?, ?, ?, ?, ?, ?)",
                   (kid, name, RA._h(key), int(bool(read_only)), workspace, time.time()))

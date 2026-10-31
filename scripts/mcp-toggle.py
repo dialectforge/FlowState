@@ -17,7 +17,6 @@ Disabling works by renaming the key with _DISABLED suffix.
 
 import json
 import sys
-import os
 import shutil
 from pathlib import Path
 from datetime import datetime

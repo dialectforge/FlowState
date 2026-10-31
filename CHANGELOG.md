@@ -1,5 +1,1016 @@
 # Changelog
 
+## 2.4.4 - 2026-10-30
+
+### Upgrading to 2.4.4
+
+Most setups need nothing. Check these after updating:
+
+- **Approve / Reject popups now go only to apps on this computer.** An app this computer starts
+  itself (the usual Claude Code, Cursor or VS Code setup) keeps its popups; nothing to do.
+  - Claude Code or Cursor on this computer that connects to FlowState's LAN listener with its own
+    key: run `flowstate approvals popup add --sign-in "<key name>"` once (the name
+    `flowstate keys list` shows; it asks for your `y`), or tick the sign-in on the review page's
+    Popup row. The name the app gives itself no longer counts.
+  - Claude Code or Cursor on **another computer** on your home network no longer gets popups,
+    even with `--sign-in`. Decide its items on the review page, your phone, or with
+    `flowstate approve <id>` on the computer where FlowState runs. The shared LAN token never
+    gets popups either.
+- **In-chat cards for claude.ai through your tunnel or the relay** (or any app that signs in
+  over the network): the first time such an app could show you a card, FlowState asks you once
+  on your review page and your phone review page: "Allow tap cards in <app>?". Tap Allow there.
+  (Or, as before, run `flowstate approvals cards add --sign-in "<name>"`, with the OAuth app's
+  or token's own name; `flowstate remote clients` lists them.) The built-in `claude-ai` entry
+  covers Claude Desktop on this computer only.
+- **Data-git: update every computer to 2.4.4 first**, then run `flowstate data-git migrate` once
+  on each. A computer still on 2.4.3 that pulls a migrated repository can lose its database.
+  From 2.4.4 data-git shares the markdown exports, not the database, and when two computers
+  wrote the same export file, this computer's own copy wins at its sync.
+- **"Did you say this?" checks** (an app asking to mark a record as something you said) are
+  decided only on the review page, your phone or with `flowstate approve <id>`, never in a
+  popup, a review-walk box or an in-chat card.
+- **Erase and review items:** `flowstate erase` removes every quote of the erased record from
+  review items about it (made from it, naming it, or its disagreement card). Other review items
+  lose only a whole sentence quoted from it (5 words and 30 characters or more), never a short
+  shared phrase such as a component's name.
+- **2.4.4 needs `mcp` 1.30 or later** (two security fixes), so it comes with a new `.venv`. On
+  macOS and Linux `flowstate update` makes it (quit your AI apps first). On Windows
+  `flowstate update` refuses a release that changes the Python packages: quit your AI apps,
+  then in the FlowState folder run `git pull` and `python setup_flowstate.py` with the options
+  you set it up with (README, "Upgrading", "By hand").
+- **Remote access: update cloudflared to 2026.10.2 or later** (`cloudflared --version`). Older
+  versions still trust compromised eMudhra certificates
+  (https://blog.cloudflare.com/emudhra-certificate-compromise). `flowstate remote status` now
+  mentions it if yours is older. FlowState doesn't ship or update cloudflared.
+
+### Changes
+
+- New guide, "What you can ask FlowState" ([docs/WHAT-TO-ASK.md](docs/WHAT-TO-ASK.md)): plain-word
+  requests for each thing FlowState does and what happens; the README has a short version and
+  its MCP tools table now lists the four card tools (task 86).
+- One changed dependency: `mcp>=1.30,<2` (was `>=1.26`), for two security advisories (task 80,
+  below), so `flowstate update` to 2.4.4 makes a new `.venv` (the old one is kept as
+  `.venv.pre-update`; quit every AI app using FlowState first; on Windows update by hand, see
+  "Upgrading to 2.4.4"). One small migration (024: an
+  empty column on hard rules saying how the user set each one; existing data is not changed).
+  The off-site encryption uses the `cryptography` package that already comes with `mcp`;
+  FlowState now lists it as its `offsite` extra (and in requirements.txt).
+- **A name for this FlowState.** Each install now has a display name, "Main FlowState" until
+  you change it, so people see a name instead of the relay handle (the random letters in your
+  relay address). Change it with `flowstate name "Office laptop"` (no word shows it,
+  `flowstate name --reset` goes back to "Main FlowState") or in the new first row of the review
+  page's Settings ("Name of this FlowState"; editable on the page `flowstate review-page` opens,
+  read-only on the page an AI's link opens, absent on the tunnel page). 1 to 40 characters,
+  trimmed, plain text, no control characters. It is kept in `config.json` as `"display_name"`
+  and every change is logged with the other settings (Recent changes).
+- Where it shows: the review page's title and header (local and tunnel), and, once the phone link
+  has checked out, the phone list ("Waiting for you on Office laptop (3)") and the phone approve
+  page. Never in a URL: every link still uses the handle. No MCP tool reads or writes it, and
+  the brief doesn't carry it.
+- With the relay, the name is shared only once you set one. The agent then sends it in its
+  signed-in hello (and again when you rename it while `flowstate relay run` is running, within a
+  heartbeat), so flowstatemcp.com can say "Open what's waiting for you on Office laptop?"
+  instead of the handle. The default "Main FlowState" is never sent: without a name of your own
+  the agent sends an empty (null) name and the site says "your FlowState". `flowstate name
+  --reset` (or the page's "Back to" button) clears it on the relay too, also if the agent was
+  stopped at the time (its next hello clears it). A relay or site that doesn't know the name
+  ignores it and nothing else changes (docs/relay-protocol.md 3.1). The Settings row says so.
+- **Unsettled decisions in the brief.** A superseded decision already dropped out of "Recent
+  decisions", but an open possible conflict (`Possible conflicts: D31 vs D12`) left both
+  decisions there as plain current ones, and an AI skimming the list could follow the older one.
+  While the pair is open, the newer decision now stays, tagged `(unsettled: may conflict with
+  #12)`, and the older one's text is left out. In its place is one short pointer, `#12 in
+  dispute with #31, text left out: search(query="D12")`; if the older one isn't recent enough
+  for the list, the pointer goes on the newer line instead. An older decision in several open
+  pairs gets one pointer. The check is a guess, so the old text stays one step away:
+  `search(query="D12")` (or `"decision 12"`) now returns that decision in full. Keep both,
+  dismissed, resolved or replaced pairs show exactly as before, the "Possible conflicts" line
+  stays, and the tags fit inside the decisions section's usual room (the newer line's text is
+  shortened a little to make space), so no other section loses lines.
+- **Session summaries show what the session saved.** A summary waiting for review used to say
+  only "saved 1 change; also problem solved", so Keep / Don't keep was a blind choice. Now every
+  place that shows one (the local review page, the tunnel review page, the phone list, the
+  phone approve page, the in-chat review card and its text, and the chat walk's boxes) lists
+  each record the session saved: its kind, id, title and the first 200 characters of its text,
+  the component, and for a solved problem the solution. It also shows the app and the session's
+  start and end time: in the reader's own time on the phone and the card, in this computer's
+  local time on the local page, and in UTC, labelled, on the tunnel page. Past 10 records the
+  local and tunnel pages open the rest in place; the phone list and the phone approve page have
+  a "Show N more" button that opens them in place too (they are already in the page, so no
+  request is made; up to 100 records, past that the page points to the review page on your
+  computer, which it also mentions). The in-chat card counts the rest ("3 more").
+- The summary line itself stays the short one ("claude-code session in Alpha: saved 1 change
+  and 1 problem; also problem solved."): it is what Keep saves as the session's record, and the
+  review page's edit box still lets you change it first. The record list is a separate section
+  shown beside it everywhere, also in `manage_review(action="list", item_id=...)`
+  (`saved_records`) and in the confirmation `flowstate approve <id>` prints.
+- New summaries store the ids of what was saved (from the run ledger, ids only, never the text)
+  with their review item; the text is read from the records when shown, so an edited record
+  shows as it is now and a deleted one says "no longer in FlowState". Summaries queued before
+  this change fall back to the run ledger while it still has the session (the activity log's
+  days); after that they say only the counts are known. All of it is escaped text (HTML
+  escaping on the pages, textContent in the scripts); the phone page shows nothing it couldn't
+  before (record text from this project's memory, no paths, keys or tokens).
+- **Keep all, and Keep / Remove for each record of a session summary.** The records a session
+  lists were saved when the AI wrote them, so the only way to drop a bad one used to be asking
+  the AI to undo it. Now each record has its own **Keep** (marks it reviewed) and **Remove**
+  (takes it back) on the local and tunnel review pages, the phone list, the phone approve page
+  and the in-chat review card, with a line saying the records are already saved. Remove goes
+  through the user's delete path: a verified safety copy first, then the record and what belongs
+  to it (a problem's solution and attempts, a decision's links) as one edit in the edit history,
+  so it can be restored: **Bring back** on the same pages (while the summary waits), or
+  `manage_history(action="undo", ...)` at any time. A removed record shows as "removed by you";
+  one that is already gone or was changed after the session shows that and has no buttons. Only
+  records the session created can be removed there; one it only updated is Keep only.
+- The summary's own Keep is now **Keep all**: it keeps the summary line (edit-before-keep still
+  works) and marks every record you haven't decided kept; removed records stay removed.
+  **Don't keep** decides only the summary line and removes nothing. With every record decided,
+  the summary still waits for its own Keep all / Don't keep. The session's saved note ends with
+  "Removed by the user: change #12 "..."" when you removed any.
+- Only you decide records, as with review decisions: there is no tool for the AI. The card's
+  per-record buttons use its app-only `resolve_review_card` (decision `keep_record` /
+  `remove_record` / `restore_record`) with the card's rules (no chat text, MCP Apps hosts only;
+  through the relay phone only unless chat approvals are on). In a terminal:
+  `flowstate review records <id>` lists a summary's records with their state, and
+  `flowstate review record <id> <type:id> keep|remove|restore` decides one (asks for your `y`).
+  Each decision is logged ("record removed: change #12", with where it was made) and shown in
+  `manage_review` lists as read-only states ("[2 records: 1 kept, 1 removed by you]";
+  `record_states` with `item_id`). Stored in the review item (ids only); no migration.
+- A **Settings** section on the review page that `flowstate review-page` opens (this computer
+  only). It lists every user setting in plain words with its current value, and lets you change
+  it there: review mode (whole install and per project; the existing form, moved in), app
+  pauses, approvals on / off (whole install and per project), the apps that may show an
+  approval popup (claude.ai and Anthropic apps still never get one), phone approval links, chat
+  approvals through the relay, whether `flowstate update` may update this computer
+  (`config.json` `"self_update"`) and the daily update check. Settings that only come from the
+  app's environment (`FLOWSTATE_REVIEW_PORT`, `FLOWSTATE_IDLE_MINUTES`, ...) are shown
+  read-only, and settings with their own terminal commands (backups, keys, remote access) are
+  listed with the command. No token, key or passphrase is ever shown.
+- Turning approvals **off**, or chat approvals through the relay **on**, asks on a second page
+  first, the page's stand-in for the terminal's `y`: its button carries a single-use token tied
+  to your browser session and to that exact change, valid for 5 minutes. The other directions
+  need no confirm, like the commands. The commands themselves are unchanged.
+- Every change made there is logged in `review_mode_log` as `review-page` (with the app,
+  machine and identity fields), including app pauses, popup-list and phone-link changes and the
+  `config.json` settings. The section ends with the last few setting changes.
+- Without the relay on this computer, the relay rows (phone links, chat approvals) are greyed
+  out with "Only used with the FlowState relay (not set up here)", and the page ignores a
+  change sent to them anyway.
+- Where it isn't: the page FlowState opens from a link in the brief or the walk (no one-time
+  key) shows the new settings read-only, with "open `flowstate review-page` to change these"
+  (review mode and app pauses work there as before). The tunnel page, the phone pages and the
+  relay have no Settings section and no settings routes. No MCP tool reads or writes any of
+  these settings (tests check every tool, and that only the terminal commands and the local
+  page call the writers).
+- The local review page is now readable in a phone-sized window (viewport, 44 px buttons,
+  tables scroll inside themselves).
+- In apps that draw MCP Apps cards, the brief now says how many review items wait and names
+  `show_review_card(project=...)`, as it already did for a disagreement card. When both wait
+  it is one line naming both calls. Apps without cards get the review-queue line as before.
+- Fixed: items, claims and changes written by an AI connected through the relay showed the
+  name of the sign-in it used (for example a remote token named "Cursor", or one OAuth sign-in
+  shared by several cloud apps) as the app that wrote them, on the review page, the phone list
+  and the cards. Through the relay the app recorded is now the name the connecting app sends
+  at connect time, or "Relay (unknown app)" if it sends none, and the machine is "relay
+  (signed in as <sign-in name>)", so the sign-in is still on record. Pausing the sign-in's
+  name still stops it, and an app can't decide its own review item by sending a different
+  name (the same sign-in counts as the same app). Rows already saved are not changed. Local,
+  LAN and own-tunnel callers are recorded as before.
+- **Both names, where the app name is only the app's claim.** Wherever FlowState shows who wrote
+  something (the local and tunnel review pages, Who did what, Recent activity and the app list
+  in Settings, the phone list and approve page, the in-chat cards, the chat walk's boxes, a
+  session summary's "by ..." line, the brief's handoff and "Since your last visit" lines, undo
+  and claim messages), an app that came in through the relay or your own tunnel now shows with
+  the sign-in it used when the two differ: "Grok Bot (via Cursor)", or "Relay (unknown app, via
+  Cursor)". Same name, local (stdio) apps, per-app keys and the LAN token show one name as
+  before. `manage_history(action="who")` rows carry a `via` field for these. Nothing new is
+  stored: the sign-in is already in the machine column ("relay / tunnel (signed in as ...)"),
+  and only rows from a remote token or OAuth sign-in are read that way, so a LAN app can't fake
+  one with its workspace header. Older rows show as they are.
+- Session summaries FlowState writes for an app now carry the app, model, machine and identity
+  its session recorded (they had only the client name), so a relay session's summary says
+  "by Grok Bot (via Cursor)" and the local page can say "by claude-code on <this computer>".
+- **Own tunnel (`--public-url`) callers are recorded like relay callers.** With a remote token or
+  OAuth sign-in on the public listener the app recorded is the name the app sends, else
+  "Tunnel (unknown app)", and the machine is "tunnel (signed in as <sign-in name>)". Pausing the
+  sign-in's name stops it, it can't decide its own review items by sending another name, and
+  undo only lets it take back records made through the same sign-in (a remote app calling
+  itself "claude-code" can no longer take back your local claude-code's records; this check now
+  also applies through the relay). Remote tokens on the LAN listener are recorded as before.
+- Docs: one token per app is recommended wherever remote tokens are documented (REMOTE-ACCESS,
+  AGENTS.md, README), with how to replace a shared token (`flowstate remote clients`, a new
+  token per app, then revoke the old one). The docs' example token is now "my-laptop-app"
+  instead of "Cursor", and `flowstate remote add-client` says to use each token in one app.
+- **`flowstate remote rename "<old name>" "<new name>"`** gives a remote token or OAuth app a new
+  name without making a new token: the same token keeps working and nothing changes in the app.
+  The old name may also be the id from `flowstate remote clients`. Refused, with a sentence
+  saying why: no active app of that name (or several; then rename by id), an empty or
+  secret-looking new name, or a name another app has or had before a rename. Past records keep
+  the name they were saved under; new ones show the new name. The safeguards follow the token,
+  not the name: a paused token stays paused under its new name, it still can't decide review
+  items it queued under its old name, and undo still lets it take back only its own records
+  (old names are kept in the settings database's new `client_names` table, so `remote clients`
+  can show them as "was ..."; the FlowState database is not changed).
+- **Both names on the LAN too.** Per-app keys (`flowstate keys add`) and remote tokens used on
+  the LAN listener now follow the same rule as the relay and the tunnel: the app recorded is
+  the name the app sends (else the key's or token's name), and the key's or token's name is
+  recorded beside it in the machine column: "<the key's workspace> (signed in as <key name>)",
+  "lan (signed in as <name>)" without a workspace or for a remote token. Every place that shows
+  "Grok Bot (via Cursor)" for relay and tunnel callers now does it for these too, one name when
+  they match; a key's workspace still shows as "on <workspace>" where pages show the machine.
+  Pausing the key's or token's name stops it, it can't decide its own review items by sending
+  another name, and undo is keyed to the key or token (a key and a remote token of the same
+  name are different callers). Before, these recorded the key's or token's name as the app;
+  those rows show as they were saved and still count as that key's or token's own. The shared
+  LAN token is unchanged: the name the app sends, "shared token (legacy)" on Who did what.
+- Who did what's app filter (the review page and `manage_history(action="who", by_app=...)`)
+  also finds rows by the key's, token's or OAuth app's name they came in on, so filtering by a
+  key's name still finds what it wrote.
+- `flowstate update self-update on|off`: whether `flowstate update` may update this computer,
+  from the terminal (`config.json` `"self_update"`, the same setting as on the review page's
+  Settings). With no word it shows the value and where it comes from: `config.json`, the
+  `.flowstate-no-self-update` file, or the default. A change is logged in `review_mode_log` like
+  the page's (as `command-line`, "set in the user's terminal") and shows in the page's recent
+  changes. No confirm prompt, as on the page. If the `.flowstate-no-self-update` file is there,
+  `on` says it still keeps the folder updated by hand and how to delete it; FlowState never
+  deletes it.
+- Review cards in the chat. Hosts that support MCP Apps (such as Claude Desktop) now get a card
+  for everything else that waits in the review queue: session summaries, suggestions, imports,
+  clean-up ideas, markdown edits and possible conflicts. The AI calls a new read-only tool,
+  `show_review_card` (one item, or up to 5 waiting items of a project, oldest first, with
+  `more`), whose definition names `ui://flowstate/review-card.html`. Each card says what the
+  item is, what saving it would do, which app wrote it and when, with Approve and Reject; Reject
+  asks for a short optional reason inside the card. Disagreements keep their own card:
+  `show_review_card` points to `show_conflict_card` for them. `manage_review` list and walk
+  answers on those hosts include the call to make (`show_card`; both calls when both kinds
+  wait). Apps without MCP Apps see no new tool and the same plain text as before.
+- The card's buttons call `resolve_review_card`, hidden from the model (`visibility: ["app"]`)
+  like `resolve_conflict_card`, with the same rules: chat text (`user_request`, `message`,
+  `text`, `reason`) is refused, so are apps without MCP Apps, and through the relay a tap is
+  phone only unless `flowstate relay chat-approvals on`. Items only the user decides (with
+  approvals on: deletes and turning review off; every "did you say this?" check) and every
+  delete show without buttons, with the phone or review-page link, and are refused if the tool
+  is called anyway. Every card decision is logged in the approvals log with path `card`, for
+  every kind. Approving or rejecting runs the same step as `manage_review` (one shared module,
+  `review_apply.py`); `manage_review`'s own rules are unchanged. Since the fixes below, a tap
+  also needs the card's one-use code and an app on your card list.
+- Fix: the app whose save opened a disagreement card could dismiss it through `manage_review`
+  by quoting its own decision: the card's own words were only its headline ("Two AIs disagree
+  about ..."). The own-item check now compares against both claims on the card, as it did for
+  the possible-conflict item the card replaced in 2.4.3. (Found by the end-to-end run, S3.)
+- Fix: the review page's port note (`review-page/<db>.json`) now goes under `FLOWSTATE_HOME`
+  when that is set, instead of always the per-OS data folder, so a second install or a test
+  database no longer writes into the main one's folder. New data-folder git repos ignore
+  `review-page/`.
+
+### Fixed before release (audit of 2.4.4)
+
+- **Cards only count when you tap them.** The in-chat cards (review card and disagreement card)
+  used to trust any app that said it could show them, so a program pretending to be a card host
+  could approve its own review items, and the log said "card" as if you had tapped. Now:
+  - only apps on your card list get the cards and their buttons. The list starts with
+    `claude-ai` (Claude Desktop and claude.ai); `flowstate approvals cards add|remove NAME`
+    (adding asks for your `y` in the terminal) or the new Settings row "Apps that may show
+    review cards in the chat" changes it;
+  - every card with buttons gets a one-use code that only the card's own page receives (in
+    the tool result's `_meta`, never in the text the AI reads). A tap without it, with another
+    card's code, a used code or one older than 15 minutes is refused (`not_a_card_tap`), so the
+    AI can't press the buttons itself. A refused tap gets a fresh code so you can tap again;
+  - the app that queued an item (a suggestion, a clean-up, a disagreement it flagged) gets no
+    buttons for it on its own card and is refused (`own_item`), as in the chat. Session
+    summaries keep their buttons: FlowState queues them itself when a session closes;
+  - a tap is recorded as "Approve tapped on the review card in <app> (its one-use card code
+    checked)", never as "the user".
+- **Remove and Bring back on a card follow the delete rules.** A session summary record's
+  Remove (or Bring back) on a card is refused for apps that may not delete (remote tokens, LAN
+  keys, OAuth apps, the relay), and with approvals on it is only done on the review page or your
+  phone. Keep still works everywhere.
+- **`flowstate review-page` always gives you editable Settings.** When FlowState's read-only
+  link page was already on port 8770, the command opened that page and stopped, so Settings
+  could never be changed there. It now starts its own key-protected page on a free port. The
+  "FlowState review" desktop shortcut runs the same command.
+- **The two review pages no longer share a cookie.** The Settings page now lives under a secret
+  address (`http://127.0.0.1:<port>/s/<secret>/`) and its cookie is only sent there, so the
+  link page can't sign you out of Settings and another local web server (a dev server, say)
+  never receives your Settings session. The link page has its own cookie.
+- **The link page can't be used to approve what only you decide.** Any program on this computer
+  can open the review link page, so with approvals on it no longer approves a delete or other
+  user-only item, does Remove / Bring back, or turns review off; it points you to the page
+  `flowstate review-page` opens or your terminal. Without approvals nothing changes.
+- **Review page messages come from FlowState only.** A `?flash=` text in the address is no
+  longer shown; each action's answer is kept on the page's side and shown once. A program
+  visiting the link page over and over can't sign you out any more (the least recently used
+  session goes first, and at most 10 new ones a minute are made).
+- **Pause follows the key.** Pausing an app (`flowstate apps pause --app NAME` or the page
+  button) now also pauses the key, token or sign-in it uses, so it can't come back under a new
+  name ("Grok Bot 2"). `flowstate apps list` shows both names ("Grok Bot (via Desk key)").
+- **Names of tokens, keys and OAuth apps are never reused.** `remote add-client`, `keys add` and
+  `remote rename` refuse a name another token or app has, had before a rename, or had before it
+  was revoked (case doesn't count), so a new token can never pass for an old app. An OAuth app
+  signing up under a taken name gets a number ("Claude (2)"). New names are at most 50
+  characters, so "(signed in as <name>)" is always recorded whole and the key keeps knowing its
+  own records. `remote add-client --to-file` into a git folder now refuses before anything is
+  made.
+- **An app can't imitate a sign-in in its name.** "(via ...)" and "(signed in as ...)" are taken
+  out of the names apps send, so "Grok Bot (via Laptop key)" on the shared token can't look like
+  a key-signed app.
+- **A damaged `config.json` is never wiped.** If the settings file exists but can't be read (a
+  typo, or a moment while another program replaces it), settings changes (`flowstate name`,
+  `update check`, `update self-update`, the Settings page, `offsite setup`) now refuse with a
+  plain sentence instead of saving only their own setting, `flowstate update` treats it as
+  "updated by hand", and the relay agent leaves the relay's copy of the name alone. Writers
+  now use a lock and their own temporary file, so two at once can't fail or lose a change.
+- **Session summary records:**
+  - a Remove racing with Keep all (from the page, the phone, a card or the terminal, in any
+    process) can no longer delete a record while the history says it was kept: Remove marks the
+    record first, and Keep all / Don't keep wait for it ("try again in a moment");
+  - Remove isn't offered on a record another app added to later (a fix attempt on this
+    session's problem), since it would take that work with it; Keep still is;
+  - only a record one of the session's own writes created can be removed: a link that was
+    already there reads "already there", and a record the session deleted reads "deleted";
+  - the session's own last update, saved a moment after its last call began, no longer shows
+    as "changed since this session";
+  - a record you removed and that was then brought back with `manage_history` undo (instead of
+    Bring back) no longer shows as "changed since this session" with no buttons: it is
+    undecided again, with Keep and Remove;
+  - Keep all now records how it was decided (card, agent, review page, phone, terminal).
+- **Smaller fixes:** the cards show dates in your own time zone; the terminal's `approvals phone`,
+  `approvals popup` and `update check` changes are logged like the page's (and popup names are
+  tidied the same way); `approvals popup add` asks for your `y` like `approvals off`; names with
+  newer emoji are accepted (only control, format, surrogate and private-use characters are
+  refused, the same on every Python and on the relay); "within a minute" for the name reaching
+  your phone now says "normally".
+
+
+### Data security fixes (audit of 2.4.4, part 2)
+
+- **Data-git can't send your data anywhere on its own.** An AI app on this computer could turn
+  FlowState's data folder into a git repository, point it at any address and push everything:
+  the database, every backup and the relay's private key and device token. Now:
+  - setting a remote, syncing and cloning are your own terminal commands (`flowstate data-git
+    remote URL`, `sync`, `clone`; each asks for your `y`). `manage_data_git` answers `user_only`
+    for them; `status`, `history` and `init` still work;
+  - only `README.md`, `projects/` (attachments) and `export/` are ever committed. `sync` writes a
+    markdown export of every project into `export/`. The database and its -wal/-shm files,
+    `backups/`, `relay/`, `config.json`, `remote-auth.db`, `update.json` and anything that looks
+    like a key, token or log never are, wherever they sit, and an older repository that tracked
+    the database stops tracking it at the next sync (older commits still hold it);
+  - a github.com remote must be private, checked before every push like the off-site backup;
+    any other remote needs `--unchecked`, and a remote changed outside the command is refused;
+  - the specialist tools (`manage_data_git`, `manage_files`, `manage_sessions`,
+    `manage_variables`, `manage_methods`, `manage_skills`, and their older names `git`, `file`,
+    ...) are refused outside the full profile (`not_in_profile`), not just left unlisted.
+- **Only you set hard rules.** A rule any app adds (local, LAN, tunnel or relay) now waits in
+  the review queue as a "hard rule" item that only your own click or key decides (review page,
+  phone or `flowstate approve`); no app can approve it, approvals on or off. `flowstate rules add
+  --project P "TEXT"` sets one at once. The brief says who set each rule: "(set by the user)",
+  or, for one an older version let an app add, "(added by Grok Build, not confirmed by the
+  user)". Waiting rules count toward the 25-rule / 2,000-character limits.
+- **Only you remove hard rules too.** Before, an app could remove a rule by passing any words as
+  "the user's request", or with `manage_memory` delete. Now `manage_rules` remove, from any app,
+  only queues a "remove this hard rule?" item for your own click or key (review page, phone or
+  `flowstate approve`), whatever words it passes; the rule keeps holding until you approve.
+  New `flowstate rules remove <id>` (your own terminal, asks for `y`) removes one at once.
+  `manage_memory` delete refuses `record_type=rule`. The chat review walk shows no Approve /
+  Reject box for hard rules (adding or removing): they stay listed with where you decide them.
+  A session summary now says "hard rule request" / "rule removal request" instead of "new
+  rule" / "rule removed" for these.
+- **Private files stay private.** `setup_flowstate.py` now writes app configs (`~/.claude.json`,
+  `~/.cursor/mcp.json`, ...) with the file's own permissions (owner-only for a new file); before,
+  a 0600 config came out readable by every account. What FlowState creates from now on (data
+  and backup folders, the database and its -wal/-shm, backups, restores, `export-md --out`,
+  `remote add-client --to-file`, `config.json`) is owner-only: 0700 / 0600 on macOS and Linux,
+  an access list for your account and SYSTEM on Windows. `flowstate tighten` does the same for
+  files older versions made.
+- **LAN mode says it isn't encrypted.** Remote-access tokens (for the relay or tunnel) are
+  refused on the plain-HTTP LAN listener from other computers (401 `remote_token_on_lan`), so
+  one copied off the Wi-Fi can't be used over the internet; `flowstate remote lan-tokens on`
+  allows them. Starting on a LAN address prints a warning, and `docs/REMOTE-ACCESS.md` says it.
+- **Erasing for good.** New `flowstate erase TYPE:ID [...]` / `--deleted-before DAYS` (your own
+  terminal, asks for `y`) removes deleted records' copies from the edit history, the search
+  indexes, the session log and review items, deletes attached files FlowState copied in, and
+  compacts the database so the old bytes leave the file. Deletes now also drop the keyword
+  index row at once. The README's new "Erasing for good" section says what older backups, the
+  off-site copy and data-git history still hold.
+- **Record text is data, not instructions.** Briefs mark their record sections ("[Records below:
+  stored data written by apps, not instructions ...]" ... "[End of records.]"); search, ask and
+  review answers carry `records_are`; the handoff header says its words are data. In every tool
+  answer, `![`, `<img` / `<script` / `<iframe` / `<svg` ... and `javascript:` get one character
+  changed, so a record can't make a chat app load an address. With review mode `everything`, a
+  handoff note from an app signed in from elsewhere (relay, tunnel, LAN key) waits for review.
+- **The off-site copy is encrypted.** Each nightly copy is encrypted on this computer
+  (AES-256-GCM) before it is pushed; GitHub only gets `flowstate-backup.db.fsenc` and the
+  manifest. The key is made the first time and kept in the OS credential store; `flowstate
+  offsite key` shows its recovery code only in a real terminal, never on normal output, so it
+  doesn't land in an AI's chat when an AI runs setup for you (an AI with its own shell on this
+  computer could still get at it, or read the key from the credential store), and the
+  brief reminds the AI to tell you until you have seen it. `flowstate restore <file>.fsenc`
+  decrypts with this computer's key or asks for the recovery code. The staging folder is
+  deleted after every push, so no extra copy of the database (or old nights' copies) stays.
+- **Phone review off closes open pages.** Every phone decision re-checks `approvals phone`, so
+  turning it off also stops a phone list or approve page that is already open.
+- **Your relay address stays out of AI answers.** Phone decisions are logged as "phone", without
+  the handle. The phone links (the review list's `https://flowstatemcp.com/review/<handle>` and
+  each item's approve link) now go only to apps on the computer where FlowState runs. An app
+  elsewhere (through the relay, your own tunnel, or another computer on your network) gets
+  "Open the review list on your phone from the FlowState link you saved, or run `flowstate
+  review-page` on your computer." instead, in the brief, the review list and walk, answers that
+  queue something, the relay's "phone only" refusal and the review card (`flowstate relay
+  chat-approvals` says so too). Your
+  flowstatemcp.com account page shows the link to bookmark. The relay hostname no longer answers
+  `/health` (anyone can list relay addresses from the certificate logs), and the daily crt.sh
+  check sends a plain `flowstate` user agent. Anyone who knows your relay address can still tell
+  whether your computer is connected (the connection fails when it is off).
+- **Deleting a project or attachment says the files stay** on disk, and how to erase them.
+- **`export-md` is defused**: images, HTML tags and comments, and `javascript:` in record text
+  can't load anything when you open the export in a markdown viewer; importing an unchanged
+  export still sees no edits.
+- **Stronger passphrase hashing.** New and changed owner passphrases use scrypt N=2^17 (was
+  2^14); an older hash keeps working and is upgraded at the next successful sign-in.
+
+### Fixes after the re-audit (audit of 2.4.4, part 3)
+
+Review cards
+- An app that connects over the network (a LAN key, a remote token, or an OAuth app through your
+  tunnel or the relay) now gets the in-chat cards only if you added that key's, token's or OAuth
+  app's own name to the card list (`flowstate approvals cards add --sign-in "<name>"`). The name the app
+  gives itself no longer counts, so an app can't get the cards by calling itself "claude-ai". The
+  built-in `claude-ai` entry covers Claude Desktop on this computer only, and the shared LAN
+  token never gets cards.
+- A card decision is recorded the same way everywhere: "card (claude-ai)", plus "signed in as
+  <key>" for an app that connects over the network.
+- Card answers get the same protection as every other answer, in the text and in the data the
+  card itself shows: stored text can't show live images or links to the AI, and it is marked as
+  data, not instructions.
+- A chat where you only tap cards no longer leaves a new session summary to review.
+- If a card tap fails or times out, the card's buttons keep working. A card left open too long
+  says it has expired and asks you to show it again. An AI showing cards over and over can no
+  longer stop other cards' buttons from working.
+- The cards' plain-text version shows this computer's local date and time instead of UTC.
+
+Erase and session summaries
+- Erasing a record no longer changes other review items. Before, it replaced dates, status words
+  and other short values in unrelated items with "[erased]" and joined their lines. Now it only
+  removes the erased record's own text, and leaves the rest of each item exactly as it was.
+- `flowstate erase` also erases records an AI took back with undo, and removes a deleted
+  decision's text from the session log. Before, it said "no delete of it is on record" for
+  undone records, and decisions stayed in the log.
+- Removing one record of a session summary is saved together with the decision: if saving the
+  decision fails, nothing is removed. A Remove that takes a long time (a big safety copy) keeps
+  the summary on hold until it finishes.
+- Handoff notes and links a session left can be removed from its summary. Before, they showed as
+  "already there".
+- Remove is no longer offered when FlowState can't be sure a record is only that session's work:
+  another app added to it, the check failed, or the session's write log is older than 90 days.
+  Those records can still be kept.
+- A session summary's short line counts only records still there. Before, it said "saved 2
+  learnings" when one had been undone.
+
+Off-site copy, backups and file permissions
+- Backups and new databases work again on USB sticks, exFAT drives and network shares that don't
+  support file permissions (broken since 2.4.3). FlowState says once that files there may be
+  readable by other users of this computer.
+- If the Keychain (or Credential Manager) can't be read, for example because it's locked or you
+  denied the prompt, the off-site push stops with a message. Before, FlowState made a new key
+  over your old one, and the old key is the only way to read your earlier copies. An existing
+  key is never overwritten now.
+- The "save your recovery code" reminder is tied to the key itself. If the key ever changes, the
+  next push says so loudly and the reminder comes back.
+- The off-site staging folder (which could hold an unencrypted copy left by 2.4.3) is deleted on
+  every push attempt, even a failed one, and by `flowstate offsite setup` and `offsite disable`.
+  On Windows its read-only files are deleted too, and FlowState checks the folder is really gone.
+- The small unencrypted note pushed next to the encrypted copy holds only its date, size and
+  checksum. Before, it also listed how many records each table had.
+- Encrypted copies record, in a way that can't be changed, when they were made, and `flowstate
+  restore` shows that time. A copy that has been cut short is refused. A push no longer
+  overwrites a newer copy on GitHub (from another computer, or after a wrong clock) unless you
+  add `--replace-newer`. A damaged off-site key on this computer gives a plain message instead of
+  an error dump.
+- After upgrading from 2.4.3, FlowState makes its database, backups and folders owner-only by
+  itself when it starts and at each backup (macOS and Linux). You no longer need to run
+  `flowstate tighten`, which now also covers restored copies and a backups folder you chose
+  yourself.
+- `flowstate remote add-client --to-file` refuses a symbolic link. Before, it could write the
+  token, readable by everyone, wherever the link pointed.
+- Windows: FlowState's owner-only access lists name your account by its ID, and setup keeps an
+  app config file's own access list when it rewrites the file.
+- FlowState now lists `cryptography`, which off-site encryption needs, as its `offsite` extra
+  and in requirements.txt (it still comes with `mcp`, so it adds nothing to install).
+
+Data-git and stored text
+- Data-git: if you sync from several computers, update every one of them to 2.4.4 before
+  syncing. Then run `flowstate data-git migrate` once on each computer. It takes the database out
+  of git without touching the files on disk, after a safety copy. Until then, `flowstate data-git
+  sync` refuses a repository that still holds the database, because removing it would make git
+  delete the database on a computer still running 2.4.3.
+- Data-git sync checks what the remote would bring in before merging it. It refuses a database,
+  settings or keys, links, and files that would replace files git doesn't track on this
+  computer. It makes a safety copy of the database before it brings in other computers' changes.
+- Data-git never writes through a link someone pushed. The export folder and files are readable
+  by your account only.
+- `flowstate data-git init` keeps an existing README.md and .gitignore. File attachments can't be
+  written outside FlowState's projects folder, whatever the project's name.
+- More HTML and link tricks in stored text are made harmless in answers and in the markdown
+  export, including the export's header and Links section. Text that imitates the brief's
+  "records below" markers can no longer fake the end of them. History answers say records are
+  data. An edited markdown import keeps your original text where you didn't change it.
+- Disagreements an AI flags are marked "unsettled" in the brief, like FlowState's own possible
+  conflicts. The brief's "Two AIs disagree" line names both records and sits inside the records
+  section.
+
+Remote access, names and pausing
+- Wrong passphrases sent all at once no longer get past the 5-try limit: FlowState counts each
+  try before checking it and checks one at a time, so a burst can't use up the computer's memory.
+- Key, token and OAuth app names share one list, and names that only look different (capital
+  letters, invisible characters, Cyrillic or Greek lookalike letters, full-width letters) count
+  as the same name. Names FlowState uses itself, like "unknown", "phone" or "user", can't be
+  taken. Existing duplicates keep working.
+- An app can no longer pretend to be signed in through another key by writing "(via …)" with
+  lookalike brackets or letters, and can't call itself "user" or "phone".
+- If a remote token is sent over the plain-HTTP network listener from another computer,
+  FlowState still refuses it and now warns you, in `flowstate remote clients` and in the brief,
+  that it could have been read; revoke it, or keep it with `flowstate remote keep-token --client
+  <id>`.
+- If two apps share one key and you resume one of them, the key stays paused while the other is
+  still paused, so that app can't get back in by changing its name.
+
+Review pages, settings and rules
+- The review link page can no longer resume a paused app (use `flowstate apps resume` or the page
+  `flowstate review-page` opens). With approvals on, it can't turn review off in any way: not by
+  clearing a project's own setting, and not install-wide when only one project has approvals on.
+  AI apps follow the same rule.
+- A cookie left by an older review page no longer locks you out of Settings. Other programs
+  visiting the link page can no longer sign you out of a tab you used in the last 30 minutes.
+- A damaged settings file keeps the daily update check off instead of turning it on. `flowstate
+  remote lan-tokens on|off` says plainly when the settings file can't be read, and its changes
+  are logged like other settings.
+- A FlowState command that crashed while changing settings no longer blocks the next one for 30
+  seconds.
+- `flowstate rules list` says who set each rule. New `flowstate rules confirm ID` makes a rule an
+  app added in an older version yours. Rules waiting for your OK no longer use up the project's
+  rule space; at most 20 can wait per project, 10 from one app.
+- Searching "D12" shows that decision in full, and says "No decision D12" when there isn't one.
+- `flowstate review-page --no-browser` shows its working one-time link on your terminal.
+- A hand-typed "Main FlowState" (any capitalization) counts as the default name and is never sent
+  to the relay.
+- `flowstate update --rollback` to a version before 2.4.4 reminds you to set your remote-access
+  passphrase again (`flowstate remote passphrase`): 2.4.4 stores it in a stronger form older
+  versions can't check.
+
+### Fixes after the second re-check (audit of 2.4.4, part 4)
+
+Approve / Reject boxes
+- An app with a LAN key, LAN token or LAN sign-in can no longer answer its own Approve / Reject
+  boxes by calling itself "claude-code". Boxes go only to apps on this computer: one this
+  computer starts (stdio, matched by the name it sends, as before), or one on this computer that
+  uses the LAN listener and whose key's or token's own name you added with `flowstate approvals
+  popup add --sign-in "<name>"` (or the tick on the review page's Popup row). Apps on other
+  computers, the shared LAN token, the relay and the tunnel never get boxes. The log says which
+  sign-in answered: "chat (claude-code, signed in as Laptop key)".
+- The popup and card lists now keep app names and sign-in names apart, so adding the app name
+  `claude-ai` never trusts a network sign-in that happens to be called `claude-ai`. An OAuth app
+  that registers again and is named "Claude (2)" keeps the place "Claude" had.
+- "Did you say this?" items get no box in the review walk, like hard rules: you confirm them on
+  the review page, your phone or with `flowstate approve <id>`.
+- A card tap whose save fails no longer uses up the card's code.
+
+Data-git
+- `flowstate data-git migrate` works on the second computer (it failed with "use -f to force
+  removal" when another computer had pushed first), and its commit adds FlowState's
+  `.gitignore`, so a computer still on 2.4.3 can't commit its database again.
+- From 2.4.4 data-git shares the markdown exports, not the database. With two 2.4.4 computers,
+  an export file both wrote no longer stops every sync with a clash: this computer's copy wins
+  (it is made again from this computer's database at each sync), and exports of projects this
+  computer doesn't have are left alone. The README says so.
+- A data folder that is itself a link works with data-git. `.gitattributes` and `.gitmodules`
+  are never committed or pulled. `data-git clone` refuses a repository with links before it
+  writes anything, and the clone is owner-only at once. An attachment is never written through
+  a link. The export's "run this to import" line names the project by its number, so no
+  AI-written name lands in a shell command.
+
+Your terminal
+- Nothing an app wrote (a hard rule, a review item, a project, app or key name) can send escape
+  codes to your terminal any more: control and invisible characters show as visible escapes
+  (`\x1b`), so you type `y` to exactly what is stored. A new hard rule can't contain them.
+  Joined emoji (a family, a rainbow flag) and Persian or Hindi words print as they are, and a
+  rule may hold them.
+- The per-app limit on waiting hard rules counts the app's sign-in, not the name it sends.
+
+Erase
+- Erase also takes the text of earlier versions of a record (a renamed todo's first title), its
+  evidence snippets, a todo's claim history and the topic of a disagreement card about it. A
+  delete now takes a decision's evidence with it (undo brings it back).
+- Erase no longer changes review items that only share a short phrase with the erased record
+  (a component called "Authentication"); a whole sentence quoted from it still goes.
+- A short title like "fix" no longer blanks another record's session-log line. A record deleted
+  together with its project can be erased (the project's delete can still be undone). A hard
+  rule you removed can be erased: `flowstate erase rule:ID` (an active rule points you to
+  `flowstate rules remove`). Its summary says the rule's text was blanked. `--deleted-before 0`
+  includes deletes made the same second, a huge number no longer crashes, and composed /
+  decomposed accents match.
+
+Files and the off-site copy
+- `flowstate backup --dir DIR` makes the folder you chose owner-only like the default one, and
+  `flowstate tighten --dir DIR` does it on request. An empty folder or a `flowstate-*` folder
+  doesn't count as FlowState's, and `._` files from exFAT / SMB drives don't stop it.
+- On a drive where chmod is accepted but changes nothing, FlowState warns instead of saying it
+  made files owner-only at every start. The warning is once per drive; a Windows access-list
+  failure (USB drive) warns too.
+- `flowstate tighten` lists a file as "owner-only now" only when it worked. Otherwise it prints
+  `NOT changed: <file>: <why>` and exits 1. On Windows the reason is now the real one: a file
+  owned by another account (named, such as Administrators: run it from an administrator window
+  or `takeown /f` the file first), a FAT / exFAT drive, or icacls's own message, instead of
+  always "this drive doesn't support file permissions".
+- An empty off-site key file or Keychain item now says so and what to do, instead of "try
+  again"; it is never replaced. Two first-time pushes at the same moment make one key (Windows).
+  `flowstate offsite setup` exits 1 when the key can't be read, and `restore` no longer says
+  "nothing was pushed".
+- Setup no longer crashes on a drive without file permissions when the `--config` file exists.
+
+Remote access and names
+- A request through a proxy on this computer no longer counts as coming from this computer
+  (FlowState sees the proxy's forwarding headers; set `FLOWSTATE_LAN_PROXY=1` for a proxy that
+  adds none). A remote token on it counts as sent over the LAN.
+- Old "phone (<handle>)" labels are hidden from apps elsewhere also after you turn the relay off
+  or enrol again under a new handle.
+- More lookalike letters (Armenian, Cherokee, Lisu, Coptic) and angle brackets in "(via ...)"
+  are caught.
+- An OAuth registration you never approved no longer holds a name such as "Cursor", so your own
+  `flowstate keys add --name Cursor` works; the app gets a number if you approve it later.
+- `flowstate remote keep-token` asks for your `y` in a terminal, and the brief's warning no
+  longer gives an AI the command.
+
+Brief and defusing
+- The project's description, linked-project alerts and the last session's summary now sit
+  inside the brief's "records" section, and links hidden with entities encoded twice are broken
+  too.
+
+### In-chat cards in Claude Desktop again, and through the relay (task 65)
+
+- Claude Desktop shows the tap-to-decide review and disagreement cards again. Since the card
+  safety checks earlier in 2.4.4, only apps on the card list got cards, and the list only had
+  `claude-ai`, the name Claude Desktop's chat sends. Claude Desktop's Cowork (agent) mode sends
+  a different name, `local-agent-mode-` plus the server's name (`local-agent-mode-flowstate`),
+  so it got only the text. The card list now starts with `local-agent-mode-*` too: a name
+  ending in `*` matches every app name that starts with it, for apps this computer starts
+  only, never for a key, token or sign-in. Remove it with
+  `flowstate approvals cards remove "local-agent-mode-*"` if you don't want cards there.
+- The cards now work through the relay too (the FlowStateMCP connector in Claude Desktop or
+  claude.ai). As before, a connector gets them only after you add its sign-in's own name:
+  `flowstate approvals cards add --sign-in "<name>"` on your computer (it asks for your `y`),
+  or the tick on the review page's Settings. When an app could show cards but you haven't
+  turned them on, the AI's answer now gives you that exact command (`cards_off`) instead of
+  saying nothing. Once on, your tap goes through the relay to your own FlowState, which checks
+  the card's one-use code (15 minutes, once, for that card and that sign-in); the relay only
+  carries the encrypted bytes and can't see or keep it. A card tap now counts through the relay
+  the same as on your computer or your own tunnel. Before, it was refused unless chat
+  approvals were on. The AI's own approve / reject in the chat still follows that setting (off
+  by default: phone only), and items only you decide (deletes and turning review off with
+  approvals on, "did you say this?" checks) still have no buttons on a card.
+- Apps without card support still get the text card and your phone or review-page link.
+- **Cards are offered, not set up by hand.** The first time an app that signs in over the
+  network (the FlowStateMCP connector through the relay, claude.ai through your tunnel, a LAN
+  key) could show you a card but isn't on your card list, it gets the text card as before, and
+  one item waits in your review queue: "Allow tap cards in <app>?", with the app's name and the
+  sign-in it used.
+  - Only you answer it, and only on the review page or your phone review page. No AI can
+    approve or reject it, with chat approvals on or off; nor can a card tap, a popup, the chat
+    walk or `flowstate approve`.
+  - **Allow** puts that sign-in's own name on the card list (the same list as
+    `flowstate approvals cards add --sign-in` and Settings), never the name the app gives
+    itself. Its next answer shows the card, and your taps count.
+  - **No** keeps the text. Each sign-in is asked once: not again while it waits, after a No,
+    or after you take the cards away again (Settings, or
+    `flowstate approvals cards remove --sign-in "<name>"`).
+  - To ask one again: Settings ("Offer the cards to apps on a sign-in", Offer again) or
+    `flowstate approvals cards offer-again "<name>"`. To stop offers altogether:
+    `flowstate approvals cards offers off`, or the same row in Settings.
+  - Every answer is logged with your other approvals, and the change with your other settings
+    changes.
+
+### Evidence, source tags and standings are in the edit history (task 67)
+
+- **Earlier evidence is no longer lost.** Saving new evidence for a record (`log_work`
+  `evidence`, `flag_conflict` `evidence` / `target_evidence`) replaced the old snippets without
+  keeping them. Every evidence change is now in the edit history, with the old and new
+  snippets and the app that made it. `manage_history(action="list", record_type=...,
+  record_id=...)` shows it (as `evidence`), and `manage_history(action="undo", ...)` on the
+  record brings the old evidence back. Saving the same evidence again changes nothing.
+- **Undoing your own new record works when it has evidence.** Undo of a record created with
+  evidence was refused ("entry_evidence refers to it"); the evidence now goes with it.
+- **Source tags and checked dates keep their history too.** `set_source` and `mark_checked`
+  overwrote the earlier tag and date. Both are now in the edit history, and undo puts the
+  earlier tag back. Undo never sets or takes back `user_stated`: that stays the user's own
+  decision.
+- **A second disagreement card on the same entry keeps the first outcome in history.** The
+  entry's "superseded" mark from the first card was replaced without a trace. It is recorded
+  now; undo leaves card outcomes alone (they are the user's).
+- `flowstate erase` also removes these history copies of an erased record.
+- Nothing in the database is rewritten: the history uses the existing `record_history` table.
+  Changes made before 2.4.4 have no earlier version to show.
+
+### Undo around card outcomes, and history for review-queue changes (task 68)
+
+- **A card's outcome no longer blocks undo of older edits.** When an entry's newest history
+  row was a disagreement card's "superseded" mark, undo on that entry was refused, so older
+  ordinary edits (its evidence, its source tag) couldn't be undone either. Undo now steps
+  over the card's mark to the newest ordinary edit and undoes that. The mark itself stays as
+  it is: no app tool changes it.
+- **An app can't take back its own new entry once a card was decided about it.** Undoing the
+  create of the entry a card kept would have left the other one "superseded" by an entry that
+  no longer exists. That undo is now refused (`user_only`).
+- **Review-queue changes are in the history.** A possible conflict's status (dismissed as
+  compatible, closed by a replacing decision or by a card, confirmed) and a review item's
+  text before and after "approve with edits" are recorded, with the app and the time.
+  `manage_history(action="list", project=...)` shows them (as `possible conflict` and
+  `review item`). They record the user's decisions, so undo never changes them back.
+- `flowstate erase` also removes a review item's earlier text from the history (and from the
+  session log) when it erases the record that item became.
+- **Fixed:** when undo was refused because a source tag or card mark changed again, the
+  message could name the app of a different record with the same id (a todo #3 for decision
+  #3). It now looks only at the same kind of record.
+- Nothing in the database is rewritten; the history uses the existing `record_history` table.
+
+### The user is asked whether to reopen possible conflicts after an undo (task 69)
+
+- **A possible conflict no longer drops out of the brief silently.** When an app undoes its
+  own decision that had replaced another (`log_work replaces=`), the possible conflicts that
+  replacement had closed stay closed, because no app may change the review queue. FlowState
+  now adds one review item for the user in that project ("Reopen the possible conflict between
+  D12 "..." and D11 "..."?"), naming the decisions in plain words. The undo's answer says so.
+- **One question per undo**, for all the pairs it closed. Retrying the undo, or undo / redo /
+  undo, asks nothing new, and neither does a closing the user already answered.
+- **Reopen** puts the pairs back in the brief and asks again whether they conflict (a new
+  possible-conflict item, unless the user had already said they conflict). **Leave closed**
+  changes nothing. If the replacement is back by then (redo), nothing is reopened and the
+  answer says why. Both answers are in the edit history (with who and when) and in the
+  approval log.
+- **Only the user answers it:** on the review page (this computer's or the tunnel page), the
+  phone pages, or by tapping its review card (since task 70 also the card of the app that did
+  the undo).
+  Every AI tool, the chat walk, a popup and the terminal are refused, and nothing changes.
+- `flowstate erase` removes the question's text and history with the decisions it names.
+- No migration and nothing rewritten: a new review-item kind (`reopen_conflict`) in the
+  existing tables.
+- Unchanged: an app may still take back its own new entry when the only card naming it was
+  dismissed.
+
+### Erase and cut quotes, the reopen question in the same chat, link removal (task 70)
+
+- **`flowstate erase` no longer leaves the start of a long decision in a possible-conflict
+  item.** Those items (since 2.3.0) quoted each decision cut to about 70 characters with
+  "...". Erase now also removes a quote cut short with "..." or "…", and finds a
+  possible-conflict item by the decisions it names (the pair's ids), not only by its text.
+  This works on existing databases too: items an older version stored are cleaned the same
+  way, and their edit history goes with them. An unrelated item that only shares a few
+  opening words is left as it was.
+- **New possible-conflict items quote each decision whole** and name both decisions by id,
+  as the reopen question already did. Pages and lists still shorten long lines when they
+  show them.
+- **The "reopen?" question can be answered in the same chat.** FlowState itself now queues
+  it (shown as "FlowState"; the details still say which app undid what), so the app that
+  did the undo shows working buttons on its review card. A tap still needs the card's hidden
+  one-use code: no code, a wrong code or a used one is refused.
+- Still refused, with nothing changed: every AI tool (`manage_review` approve / reject, with
+  chat approvals on or off, approve with edits), the chat walk, popups, an AI calling itself
+  the review page, phone or tunnel page, the open review link page, and the terminal's
+  `flowstate approve`.
+- No app can be FlowState: "FlowState", "system" and lookalikes are reserved app names, and
+  no key, token, header or tool argument gives FlowState's own identity. Only the reopen
+  question is recorded with it.
+- **Removing a supersedes link asks too.** `manage_links remove` of a link that had closed
+  possible conflicts now queues the same single question as an undo (deduplicated the same
+  way: retrying, or adding and removing the link again, asks nothing new).
+- Unchanged: pairs closed and undone before this version get no question; an app may still
+  take back its own new entry when the only card naming it was dismissed. No migration.
+
+### Erase keeps other items' history, without the erased text (task 71)
+
+- **`flowstate erase` no longer deletes the whole edit history of other items.** When it
+  takes an erased record's text out of a review item (a possible-conflict item, a
+  disagreement card's item, or an unrelated item that quoted it), that item's history rows
+  now stay. Only the erased text is replaced by `[erased]` inside them, by the same rules as
+  the item itself: whole quotes and quotes cut short with "..." or "…"; in an item that isn't
+  about the record, only a distinctive sentence (never a short shared phrase). Every stored
+  field of those rows is cleaned: the text before and after an "approve with edits", details,
+  evidence snippets, titles and the payload (also when it was stored as escaped JSON).
+- An item that came from the erased record (or asked to delete it) keeps its history rows,
+  blanked whole, as the item itself is.
+- **Also fixed:** text an "approve with edits" replaced stayed in that item's history when the
+  item no longer showed it. Erase now looks through the history of every review item.
+- Unchanged: the erased record's own history still goes entirely. History rows an older
+  version wrote (fewer columns, a payload stored as an object, a row that isn't JSON) are
+  cleaned the same way; rows without the text stay byte for byte. The history list, "who did
+  what" and undo work as before. The erase report gives the number of history rows blanked.
+  No migration.
+
+### Delete approvals bound to the exact rows, expired claims, README on conflicts (task 72)
+
+- **A delete approval covers exactly the rows the user was asked about.** With approvals on,
+  a delete request now stores the exact list of rows it would remove, worked out from the
+  database (the record and every record row that goes with it, by id and content, plus the
+  rows that would only lose their link to it). When the user approves, FlowState works the
+  list out again; if a row was added, removed or edited in the meantime, nothing is deleted,
+  the request is closed, and the answer says what changed ("now also deletes change #9").
+  Asking for the delete again makes a new request with the current list. Before, only the
+  number of rows of each kind was compared, so one row swapped for another, or an edited row,
+  went through.
+- Asking again while an out-of-date request is still waiting closes the old one (rejected by
+  "flowstate (automatic)", with the reason) and queues a new one. A delete request queued by
+  an older version has no such list: approving it is refused (`request_outdated`) and it is
+  closed; ask again. Delete requests are no longer answered from the "same write within 2
+  minutes" memory, so asking again right after a request was closed gets a new one (an
+  identical request that is still waiting is still answered with that one).
+- Unchanged: the request's summary, details and an "approve with edits" never change what is
+  deleted; a used or closed request can't be approved again; phone links and card codes stay
+  one-use. Sessions and review items that go with a project or component are still not part
+  of the list (they move on their own while the user decides).
+- **An expired todo claim can't be renewed.** `manage_todos(action="renew")` used to extend a
+  claim its holder had let run out, as long as nobody else had taken it. Now it answers
+  `claim_expired` (holder) or `not_claimed` (anyone else); claim the todo again, which any
+  agent can do once it has expired. Renewing before it expires works as before. Releasing an
+  expired claim answers `released: false` (it was no longer held).
+- README: new sections "When two decisions clash" (how a clash is flagged, where it shows, and
+  that the user picks the winner) and "Who, which model, which machine" (what each change
+  records).
+
+### Project history on the review page (task 73)
+
+- **New: Project history.** The local review page has a "Project history" view. Pick a project
+  and see its whole path in time order: records created, edited, deleted and undone, decisions
+  and what replaced them, possible conflicts and disagreement cards and how they were settled,
+  review items and their outcome, todo claims (also a claim that ran out with nobody renewing
+  or releasing it), and sessions. Each entry has the time, app, model (when the app gave it),
+  machine and how the app signed in.
+- Filters by type, app or machine, and date range; a search box that also finds a record by
+  an older wording kept in its edit history; oldest or newest first; 50 entries a page.
+- Tapping a record shows its fields now and its whole edit history, every changed field before
+  and after, and every entry that names it.
+- **Todos tab:** each todo of the project with who created it (app, model, machine, sign-in) and
+  its status now; tapping one gives its full timeline (created, claimed, renewed, released,
+  claim expired, edited, status changes, completed, reopened, cancelled, deleted, undone).
+- Read-only: no form on these pages changes anything. Same session as the rest of the review
+  page on this computer; not on the tunnel page, the phone pages or the relay, and no MCP tool.
+- A record removed with `flowstate erase` shows as `[erased]`, and its text is in no entry,
+  search result or record page. When the shown range reaches back past the activity log's 90
+  days, the page says that older detail has faded.
+- No migration. The page opens the database read-only (`query_only`).
+
+### Clean-up suggestions bound to the exact rows (task 74)
+
+- **Approving a clean-up suggestion changes exactly the records it was suggested with.** A
+  clean-up item that moves a misfiled record, cancels a duplicate todo (the "merge") or
+  cancels a stale one (the "archive") now stores the exact list of rows approving it would
+  change, the same way a delete request does since task 72: the record (a move also lists
+  its links; a duplicate also the todo it keeps), by id and content. Ids and hashes only, no
+  record text.
+- When the user approves, FlowState works the list out again inside the change itself. If a
+  row on it was edited, or a row was added, is missing or was already removed (deleted,
+  moved, done), nothing is changed, the suggestion is closed (rejected by "flowstate
+  (automatic)", with the reason), and the answer `changed_since_request` says what differs
+  ("todo #12 was edited", "now also lists link #4", "no longer lists todo #9"). Running the
+  clean-up again suggests it anew with the current list. A suggestion queued by an older
+  version has no list: approving it is refused (`request_outdated`) and closes it; running
+  the clean-up again replaces it (`replaced` in the answer) with one that has its list.
+  `manage_memory(action="cleanup")` is no longer answered from the "same write within 2
+  minutes" memory, so running it again right after a suggestion was closed suggests it anew
+  (a suggestion that is waiting and still matches is not queued twice).
+- The review page and the phone page show that list under the question ("Approving changes
+  exactly these records: ...") and, when it no longer matches, say so before the user taps:
+  "This list is not the one the suggestion was made with (...). Approving it changes
+  nothing; run the clean-up again for a new suggestion." A record that is gone (deleted or
+  erased) is shown by its id only.
+- Unchanged: a clean-up that changes nothing (a duplicate of two learnings, queued by an
+  older version) is approved and noted as before; a suggestion the user rejected is still not
+  suggested again; choosing another target project for a move is still allowed.
+- Deletes: when the list changed because a row was edited, the message now names the row
+  ("todo #1 was edited") instead of "a record on the list was edited".
+
+### Project history and clean-up follow-ups (task 75)
+
+- **Project history from the brief's link.** The page the brief's link opens has the
+  Project history link at the top, next to "Who did what", as the page `flowstate
+  review-page` opens does. From the review queue filtered to one project, the link opens that
+  project's history. Still only on this computer: never on the tunnel page, the phone pages,
+  an AI tool or the relay.
+- **Newest first.** The history timeline now starts with the newest entries. "Oldest first"
+  is still in the order menu (`order=oldest`).
+- **Erased todos are not in the Todos tab.** An erased todo has nothing left to show, so the
+  Todos tab leaves it out of its list and its counts. The timeline still shows `[erased]`
+  where an entry names it.
+- **A record page under the wrong project.** A record page whose address names a project the
+  record doesn't belong to now sends the browser to the same page under the record's own
+  project (a link: either of its two projects is fine; a deleted record: the project its edit
+  history has). It never shows a record under another project. An erased record, or an id
+  nothing knows, is shown as before.
+- **The AI's review list says when a clean-up is out of date.** In `manage_review` list and
+  walk lines, a waiting clean-up whose exact list no longer matches ends with "(out of date:
+  approving changes nothing)", as the review page already warns. The walk's Approve / Reject
+  box shows the review page's warning too.
+- **`flowstate erase` removes a clean-up's stored list.** A clean-up suggestion about an
+  erased record (it names the record, or its list has it, a link included) loses its stored
+  list of ids, digest and per-row hashes, in the item and in every copy of it in the edit
+  history. The item stays; approving it changes nothing and says "a record on its list was
+  erased".
+
+### A clean-up's exact list in the one-item view and the review card (task 76)
+
+- **One item in full.** `manage_review` list with `item_id=<id>` for a waiting clean-up now
+  also gives `would_change`: the review page's "Approving changes exactly these records: ..."
+  text. When the list no longer matches, `out_of_date` has the review page's warning (approving
+  it changes nothing). Erased records are never shown with text, only the records still there.
+  Decided clean-ups and other kinds of item are shown as before.
+- **The review card.** The in-chat review card (MCP Apps) for a waiting clean-up shows the same
+  warning when its list is out of date, as the review page does. The card's plain text has it
+  too.
+- **A clean-up whose records are all gone** (for example its only todo was erased) now reads
+  "Approving changes exactly these records: none (no record on its list is still there)."
+  on the review page, the phone page and in these answers, instead of an empty list.
+
+### A clean-up's exact list on the review card (task 77)
+
+- **The review card.** The in-chat review card (MCP Apps) for a waiting clean-up now also shows
+  the review page's "Approving changes exactly these records: ..." list (`would_change`), above
+  the out-of-date warning when there is one. The card's plain text has the same line. Erased
+  records are never shown, by text or by id; when none of its records is left the list reads
+  "none (no record on its list is still there)". Decided clean-ups and other kinds of item are
+  shown as before.
+
+### OAuth issuer without a trailing slash (task 78)
+
+- **One exact issuer.** Found by a security reviewer's scan: a relay address, an own tunnel
+  (`--public-url`) and a local public-mode listener published their OAuth issuer with a
+  trailing slash (`https://abc123.fsmcp.com/`), which strict issuer comparison (RFC 8414
+  section 3.3) treats as a different issuer from the address. `issuer` in
+  `/.well-known/oauth-authorization-server` and `authorization_servers` in the protected
+  resource metadata (both `/.well-known/oauth-protected-resource` and
+  `/.well-known/oauth-protected-resource/mcp`) are now the address exactly, without the slash,
+  also when `--public-url` is given with one. The endpoint URLs (`/authorize`, `/token`,
+  `/register`, `/revoke`) and `resource` (`<address>/mcp`) were already right and are
+  unchanged. Apps already connected keep their sign-in: registrations and tokens are not tied
+  to the issuer string. The LAN listener has no OAuth, as before.
+- **Consent link uses the same address as the issuer (task 79).** The link to the passphrase
+  page is now built from the published issuer, so an unusual `--public-url` (a mixed-case host
+  or an explicit default port, such as `https://FlowState.Example.com:443`) no longer sends you
+  to a differently written address. Usual addresses get exactly the same link as before.
+
+### Security dependency floor and token audience check (task 80)
+
+- **`mcp` 1.30 or later.** Versions before 1.30.0 are affected by GHSA-w4fh-qvv9-3v23 (a bearer
+  token issued for another server could be accepted) and GHSA-84m7-p3x7-pcfv (Streamable HTTP
+  sessions were never reclaimed, so memory could be run out). 1.30 closes idle sessions after
+  30 minutes and caps them at 10,000; an app whose session was closed starts a new one.
+- **Token audience check.** The tunnel and relay listeners now use the SDK's own check
+  (`AuthSettings(resource_server_url=<address>/mcp, validate_token_resource=True)`): a token
+  is accepted only when it was issued for this FlowState's `resource`. FlowState's tokens have
+  always carried that exact `resource`, so apps already connected keep their sign-in; `resource`
+  and the issuer are unchanged. The LAN listener has no OAuth, as before.
+- **Reproducible test installs.** `requirements-dev.lock` pins every dev/test package with
+  hashes (for Windows, macOS and Linux, Python 3.11 to 3.13); CI installs from it. What
+  `pip install -e mcp-server` installs still comes from `pyproject.toml`. The GitHub Actions in
+  CI are pinned to full commit SHAs.
+- README: FlowState is not on PyPI; the `flowstate` package there is an unrelated project.
+
+### No CORS on the OAuth endpoints, and a working token revocation (task 81)
+
+- `/token`, `/register` and `/revoke` no longer send `Access-Control-Allow-Origin: *` or grant
+  CORS preflights (no FlowState client runs in a browser page; the metadata documents keep it).
+- `/revoke` follows RFC 7009 for Basic, form-secret and public clients (Basic and public ones got
+  400 before): it ends that sign-in's access and refresh token whatever the hint, answers 200 for
+  an unknown token, and refuses another app's token, which stays valid.
+
+### Maintenance (internal, task 82)
+
+- Code clean-up, no change in behaviour: removed two unused modules (`server_v14.py`,
+  `split_tools.py`), unused imports and comments that only repeated the code; one helper
+  (`urls.py`) for the trailing '/' on addresses and issuers; an up-to-date `server.py` header,
+  without the byte-order mark at the start of the file.
+
+### Data-git branch and `rules add` on Linux (task 83)
+
+- **Data-git uses one branch on every computer.** `flowstate data-git init` now starts on
+  `main` whatever git's own default is (it was `master` on many Linux gits and `main` on
+  others, so two computers could each sync their own branch and never see each other's
+  changes). `sync`, `migrate` and `clone` follow the remote's own branch: a computer on
+  `master` joining a remote on `main` (or the other way round) moves its changes to the
+  remote's branch, says so, and takes its name. When the remote already has both `main` and
+  `master` with changes this computer doesn't have, nothing is pulled or pushed and the
+  message says which computer to sync first; the old branch is removed from the remote only
+  once all of it is on the other one.
+- **A plain `git clone` of a data-git remote checks out the files.** A bare repository made
+  where git's default is `master` has a default branch that doesn't exist once FlowState pushes
+  `main`, so a plain clone came up empty. `sync` now points a bare repository on this computer
+  (a path or `file://` URL) at the pushed branch. A remote FlowState can't change (ssh, https)
+  still syncs, and `sync` says to set its default branch on the host. A default branch that
+  exists is never changed. (task 84)
+- **`flowstate rules add --project P "TEXT"`** works on Python 3.11 and 3.12 before 3.12.7,
+  which rejected a rule typed after `--project` ("unrecognized arguments"). The text may come
+  before or after the options; rules with control or invisible characters are refused as
+  before.
+- **Test tools:** the `dev` extra adds `httpx2`, which Starlette's test client now uses, and a
+  test sets its cookie on the client, and a new `pytest.ini` sets pytest-asyncio's fixture loop
+  scope, so the suite runs without deprecation warnings. Nothing changes for users. (task 85)
+
 ## 2.4.3 - 2026-10-23
 
 - No new dependencies. One additive database migration (023: three new tables for

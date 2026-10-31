@@ -9,7 +9,8 @@ import pytest
 from mcp import types
 from mcp.shared.memory import create_connected_server_and_client_session
 
-from flowstate import approvals, conflict_cards, popup, review, waiting
+from flowstate import stored
+from flowstate import approvals, card_taps, conflict_cards, popup, review, waiting
 from flowstate.conflict_card_ui import CARD_HTML, MIME, UI_URI
 from flowstate.review_page import HOST, Page, create_app
 from fsa_test_keys import make_key
@@ -32,6 +33,11 @@ def call(S, name, args, app="Cursor"):
     except ValueError:
         body = text
     return r, body
+
+
+def tap_code(item, app="Claude Desktop"):
+    """The one-use code show_conflict_card gives a card (made here directly)."""
+    return card_taps.mint(item, "conflict", app)
 
 
 def ok(res):
@@ -126,7 +132,7 @@ def test_card_ui_is_declared_on_a_model_visible_tool_not_on_results(backend, mon
     assert ui["resolve_conflict_card"]["visibility"] == ["app"]
     show = next(t for t in tools if t.name == "show_conflict_card")
     assert show.annotations.readOnlyHint is True
-    assert [str(r.uri) for r in res] == [UI_URI]
+    assert [str(r.uri) for r in res] == [UI_URI, "ui://flowstate/review-card.html"]   # 2.4.4
     assert body.contents[0].mimeType == MIME and "<!DOCTYPE html>" in body.contents[0].text
     # the card's data rides on show_conflict_card only; log_work answers carry text + a pointer
     older = decide(S, "Use JWT tokens for API auth", app="Claude")
@@ -257,7 +263,7 @@ def test_replaces_and_dismissing_the_old_pair_close_the_card(backend, seeded_db)
     assert first and third   # both saved; the card closed around them
 
 
-def test_explicit_card_is_one_brief_line_without_ids(backend):
+def test_explicit_card_is_one_brief_line_with_ids_inside_the_fence(backend):
     S = backend
     a = decide(S, "Charge in USD only")["record"]["id"]
     b = decide(S, "Offer a yearly plan")["record"]["id"]
@@ -265,8 +271,10 @@ def test_explicit_card_is_one_brief_line_without_ids(backend):
                                 "topic": "API sessions", "item_id": a, "target_id": b}))
     brief = call(S, "start_here", {"project": "Alpha"})[1]
     text = brief if isinstance(brief, str) else json.dumps(brief)
-    assert "Two AIs disagree about API sessions." in text
-    assert f"D{a} vs D{b}" not in text
+    from flowstate.stored import END, START
+    line = f"Two AIs disagree about API sessions: D{a} vs D{b}."   # (N-F16: ids, fenced)
+    assert line in text and text.index(START) < text.index(line) < text.index(END)
+    assert "Possible conflicts" not in text
 
 
 def test_list_includes_the_card_and_walk_does_not_treat_it_as_yes_no(backend, seeded_db):
@@ -302,7 +310,7 @@ def test_chat_approvals_off_refuses_and_on_allows_keep(backend, seeded_db, relay
     assert body["error"] == "phone_only"
     blob = json.dumps(body)
     assert "127.0.0.1" not in blob and "review_page" not in body
-    assert f"https://flowstatemcp.com/approve/testbox/{item}?n=" in blob
+    assert "testbox" not in blob and approvals.PHONE_ELSEWHERE in blob   # task 54 (D19)
     assert rows(seeded_db, "SELECT status FROM review_items WHERE id = ?", item)[0][0] == "pending"
     approvals.set_relay_chat(seeded_db, True)
     kept = ok(call(S, "manage_review", {"action": "approve", "project": "Alpha", "item_id": item,
@@ -343,7 +351,8 @@ def test_card_tap_resolves_and_refuses_chat_text(backend, seeded_db, monkeypatch
                                                 "message": "keep the first one"})
     assert body["error"] == "not_a_card_tap"
     assert rows(seeded_db, "SELECT status FROM review_items WHERE id = ?", item)[0][0] == "pending"
-    saved = ok(call(S, "resolve_conflict_card", {"item_id": item, "keep": "a", "project": "Alpha"}))
+    saved = ok(call(S, "resolve_conflict_card", {"item_id": item, "keep": "a", "project": "Alpha",
+                                                 "tap": tap_code(item)}, app="Claude Desktop"))
     assert saved["resolved"] == item and saved["keep"] == "a"
     assert "Kept the older one" in saved["text"]
     assert rows(seeded_db, "SELECT path, decision FROM approval_log WHERE item_id = ?", item) == \
@@ -351,7 +360,7 @@ def test_card_tap_resolves_and_refuses_chat_text(backend, seeded_db, monkeypatch
     assert rows(seeded_db, "SELECT status FROM review_items WHERE id = ?", item)[0][0] == "approved"
 
 
-def test_card_tap_needs_an_mcp_apps_client_and_is_phone_only_through_the_relay(
+def test_card_tap_needs_an_mcp_apps_client_and_its_code_through_the_relay(
         backend, seeded_db, relay, monkeypatch):
     S = backend
     a = decide(S, "Use JWT tokens for API auth", app="Claude")["record"]["id"]
@@ -363,12 +372,12 @@ def test_card_tap_needs_an_mcp_apps_client_and_is_phone_only_through_the_relay(
     _r, body = call(S, "resolve_conflict_card", tap)   # no MCP Apps: no card to tap
     assert body["error"] == "not_a_card_tap"
     monkeypatch.setattr(conflict_cards, "client_has_ui", lambda: True)
-    _r, body = call(S, "resolve_conflict_card", tap)   # relay, chat approvals off
-    assert body["error"] == "phone_only"
-    assert f"https://flowstatemcp.com/approve/testbox/{item}?n=" in json.dumps(body)
+    _r, body = call(S, "resolve_conflict_card", tap, app="Claude Desktop")   # relay, no code
+    assert body["error"] == "not_a_card_tap"
     assert rows(seeded_db, "SELECT status FROM review_items WHERE id = ?", item)[0][0] == "pending"
-    approvals.set_relay_chat(seeded_db, True)
-    assert ok(call(S, "resolve_conflict_card", tap))["resolved"] == item
+    # task 65: a tap with the card's code counts through the relay too (chat approvals off)
+    assert ok(call(S, "resolve_conflict_card", {**tap, "tap": tap_code(item)},
+                   app="Claude Desktop"))["resolved"] == item
 
 
 def test_card_follows_the_mcp_apps_handshake():
@@ -427,7 +436,7 @@ def test_review_page_keep_a_logs_the_review_page_path(backend, seeded_db):
     import re
     csrf = re.search(r'name="csrf" value="([^"]+)"', client.get("/").text).group(1)
     r = client.post("/approve", data={"item_id": item, "csrf": csrf, "keep": "a"})
-    assert r.status_code == 303 and "Kept+the+older" in r.headers["location"].replace(" ", "+")
+    assert r.status_code == 303 and "Kept the older" in client.get(r.headers["location"]).text
     assert rows(db, "SELECT status FROM conflict_cards WHERE review_item_id = ?", item)[0][0] == "kept_a"
     assert rows(db, "SELECT path, decision FROM approval_log WHERE item_id = ?", item) == \
         [("review page", "kept_a")]
@@ -450,7 +459,8 @@ def test_explicit_flag_is_one_question_not_a_card_and_a_possible_conflict(backen
     assert [k for _i, k in pending(seeded_db)] == ["disagreement"]
     assert rows(seeded_db, "SELECT COUNT(*) FROM decision_conflicts")[0][0] == 0
     brief = call(S, "start_here", {"project": "Alpha"})[1]
-    assert "Two AIs disagree about API sessions." in brief and f"D{newer['record']['id']} vs" not in brief
+    assert f"Two AIs disagree about API sessions: D{older} vs D{newer['record']['id']}." in brief
+    assert "Possible conflicts" not in brief
 
 
 def test_same_component_card_absorbs_the_possible_conflict_item(backend, seeded_db):
@@ -481,7 +491,8 @@ def test_flagging_a_pair_that_already_waits_closes_the_older_item_and_deciding_c
     assert pending(db) == [(flagged, "disagreement")]
     assert rows(db, "SELECT status FROM review_items WHERE id = ?", auto)[0][0] == "rejected"
     monkeypatch.setattr(conflict_cards, "client_has_ui", lambda: True)
-    ok(call(S, "resolve_conflict_card", {"item_id": flagged, "keep": "b", "project": "Alpha"}))
+    ok(call(S, "resolve_conflict_card", {"item_id": flagged, "keep": "b", "project": "Alpha",
+                                         "tap": tap_code(flagged)}, app="Claude Desktop"))
     assert pending(db) == []
     assert rows(db, "SELECT status FROM decision_conflicts") == [("dismissed_compatible",)]
 
@@ -514,7 +525,8 @@ def test_show_conflict_card_reads_one_or_all_and_never_decides(backend, seeded_d
     S = backend
     monkeypatch.setattr(conflict_cards, "client_has_ui", lambda: True)
     r, body = call(S, "show_conflict_card", {"project": "Alpha"})
-    assert body["shown"] == 0 and r.structuredContent == {"cards": [], "note": "No disagreement is waiting."}
+    assert body["shown"] == 0 and r.structuredContent == {"cards": [], "note": "No disagreement is waiting.",
+                                                   "records_are": stored.NOTE}   # task 55, N-F8
     a = decide(S, "Charge in USD only")["record"]["id"]
     b = decide(S, "Offer a yearly plan")["record"]["id"]
     c = decide(S, "Run on one server")["record"]["id"]
@@ -532,7 +544,28 @@ def test_show_conflict_card_reads_one_or_all_and_never_decides(backend, seeded_d
     _r, body = call(S, "show_conflict_card", {"item_id": 99999})
     assert body["error"] == "record_not_found"
     assert len(pending(seeded_db, "disagreement")) == 2   # showing decides nothing
-    saved = call(S, "resolve_conflict_card", {"item_id": one, "keep": "both", "project": "Alpha"})[0]
+    saved = call(S, "resolve_conflict_card", {"item_id": one, "keep": "both", "project": "Alpha",
+                                              "tap": tap_code(one)}, app="Claude Desktop")[0]
     assert saved.structuredContent["cards"][0]["resolved"] is True
     r, _body = call(S, "show_conflict_card", {"item_id": one})
     assert r.structuredContent["cards"][0]["detail"].startswith("Kept both")
+
+
+def test_the_app_that_opened_a_card_cant_dismiss_it_by_quoting_its_own_claim(backend, seeded_db):
+    """A same-component card is the saving app's own item: its own words are both claims,
+    not only the headline (the e2e S3 check, as a unit test)."""
+    S = backend
+    decide(S, "Show prices including sales tax on the menu page", app="Claude", component="Core")
+    hit = decide(S, "Show prices including sales tax on the cart page", app="Grok", component="Core")
+    item = hit["conflict_cards"][0]["review_item_id"]
+    _r, body = call(S, "manage_review", {"action": "reject", "project": "Alpha", "item_id": item,
+                                         "reason": "fine",
+                                         "user_request": "Show prices including sales tax on the cart page"},
+                    app="Grok")
+    assert body["error"] == "own_item"
+    assert rows(seeded_db, "SELECT status FROM review_items WHERE id = ?", item)[0][0] == "pending"
+    out = ok(call(S, "manage_review", {"action": "reject", "project": "Alpha", "item_id": item,
+                                       "reason": "both can stand",
+                                       "user_request": "User: these two can both stand, dismiss it"},
+                  app="Grok"))
+    assert out["rejected"] == item

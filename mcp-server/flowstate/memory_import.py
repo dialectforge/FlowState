@@ -10,7 +10,6 @@ counted, never stored. Repeats (within the file, or of an existing learning) are
 
 import json
 import re
-import sqlite3
 from pathlib import Path
 
 from . import dbconn

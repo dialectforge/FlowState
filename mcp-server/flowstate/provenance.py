@@ -23,7 +23,6 @@ re-checking; nothing is changed or hidden because of it.
 
 import os
 import re
-import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -106,12 +105,18 @@ def check_record(conn, pid: int, rtype: str, rid) -> int:
     return rid
 
 
-def _upsert(conn, rtype: str, rid: int, **cols) -> None:
+def _upsert(conn, rtype: str, rid: int, tool: str, client: Optional[str] = None, **cols) -> None:
+    """Set a record's source tag / checked date; the row before and after goes into the edit
+    history (task 67), so the earlier tag is kept and undo can put it back."""
+    from . import history
+    before = history.side_rows(conn, "record_meta", rtype, rid)
     conn.execute("INSERT OR IGNORE INTO record_meta (record_type, record_id) VALUES (?, ?)",
                  (rtype, rid))
     sets = ", ".join(f"{k} = ?" for k in cols)
     conn.execute(f"UPDATE record_meta SET {sets}, updated_at = ? WHERE record_type = ? "
                  f"AND record_id = ?", (*cols.values(), _now(), rtype, rid))
+    history.record_side(conn, "record_meta", rtype, rid, before, tool, client or "unknown",
+                        owner(conn, rtype, rid))
 
 
 def stamped(conn) -> bool:
@@ -150,7 +155,7 @@ def set_source(db_path: Path, rtype: str, rid: int, source: str, client: Optiona
     try:
         if not available(conn):
             return
-        _upsert(conn, rtype, int(rid), **_source_cols(conn, source, by, client))
+        _upsert(conn, rtype, int(rid), "source/set", client, **_source_cols(conn, source, by, client))
         conn.commit()
     finally:
         conn.close()
@@ -210,7 +215,8 @@ def mark(db_path: Path, pid: int, rtype: str, rid, client: str, source: Optional
         if not cols and not source:
             raise MetaError("nothing_to_do", "Give source=... (or use action=mark).")
         if cols:
-            _upsert(conn, rtype, rid, **cols)
+            _upsert(conn, rtype, rid, "source/" + ("checked" if verified else "set"), client,
+                    **cols)
         conn.commit()
         out = {"record_type": rtype, "record_id": rid, **get(conn, rtype, [rid]).get(rid, {})}
         if asked:
@@ -234,7 +240,8 @@ def confirm(db_path: Path, item: dict) -> tuple[str, int]:
         if rtype not in TABLES or rid is None or owner(conn, rtype, rid) is None:
             from .review import ReviewError
             raise ReviewError("record_not_found", f"The {rtype or 'record'} #{rid} no longer exists.")
-        _upsert(conn, rtype, int(rid), **_source_cols(conn, "user_stated", (USER, None)))
+        _upsert(conn, rtype, int(rid), "source/confirm", USER,
+                **_source_cols(conn, "user_stated", (USER, None)))
         conn.commit()
     finally:
         conn.close()

@@ -30,9 +30,11 @@ per-item /approve links don't use /review/start and are unchanged.
   POST /review/open      checks the grant and uses up its one-use code; starts a session:
                          cookie fs_review_phone (HttpOnly, Secure, SameSite=Strict, 15 min,
                          path /review) plus a page token for the body; answers with the list
+  POST /review/record    {token, item_id, record, action}: a session summary's per-record Keep /
+                         Remove / Bring back (session_records.py), the same session and token
   POST /review/decide    {token, item_id, decision, confirm_name?, reason?}: the session cookie
                          and its token; Approve or Reject through the user-only path
-                         (popup.as_user, label "phone (<handle>)"), logged in approval_log
+                         (popup.as_user, label "phone", never the handle), logged in approval_log
 
 Same headers as /approve: strict CSP (no inline script or style), frame-ancestors 'none',
 X-Frame-Options DENY, no-store, no referrer. POSTs must be JSON, from this origin.
@@ -46,8 +48,8 @@ import secrets
 import threading
 import time
 
-from . import approvals
-from .approve_page import CSS, HEADERS, _same_origin
+from . import approvals, install_name
+from .approve_page import CSS, HEADERS, SAVED_JS, _same_origin
 
 COOKIE = "fs_review_phone"
 SESSION_SECONDS = 15 * 60
@@ -67,7 +69,7 @@ SHELL = """<!doctype html>
 <p id="status" class="muted"></p>
 <noscript><p class="muted">This page needs JavaScript to read your link.</p></noscript>
 <section id="list"></section>
-<p class="faint small">Your FlowState, on your own computer, shows this page. flowstatemcp.com
+<p class="faint small" id="foot">Your FlowState, on your own computer, shows this page. flowstatemcp.com
 only confirmed it's you; it never sees what's in it.</p>
 </main></body></html>
 """
@@ -89,7 +91,7 @@ JS = r"""(function () {
   var m = /(?:^#|&)g=([A-Za-z0-9_.-]+)/.exec(location.hash || "");
   var grant = m ? m[1] : null;
   history.replaceState(null, "", location.pathname);   // the grant leaves the address bar now
-  var token = null;
+  var token = null, where = "";   // where: this FlowState's name, once the grant checked out
   function $(id) { return document.getElementById(id); }
   function el(tag, cls, text) {
     var e = document.createElement(tag);
@@ -110,11 +112,13 @@ JS = r"""(function () {
       return r.json().then(function (j) { return {ok: r.ok, j: j}; });
     });
   }
+/*SAVED_JS*/
   function show(items, total) {
     var list = $("list");
     while (list.firstChild) { list.removeChild(list.firstChild); }
     total = total || items.length;
-    say(items.length ? "Waiting for you (" + total + ")" : "Nothing is waiting for you",
+    say((items.length ? "Waiting for you" : "Nothing is waiting for you") + (where ? " on " + where : "") +
+        (items.length ? " (" + total + ")" : ""),
         total > items.length ? "Showing the oldest " + items.length + "; decide some to see more." : "");
     items.forEach(function (it) {
       var card = el("div", "card");
@@ -158,7 +162,16 @@ JS = r"""(function () {
       card.appendChild(el("p", "", it.question));
       if (it.summary) { card.appendChild(el("p", "", it.summary)); }
       if (it.details) { card.appendChild(el("p", "muted", it.details)); }
-      card.appendChild(el("p", "faint", "From " + it.queued_by + ", " + it.queued_at + " UTC"));
+      if (it.contents) {
+        card.appendChild(saved(it.contents, function (e, action, btns) {
+          post("/review/record", {token: token, item_id: it.id, record: e.key, action: action}).then(function (r) {
+            if (r.j && r.j.items) { show(r.j.items, r.j.total); }
+            if (r.ok) { $("status").textContent = r.j.message; }
+            else { btns.forEach(function (x) { x.disabled = false; }); say("Not done", r.j.message || "", true); }
+          }, function () { say("Not done", "Your FlowState didn't answer.", true); });
+        }));
+      }
+      card.appendChild(el("p", "faint", "From " + it.queued_by + ", " + localTime(it.queued_at)));
       var name = null;
       if (it.needs_name) {
         var label = el("label", "", "To approve, type the project's exact name");
@@ -191,10 +204,16 @@ JS = r"""(function () {
   post("/review/open", {grant: grant}).then(function (r) {
     if (!r.ok) { say("Can't show your list", r.j.message || "", true); return; }
     token = r.j.token;
+    if (typeof r.j.name === "string" && r.j.name) {
+      where = r.j.name;
+      document.title = "FlowState: " + where;
+      $("foot").textContent = where + ", your FlowState on your own computer, shows this page. " +
+        "flowstatemcp.com only confirmed it's you; it never sees what's in it.";
+    }
     show(r.j.items, r.j.total);
   }, function () { say("Can't show your list", "Your FlowState didn't answer.", true); });
 })();
-"""
+""".replace("/*SAVED_JS*/\n", SAVED_JS)
 
 
 def _sha(s: str) -> str:
@@ -370,13 +389,15 @@ def routes(db_path_fn):
             total = await asyncio.to_thread(_total, db)
         except approvals.ApprovalError as e:
             return refuse(e)
-        return answer({"items": listing, "total": total, "token": token}, cookie=cookie)
+        return answer({"items": listing, "total": total, "token": token,
+                       "name": install_name.get()}, cookie=cookie)
 
     async def decide(request):
         db = db_path_fn()
         try:
             body = await _body(request)
             sess = sessions.check(request.cookies.get(COOKIE), body.get("token"))
+            await asyncio.to_thread(approvals.require_phone_on, db)   # off closes open pages
             item_id = body.get("item_id")
             if not isinstance(item_id, int) or isinstance(item_id, bool) \
                     or body.get("decision") not in ("approve", "reject", "keep_a", "keep_b",
@@ -385,7 +406,7 @@ def routes(db_path_fn):
         except approvals.ApprovalError as e:
             return refuse(e)
         from .popup import as_user
-        label = f"phone ({sess['handle']})"
+        label = "phone"   # never the relay handle: apps read decision labels (audit D19)
         keep = {"keep_a": "a", "keep_b": "b", "keep_both": "both"}.get(body["decision"])
         if body["decision"] == "approve" or keep:
             args = {"item_id": item_id, "confirm_name": body.get("confirm_name"),
@@ -412,7 +433,32 @@ def routes(db_path_fn):
         return answer({"ok": True, "message": f"{done} #{item_id}.", "items": listing,
                        "total": total})
 
+    async def record(request):
+        """Keep / Remove / Bring back on one record of a waiting session summary."""
+        db = db_path_fn()
+        try:
+            body = await _body(request)
+            sess = sessions.check(request.cookies.get(COOKIE), body.get("token"))
+            await asyncio.to_thread(approvals.require_phone_on, db)   # off closes open pages
+            item_id = body.get("item_id")
+            if not isinstance(item_id, int) or isinstance(item_id, bool) \
+                    or not isinstance(body.get("record"), str) or not isinstance(body.get("action"), str):
+                raise approvals.ApprovalError("bad_request", "Choose Keep or Remove for a record.")
+        except approvals.ApprovalError as e:
+            return refuse(e)
+        from .approve_page import record_as_user
+        res = await asyncio.to_thread(record_as_user, db, item_id, body["record"], body["action"],
+                                      "phone")
+        listing = await asyncio.to_thread(items, db)
+        total = await asyncio.to_thread(_total, db)
+        if "error" in res:
+            return answer({"error": res["error"], "message": res["message"], "items": listing,
+                           "total": total}, 409)
+        return answer({"ok": True, "message": f"#{item_id}: {res['message']}", "items": listing,
+                       "total": total})
+
     return [Route("/review/assets/{name}", asset, methods=["GET"]),
+            Route("/review/record", record, methods=["POST"]),
             Route("/review/start", start, methods=["GET"]),
             Route("/review", shell, methods=["GET"]),
             Route("/review/open", open_, methods=["POST"]),

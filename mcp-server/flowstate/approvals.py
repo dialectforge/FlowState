@@ -26,7 +26,8 @@ can pass the user's OK along: only a human click or keypress decides, in this or
   3. terminal `flowstate approve <id>` asks for the user's `y` on their own terminal.
 
 Through the relay (2.4.2), an AI can't approve or reject any review item in the chat by
-default: the answer gives the user's phone link instead. `flowstate relay chat-approvals on`
+default: the answer tells the user to decide on their phone, from their saved review link
+(2.4.4: no link in it, it holds the relay handle). `flowstate relay chat-approvals on`
 (the user's terminal only; relay_chat_on) lets it quote the user as before, except for the
 user-only items above.
 
@@ -55,6 +56,19 @@ from . import dbconn
 # lower case). `flowstate approvals popup add|remove NAME` changes this per install.
 POPUP_CLIENTS = ("claude-code", "cursor", "cursor-vscode", "visual studio code",
                  "visual studio code - insiders", "vscode")
+# Apps known to draw the in-chat cards (MCP Apps) in a frame the model can't read or click,
+# and to keep app-only tools from the model. `flowstate approvals cards add|remove NAME`
+# changes this per install. claude-ai is Claude Desktop's chat (the MCP client name it sends
+# on stdio); Claude Desktop's Cowork (agent) mode sends "local-agent-mode-<server name>", e.g.
+# local-agent-mode-flowstate (task 65): an entry ending in "*" matches every name it starts
+# (card_allowed; stdio only, never a sign-in). An app on a key, token or OAuth sign-in is matched by that sign-in's own name, and
+# only one the user added to the separate sign-in list (`approvals cards add --sign-in NAME`;
+# card_allowed_credential, card_trust.py), so an app name on this list never trusts a network
+# sign-in that happens to have the same name (task 57). Popups the same: `approvals popup add
+# --sign-in NAME`, and only for a LAN app on this computer (popup.no_box).
+CARD_CLIENTS = ("claude-ai", "local-agent-mode-*")
+WILDCARD_MIN = 4   # an entry ending in "*" needs this many characters before it
+SIGN_IN_LISTS = ("popup_signins", "card_signins")
 # Never a popup for these, whatever they declare: claude.ai, Claude Desktop / mobile and the
 # Anthropic connector proxy don't show one (and the proxy drops the connection).
 CONNECTOR_MARKS = ("claude-ai", "claude.ai", "claudeai", "anthropic")
@@ -72,7 +86,7 @@ SITE = "https://flowstatemcp.com"
 ACTION = "approve_review"
 REVIEW_ACTION = "open_review"   # the phone review list (review_phone.py): item 0
 START_ACTION = "start_review"   # the site's ticket for /review/start (review_phone.py): item 0
-USER_ONLY_KINDS = ("delete", "setting", "source")
+USER_ONLY_KINDS = ("delete", "setting", "source", "rule", "card_offer", "reopen_conflict")
 
 # The flowstatemcp.com approval-grant public keys (ES256 / P-256 JWKs), pinned per release:
 # fsa-1 active, fsa-2 backup so the site can rotate without a forced update.
@@ -120,6 +134,9 @@ def available(conn) -> bool:
 
 
 # ---------------------------------------------------------------- settings
+TERMINAL_WORDS = "set in the user's terminal"
+
+
 def _get(conn, key: str) -> Optional[str]:
     row = conn.execute("SELECT value FROM approval_settings WHERE key = ?", (key,)).fetchone()
     return row[0] if row else None
@@ -155,8 +172,10 @@ def on_with(conn, project_id: Optional[int] = None) -> bool:
 
 
 def set_on(db_path: Path, on: Optional[bool], project_id: Optional[int] = None,
-           who: str = "command-line") -> dict:
-    """on True/False, or None to drop a project's own setting. Logged with review-mode changes."""
+           who: str = "command-line", how: str = TERMINAL_WORDS) -> dict:
+    """on True/False, or None to drop a project's own setting. Logged with review-mode changes.
+    Only the user's terminal (cli_review.py) and the local review page (review_page.py) call
+    this; `who` / `how` say which."""
     key = "approvals" if project_id is None else f"approvals:project:{int(project_id)}"
     conn = _conn(db_path)
     try:
@@ -170,7 +189,7 @@ def set_on(db_path: Path, on: Optional[bool], project_id: Optional[int] = None,
         from . import identity
         identity.insert(conn, "review_mode_log", {
             "scope": key, "old_mode": old, "new_mode": new, "client": who[:80],
-            "caller": "command-line", "user_request": "set in the user's terminal",
+            "caller": who[:80], "user_request": how,
             "changed_at": _ts()}, who)
         conn.commit()
     finally:
@@ -210,8 +229,10 @@ def relay_chat_on(db_path: Optional[Path]) -> bool:
         conn.close()
 
 
-def set_relay_chat(db_path: Path, on: bool, who: str = "command-line") -> dict:
-    """The user's terminal only (relay/cli.py). Logged with the review-mode changes."""
+def set_relay_chat(db_path: Path, on: bool, who: str = "command-line",
+                   how: str = TERMINAL_WORDS) -> dict:
+    """The user's terminal (relay/cli.py) or the local review page (review_page.py) only.
+    Logged with the review-mode changes."""
     conn = _conn(db_path)
     try:
         if not available(conn):
@@ -224,12 +245,39 @@ def set_relay_chat(db_path: Path, on: bool, who: str = "command-line") -> dict:
         from . import identity
         identity.insert(conn, "review_mode_log", {
             "scope": RELAY_CHAT_KEY, "old_mode": old, "new_mode": new, "client": who[:80],
-            "caller": "command-line", "user_request": "set in the user's terminal",
+            "caller": who[:80], "user_request": how,
             "changed_at": _ts()}, who)
         conn.commit()
     finally:
         conn.close()
     return {"old": old or "off", "now": "on" if relay_chat_on(db_path) else "off"}
+
+
+def log_setting(db_path: Optional[Path], scope: str, old: Optional[str], new: Optional[str],
+                who: str = "command-line", how: Optional[str] = None) -> None:
+    """One review_mode_log row ("Recent changes" on the review page, manage_history) for a
+    setting the user changed, the same way from the terminal and the page: `who` changed it,
+    `how` (TERMINAL_WORDS by default). Nothing when the database or the table isn't there."""
+    if db_path is None or not Path(db_path).is_file():
+        return
+    import time
+    from . import identity, review_mode
+    conn = dbconn.connect(str(db_path), timeout=5.0)
+    try:
+        conn.execute("PRAGMA busy_timeout = 5000")
+        if review_mode.available(conn):
+            identity.insert(conn, "review_mode_log", {
+                "scope": scope, "old_mode": old, "new_mode": new, "client": who[:80],
+                "caller": who[:80], "user_request": how or TERMINAL_WORDS,
+                "changed_at": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())}, who)
+            conn.commit()
+    finally:
+        conn.close()
+
+
+def clean_client_name(name) -> str:
+    """An app's MCP client name as the popup and card lists keep it: spaces tidied, lower case."""
+    return " ".join(str(name or "").split())[:80].lower()
 
 
 def set_value(db_path: Path, key: str, value: Optional[str], who: str = "command-line") -> None:
@@ -241,16 +289,16 @@ def set_value(db_path: Path, key: str, value: Optional[str], who: str = "command
         conn.close()
 
 
-def popup_clients(db_path: Optional[Path]) -> set:
-    names = set(POPUP_CLIENTS)
+def _listed(db_path: Optional[Path], base: tuple, key: str) -> set:
+    names = set(base)
     if db_path is None:
         return names
     conn = _conn(db_path)
     try:
         if not available(conn):
             return names
-        add = json.loads(_get(conn, "popup_clients_add") or "[]")
-        drop = json.loads(_get(conn, "popup_clients_remove") or "[]")
+        add = json.loads(_get(conn, f"{key}_add") or "[]")
+        drop = json.loads(_get(conn, f"{key}_remove") or "[]")
     except (ValueError, sqlite3.Error):
         return names
     finally:
@@ -258,31 +306,113 @@ def popup_clients(db_path: Optional[Path]) -> set:
     return (names | {str(n).lower() for n in add}) - {str(n).lower() for n in drop}
 
 
-def change_popup_clients(db_path: Path, name: str, add: bool) -> set:
-    name = (name or "").strip().lower()
+def _change_list(db_path: Path, base: tuple, key: str, name: str, add: bool, who: str) -> set:
+    name = clean_client_name(name)
     if not name:
         raise ApprovalError("name_required", "Give the app's name as it connects (clientInfo name).")
     conn = _conn(db_path)
     try:
-        lists = {k: set(json.loads(_get(conn, k) or "[]"))
-                 for k in ("popup_clients_add", "popup_clients_remove")}
-        (lists["popup_clients_add"] if add else lists["popup_clients_remove"]).add(name)
-        (lists["popup_clients_remove"] if add else lists["popup_clients_add"]).discard(name)
+        lists = {k: set(json.loads(_get(conn, k) or "[]")) for k in (f"{key}_add", f"{key}_remove")}
+        (lists[f"{key}_add"] if add else lists[f"{key}_remove"]).add(name)
+        (lists[f"{key}_remove"] if add else lists[f"{key}_add"]).discard(name)
         for k, v in lists.items():
-            _put(conn, k, json.dumps(sorted(v)) if v else None, "command-line")
+            _put(conn, k, json.dumps(sorted(v)) if v else None, who)
         conn.commit()
     finally:
         conn.close()
-    return popup_clients(db_path)
+    return _listed(db_path, base, key)
+
+
+def popup_clients(db_path: Optional[Path]) -> set:
+    return _listed(db_path, POPUP_CLIENTS, "popup_clients")
+
+
+def change_popup_clients(db_path: Path, name: str, add: bool, who: str = "command-line") -> set:
+    return _change_list(db_path, POPUP_CLIENTS, "popup_clients", name, add, who)
+
+
+def card_clients(db_path: Optional[Path]) -> set:
+    """Apps whose in-chat card taps count as the user's (conflict_cards.client_has_ui)."""
+    return _listed(db_path, CARD_CLIENTS, "card_clients")
+
+
+def change_card_clients(db_path: Path, name: str, add: bool, who: str = "command-line") -> set:
+    return _change_list(db_path, CARD_CLIENTS, "card_clients", name, add, who)
+
+
+def card_allowed(db_path: Optional[Path], client_name: str) -> bool:
+    """May this connection get the in-chat cards (and their app-only tap tools)? Only apps on
+    the card list: the MCP Apps flag an app sends is its own claim, like a popup's."""
+    name = clean_client_name(client_name)
+    return bool(name) and name_listed(name, card_clients(db_path))
+
+
+def name_listed(name: str, listed) -> bool:
+    """`name` (cleaned) is on the list: the same name, or an entry ending in "*" (at least
+    WILDCARD_MIN characters before it) that the name starts with and goes beyond."""
+    for entry in listed:
+        if entry == name:
+            return True
+        if entry.endswith("*") and len(entry) > WILDCARD_MIN:
+            stem = entry[:-1]
+            if "*" not in stem and len(name) > len(stem) and name.startswith(stem):
+                return True
+    return False
+
+
+def signins(db_path: Optional[Path], what: str) -> set:
+    """The sign-in names (a key's, token's or OAuth app's own name, lower case) the user put on
+    the popup ("popup") or card ("card") list themselves; there is no built-in default."""
+    return _listed(db_path, (), f"{what}_signins")
+
+
+def change_signins(db_path: Path, what: str, name: str, add: bool, who: str = "command-line") -> set:
+    """Add or remove a sign-in. A card sign-in taken off the list is also marked as offered
+    (card_offer.py), so FlowState doesn't offer the cards to it again by itself."""
+    out = _change_list(db_path, (), f"{what}_signins", name, add, who)
+    if what == "card" and not add:
+        _change_list(db_path, (), "card_offered", name, True, who)
+    return out
+
+
+def _signin_listed(db_path: Optional[Path], what: str, credential: Optional[str],
+                   source: Optional[str]) -> bool:
+    name = clean_client_name(credential)
+    if not name or db_path is None:
+        return False
+    listed = signins(db_path, what)
+    if name in listed:
+        return True
+    # an OAuth app (approved with the owner passphrase) that registered again is given a
+    # number, "Claude (2)": it keeps the place its first registration had on the list
+    m = re.fullmatch(r"(.+) \((\d{1,3})\)", name)
+    return source == "oauth_client" and m is not None and m.group(1) in listed
+
+
+def card_allowed_credential(db_path: Optional[Path], credential: Optional[str],
+                            source: Optional[str] = None) -> bool:
+    """The same for an app that signed in over the network (card_trust.py): its key's,
+    token's or OAuth app's own name, and only a name the user added to the card sign-in list
+    themselves (signins). The built-in default (claude-ai) is a stdio client name, and an
+    OAuth app picks its own name when it registers."""
+    return _signin_listed(db_path, "card", credential, source)
 
 
 def popup_allowed(db_path: Optional[Path], client_name: str, declared: bool) -> bool:
     """May FlowState show this connection a popup? Declared the capability, on the allowlist,
-    and not claude.ai / the Anthropic connector."""
+    and not claude.ai / the Anthropic connector. stdio only: the name is the app's own say-so
+    (popup.no_box checks a LAN app's sign-in with popup_allowed_credential)."""
     name = (client_name or "").strip().lower()
     if not declared or not name or any(m in name for m in CONNECTOR_MARKS):
         return False
     return name in popup_clients(db_path)
+
+
+def popup_allowed_credential(db_path: Optional[Path], credential: Optional[str],
+                             declared: bool, source: Optional[str] = None) -> bool:
+    """A LAN app on this computer: its key's or token's own name on the popup sign-in list the
+    user made (`approvals popup add --sign-in NAME`), never the name it sends (task 57, H-1)."""
+    return declared and _signin_listed(db_path, "popup", credential, source)
 
 
 # ---------------------------------------------------------------- user-only items
@@ -291,7 +421,7 @@ def user_only(item: Optional[dict]) -> bool:
     approvals were on, and every "did the user say this?" item (provenance.py)."""
     if not item or item.get("kind") not in USER_ONLY_KINDS:
         return False
-    if item["kind"] in ("setting", "source"):   # source: always, approvals on or off
+    if item["kind"] in ("setting", "source", "rule", "card_offer", "reopen_conflict"):   # always
         return True
     try:
         return bool(json.loads(item.get("payload") or "{}").get("user_only"))
@@ -346,9 +476,106 @@ def relay_handle() -> Optional[str]:
         return None
 
 
-def phone_link(db_path: Path, item_id: int) -> Optional[str]:
+def relay_set_up() -> bool:
+    """Is the relay agent enrolled on this computer (switched on or not)? Without relay state
+    on disk this is one file check. The review page's relay settings are greyed out if not."""
+    try:
+        import os
+        from . import paths
+        env = os.environ.get("FLOWSTATE_RELAY_DIR")
+        root = Path(env).expanduser() if env else paths.data_root() / "relay"
+        if not (root / "relay.json").exists():
+            return False
+        from .relay.store import RelayStore
+        return bool(RelayStore().enrolled())
+    except Exception:  # noqa: BLE001 - unreadable relay state: treated as not set up
+        return False
+
+
+# For callers elsewhere (relay, tunnel, LAN from another computer), instead of a phone link:
+# the links carry the relay handle, which then lands in cloud chat logs (audit D19, task 54).
+PHONE_ELSEWHERE = ("Open the review list on your phone from the FlowState link you saved, or run "
+                   "`flowstate review-page` on your computer.")
+
+
+def _elsewhere() -> bool:
+    """Is this request from an app that isn't on this computer? (popup.on_this_computer: no
+    request at all, stdio, or the LAN listener with a loopback peer count as here.)"""
+    from .popup import on_this_computer
+    return not on_this_computer()
+
+
+def phone_hidden(db_path: Path) -> bool:
+    """The phone links exist here but this caller is elsewhere, so it gets PHONE_ELSEWHERE."""
+    return _elsewhere() and review_handle(db_path) is not None
+
+
+def _phone_labels(db_path: Optional[Path]) -> set:
+    """Every "phone (<handle>)" label FlowState itself saved here: this device's handle now,
+    and any earlier one (the relay turned off, or enrolled again under a new handle: task 56,
+    B), read from where 2.4.3 wrote them (decided_by, approval_log, history clients)."""
+    out = set()
     handle = relay_handle()
-    if not handle or not phone_on(db_path) or not keys_ready():
+    if handle:
+        out.add(f"phone ({handle})")
+    if db_path is None:
+        return out
+    try:
+        conn = _conn(db_path)
+    except sqlite3.Error:
+        return out
+    try:
+        for table, col in (("review_items", "decided_by"), ("approval_log", "client"),
+                           ("record_history", "client"), ("review_mode_log", "client")):
+            try:
+                out |= {r[0] for r in conn.execute(
+                    f'SELECT DISTINCT "{col}" FROM "{table}" WHERE "{col}" LIKE \'phone (%)\'')
+                    if _PHONE_LABEL.fullmatch(r[0] or "")}
+            except sqlite3.Error:
+                continue
+    finally:
+        conn.close()
+    return out
+
+
+_PHONE_LABEL = re.compile(r"phone \([A-Za-z0-9][A-Za-z0-9._-]{1,62}\)")
+
+
+def scrub_handle(result, db_path: Optional[Path] = None):
+    """For an app elsewhere: "phone (<handle>)", the label 2.4.3 saved with phone decisions
+    (history, who did what, the brief), becomes "phone" in its answer, with this device's
+    handle and any earlier one. Only those exact labels: record text is left alone."""
+    if not _elsewhere():
+        return result
+    if db_path is None:
+        try:
+            from . import server as S
+            db_path = S.backend.db_path
+        except Exception:  # noqa: BLE001
+            db_path = None
+    labels = _phone_labels(db_path)
+    if not labels:
+        return result
+
+    def walk(v):
+        if isinstance(v, str):
+            for old in labels:
+                if old in v:
+                    v = v.replace(old, "phone")
+            return v
+        if isinstance(v, dict):
+            return {k: walk(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [walk(x) for x in v]
+        return v
+    return walk(result)
+
+
+def phone_link(db_path: Path, item_id: int) -> Optional[str]:
+    """The item's phone link, only for apps on this computer (never with the handle to an app
+    elsewhere: phone_hidden)."""
+    handle = relay_handle()
+    if not handle or not phone_on(db_path) or not keys_ready() or _elsewhere():
         return None
     nonce = nonce_for(db_path, item_id)
     return f"{SITE}/approve/{handle}/{int(item_id)}?n={nonce}" if nonce else None
@@ -366,8 +593,9 @@ def review_handle(db_path: Path) -> Optional[str]:
 def review_link(db_path: Path) -> Optional[str]:
     """The bookmarkable phone link to the whole waiting list (no code in it, so nothing secret
     lands in chat history): https://flowstatemcp.com/review/<handle>. The site signs the user
-    in and sends the browser to this device's /review/start, which makes a fresh code."""
-    handle = review_handle(db_path)
+    in and sends the browser to this device's /review/start, which makes a fresh code. Only for
+    apps on this computer, like phone_link."""
+    handle = None if _elsewhere() else review_handle(db_path)
     return f"{SITE}/review/{handle}" if handle else None
 
 
@@ -480,6 +708,9 @@ def ask_line(db_path: Path, item_id: int, what: str = "approve it") -> str:
         return (f"Waiting for the user: ask them to {what} on their tunnel review page ({tunnel}) "
                 f"or with the FlowState review shortcut on their desktop (or run "
                 f"`flowstate approve {item_id}` in a terminal).")
+    if phone_hidden(db_path):   # an app elsewhere: no link with the handle in it
+        return (f"Waiting for the user: ask them to {what} themselves. Tell them: "
+                f"\"{PHONE_ELSEWHERE}\" (or `flowstate approve {item_id}` in a terminal).")
     return (f"Waiting for the user: ask them to open the FlowState review shortcut on their "
             f"desktop and {what} there (or run `flowstate approve {item_id}` in a terminal).")
 
@@ -493,6 +724,12 @@ def describe(item: dict, project: str, db_path: Optional[Path] = None) -> str:
     if item["kind"] == "cleanup":
         from . import cleanup
         return cleanup.ask(p, project, db_path)
+    if item["kind"] == "card_offer":
+        from . import card_offer
+        return card_offer.describe(item)
+    if item["kind"] == "reopen_conflict":
+        from . import conflict_reopen
+        return conflict_reopen.describe(item)
     if item["kind"] == "setting":
         where = "the whole install" if p.get("scope") == "install" else project
         return f"turn review off for {where}"
@@ -501,6 +738,12 @@ def describe(item: dict, project: str, db_path: Optional[Path] = None) -> str:
         title = title if len(title) <= 60 else title[:57] + "..."
         return (f'mark the {p.get("record_type") or "record"} "{title}" in {project} as '
                 f"something you said yourself (user_stated)")
+    if item["kind"] == "rule":
+        rule = " ".join(str(p.get("rule") or "").split())
+        rule = rule if len(rule) <= 120 else rule[:117] + "..."
+        if p.get("action") == "remove":
+            return f'remove the hard rule R{p.get("rule_id")} "{rule}" from {project}'
+        return f'add the hard rule "{rule}" to {project} (every AI there is told to never break it)'
     if item["kind"] == "delete":
         if db_path is not None:
             try:
@@ -686,9 +929,19 @@ def _claims(grant: str, handle: Optional[str], now: Optional[datetime], keys: Op
     return claims
 
 
+def require_phone_on(db_path: Path) -> None:
+    """Every phone decision re-checks the setting (audit D13): `approvals phone off` also
+    closes phone pages that are already open."""
+    if not phone_on(db_path):
+        raise ApprovalError("phone_off", "Phone review is turned off on this FlowState, so "
+                                         "nothing was decided. Decide on the computer, or turn "
+                                         "it back on there: flowstate approvals phone on.")
+
+
 def verify_grant(db_path: Path, grant: str, item_id: int, handle: Optional[str] = None,
                  now: Optional[datetime] = None, keys: Optional[dict] = None) -> dict:
     """Check a phone grant for `item_id`. Returns its claims; raises ApprovalError."""
+    require_phone_on(db_path)
     claims = _claims(grant, handle, now, keys, ACTION, item_id)
     item, nonce = claims["item"], claims["nonce"]
     conn = _conn(db_path)
@@ -713,6 +966,7 @@ def verify_review_grant(db_path: Path, grant: str, handle: Optional[str] = None,
                         now: Optional[datetime] = None, keys: Optional[dict] = None) -> dict:
     """Check a phone grant that opens the waiting list (action open_review, item 0) and use up
     its one-use code. Returns its claims; raises ApprovalError."""
+    require_phone_on(db_path)
     claims = _claims(grant, handle, now, keys, REVIEW_ACTION, 0)
     if not use_review_nonce(db_path, claims["nonce"]):
         raise ApprovalError("grant_used", "This link was already used or is out of date. "

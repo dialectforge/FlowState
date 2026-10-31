@@ -5,8 +5,10 @@ saved on the same component as a similar current decision opens a card too (the 
 pairs the possible-conflict check already trusts; nothing fuzzier). The user keeps the
 older, the newer, or both, or dismisses the card. The loser is marked superseded, not
 deleted. Chat approvals still gate the model-visible review tools. The in-chat card's
-buttons call resolve_conflict_card, which is app-only, refused for clients without MCP Apps,
-and phone only through the relay unless chat approvals are on.
+buttons call resolve_conflict_card, which is app-only, refused for clients without MCP Apps
+or off the user's card list, and needs the card's one-use code. Through the relay a tap counts
+like one on this computer or the tunnel (task 65): the connector's sign-in must be on the
+card list the user made, so chat approvals (the AI's own approve / reject) don't apply to it.
 
 A card is one question: opening it closes the pending possible-conflict item on the same two
 decisions (merged into the card), so the user is not asked twice.
@@ -30,7 +32,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import dbconn
-from . import identity, links, review
+from . import history, identity, links, review
 
 UI_EXT = "io.modelcontextprotocol/ui"
 _FILE = re.compile(r"^[\w./\\-]+:\d+$")
@@ -59,10 +61,20 @@ def _now() -> str:
 
 
 def _pretty(ts: Optional[str]) -> str:
+    """"Oct 24, 2026": the day of a stored UTC time on this computer's clock, as the card
+    shows it in the reader's own time zone (the plain text said the UTC day, L15)."""
+    raw = str(ts or "")[:19].replace("T", " ")
     try:
-        y, m, d = (ts or "")[:10].split("-")
-        return f"{_MONTHS[int(m) - 1]} {int(d)}, {y}"
-    except (ValueError, IndexError):
+        dt = datetime.strptime(raw, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).astimezone()
+        y, m, d = dt.year, dt.month, dt.day
+    except ValueError:
+        try:
+            y, m, d = (int(x) for x in raw[:10].split("-"))
+        except ValueError:
+            return ""
+    try:
+        return f"{_MONTHS[m - 1]} {d}, {y}"
+    except IndexError:
         return ""
 
 
@@ -158,13 +170,14 @@ def _created(conn, typ: str, rid: int) -> str:
 
 def _writer(conn, typ: str, rid: int, fresh: bool, client: str) -> tuple[str, str]:
     if not fresh and identity.has_column(conn, "activity_log", "record_type"):
-        row = conn.execute("""SELECT app, at FROM activity_log WHERE record_type = ? AND record_id = ?
+        row = conn.execute("""SELECT app, machine, identity_source, at FROM activity_log
+                              WHERE record_type = ? AND record_id = ?
                               AND ok = 1 AND app IS NOT NULL ORDER BY id ASC LIMIT 1""",
                            (typ, rid)).fetchone()
         if row and row["app"]:
-            return row["app"], row["at"] or ""
+            return identity.shown_row(row), row["at"] or ""
     if fresh:
-        return identity.stamp(client).get("app") or client or "an app", _now()
+        return identity.shown_row(identity.stamp(client), fallback=client or "an app"), _now()
     return "an earlier entry", ""
 
 
@@ -181,7 +194,15 @@ def _evidence(conn, typ: str, rid: int) -> list:
 
 
 def save_evidence(conn, typ: str, rid: int, items: list, client: str) -> None:
+    """Replace a record's evidence. The rows before and after go into the edit history, so
+    the old evidence can be seen and undo brings it back (task 67); the same evidence saved
+    again changes nothing."""
     if not items or not available(conn):
+        return
+    before = history.side_rows(conn, "entry_evidence", typ, rid)
+    same = [(r["kind"], r["label"], r["excerpt"])
+            for r in sorted(before.values(), key=lambda r: (r["position"], r["id"]))]
+    if same == [(ev["kind"], ev["label"], ev.get("excerpt")) for ev in items]:
         return
     conn.execute("DELETE FROM entry_evidence WHERE record_type = ? AND record_id = ?", (typ, rid))
     at = _now()
@@ -189,6 +210,9 @@ def save_evidence(conn, typ: str, rid: int, items: list, client: str) -> None:
         identity.insert(conn, "entry_evidence", {
             "record_type": typ, "record_id": rid, "kind": ev["kind"], "label": ev["label"],
             "excerpt": ev.get("excerpt"), "position": i, "created_at": at}, client)
+    history.record_side(conn, "entry_evidence", typ, rid, before,
+                        "evidence/replace" if before else "evidence/add", client,
+                        links.owner(conn, typ, rid))
 
 
 def _topic_of(conn, typ: str, rid: int, given: str) -> str:
@@ -222,8 +246,9 @@ def _view(conn, card, project: str, item_id, url: str) -> dict:
     for mark, typ, rid, app, at in (
             ("A", card["a_type"], card["a_id"], card["a_app"], card["a_at"]),
             ("B", card["b_type"], card["b_id"], card["b_app"], card["b_at"])):
-        when = _pretty(at) or _pretty(_created(conn, typ, rid))
-        sides.append({"mark": mark, "who": app or "an earlier entry", "when": when,
+        raw = str(at or _created(conn, typ, rid) or "")[:19]
+        sides.append({"mark": mark, "who": app or "an earlier entry", "when": _pretty(raw),
+                      "when_utc": raw,   # the card shows it in the reader's own time zone
                       "claim": links.label(conn, typ, rid) or f"{typ} #{rid}",
                       "evidence": _evidence(conn, typ, rid)})
     open_ = card["status"] == "open"
@@ -324,12 +349,26 @@ def show_call(project: str, item_ids: list) -> str:
 def pointer(project: Optional[str], item_ids: list) -> dict:
     """{show_card, card_note} for answers that surface a disagreement, on MCP Apps hosts only
     (elsewhere there is no card to show and the text is the card)."""
-    if not item_ids or not project or not client_has_ui():
+    if not item_ids or not project:
         return {}
+    if not client_has_ui():
+        return offered(project)
     call = show_call(project, item_ids)
     return {"show_card": call,
             "card_note": f"This app can show the disagreement as a card the user taps (Keep A, "
                          f"Keep B or Keep both): call {call} now. Don't choose for them."}
+
+
+def offered(project) -> dict:
+    """An app on a network sign-in that draws cards but isn't allowed them yet: the one-time
+    offer to the user (card_offer.py), and what to tell them. {} for every other app."""
+    from . import card_offer
+    from .server import backend
+    try:
+        off = card_offer.offer(backend.db_path, project)
+    except Exception:  # noqa: BLE001 - an offer must never fail the answer
+        return {}
+    return {"cards_off": card_offer.note(off)} if off else {}
 
 
 def _answer(cards: list, project: Optional[str] = None) -> dict:
@@ -455,8 +494,11 @@ def _mark(conn, typ: str, rid: int, by: tuple, card_id: int, client: str) -> Non
     who = identity.fields(conn, "entry_standing", client)
     row = {"record_type": typ, "record_id": rid, "standing": "superseded",
            "by_type": by[0], "by_id": by[1], "card_id": card_id, "at": _now(), **who}
+    before = history.side_rows(conn, "entry_standing", typ, rid)   # an earlier card's mark
     conn.execute(f'INSERT OR REPLACE INTO entry_standing ({", ".join(row)}) '
                  f'VALUES ({", ".join("?" * len(row))})', list(row.values()))
+    history.record_side(conn, "entry_standing", typ, rid, before, "card/keep", client,
+                        links.owner(conn, typ, rid))
 
 
 def _quiet_pair(conn, a_id: int, b_id: int, client: str, reason: str) -> None:
@@ -470,9 +512,12 @@ def _quiet_pair(conn, a_id: int, b_id: int, client: str, reason: str) -> None:
     sets, who = identity.set_sql(conn, "decision_conflicts", client, prefix="resolved_")
     isets, iwho = identity.set_sql(conn, "review_items", client, prefix="decided_")
     for r in rows:
+        before = history._row(conn, "decision_conflicts", r["id"])
         conn.execute(f"""UPDATE decision_conflicts SET status = 'dismissed_compatible',
                         resolved_at = ?{sets} WHERE id = ? AND status = 'open'""",
                      (_now(), *who, r["id"]))
+        history.record_row(conn, "decision_conflicts", r["id"], before, "queue/conflict_card",
+                           client)
         if r["review_item_id"] is not None:
             conn.execute(f"""UPDATE review_items SET status = 'rejected', decided_at = ?,
                             decided_by = 'flowstate (automatic)', reject_reason = ?{isets}
@@ -563,11 +608,25 @@ def decision_path(client: str) -> str:
     return "chat" if approvals.path_of(client) == "chat" else "review page"
 
 
+# How a card tap is recorded (the decision's user_request; approval_log path "card"): a tap
+# on the card in that app, with its one-use code checked. FlowState can't prove a person made
+# it (the card host could be lying), so the record never says "the user".
+CARD_WORDS = "{button} tapped on the {card} card in {app} (its one-use card code checked)."
+
+
 def resolve_card(db_path: Path, args: dict, client: str) -> dict:
+    from . import card_taps
+    return card_taps.resolve(_resolve, db_path, args, client)
+
+
+def _resolve(db_path: Path, args: dict, client: str) -> dict:
     """The in-chat card's button. Not a chat sentence: user_request, message, text and reason
-    are refused, and so is a client that can't show MCP Apps (no card there to tap). Through
-    the relay with chat approvals off (the default) it is phone only, like manage_review.
-    Otherwise the user's own words aren't needed; the path is recorded as card."""
+    are refused, and so is a client that can't show MCP Apps or isn't on the user's card list
+    (no card there to tap). Through the relay too (task 65): only a sign-in the user put on the
+    card list gets the card, and chat approvals are for the AI's manage_review, not for a tap
+    with the card's code. The tap must carry the card's one-use code (card_taps.py), and the app that queued the
+    disagreement can't decide it on its own card. Otherwise the user's own words aren't
+    needed; the path is recorded as card."""
     for key in ("user_request", "message", "text", "reason"):
         if args.get(key) not in (None, ""):
             return {"error": "not_a_card_tap", "message": "A disagreement card is resolved by "
@@ -580,22 +639,29 @@ def resolve_card(db_path: Path, args: dict, client: str) -> dict:
     if not client_has_ui():   # no MCP Apps host, no card: the call can only be the model's
         return {"error": "not_a_card_tap", "message": "This app can't show the disagreement "
                 "card. The user decides it on the review page or their phone."}
-    from . import waiting
-    no = waiting.phone_only(db_path, args["item_id"])   # relay: the same phone-only rule
-    if no:
-        return no
-    item = review.get_item(db_path, int(args["item_id"]))
+    try:
+        item_id = int(args["item_id"])
+    except (TypeError, ValueError):
+        return {"error": "bad_request", "message": "item_id must be a number."}
+    item = review.get_item(db_path, item_id)
     if not item or item.get("kind") != "disagreement":
         return {"error": "record_not_found", "message": "No disagreement card with that id."}
     if item["status"] != "pending":
         return {"error": "already_resolved", "message": "This disagreement is already decided."}
+    no = own_refusal(item, item_id) or tap_refusal(args, item_id, "conflict", client)
+    if no:
+        return no
+    from . import card_trust
+    by = card_trust.label(client)   # "card (<app>)", plus the sign-in over the network
 
     def apply(it, _edits):
-        return apply_keep(db_path, it, args["keep"], client, path="card")
+        return apply_keep(db_path, it, args["keep"], by, path="card")
 
     try:
-        out = review.approve(db_path, int(args["item_id"]),
-                             "The user tapped a button on the conflict card.", client,
+        out = review.approve(db_path, item_id, CARD_WORDS.format(button="Keep " + args["keep"],
+                                                                 card="disagreement",
+                                                                 app=card_trust.shown(client)),
+                             by,
                              lambda it, payload: ("conflict_cards", None),
                              others={"disagreement": apply})
     except review.ReviewError as e:
@@ -726,18 +792,25 @@ def brief_line(conn, pid: int) -> Optional[str]:
         shown.append(r)
     if not shown:
         return None
+    ref = lambda t, i: f"D{i}" if t == "decision" else f"{t} #{i}"   # noqa: E731
+    r = shown[0]
+    topic = " ".join(str(r["topic"] or "").split())[:80]
     extra = f" (+{len(shown) - 1} more)" if len(shown) > 1 else ""
-    return f"Two AIs disagree about {shown[0]['topic']}{extra}."
+    # the brief puts this line inside its "records below" fence: the topic is an app's words
+    return (f"Two AIs disagree about {topic}: {ref(r['a_type'], r['a_id'])} vs "
+            f"{ref(r['b_type'], r['b_id'])}{extra}.")
 
 
 def brief_hint(conn, pid: int, project: str) -> Optional[str]:
     """On MCP Apps hosts, when a card is open: the call that shows it."""
-    if not available(conn) or not client_has_ui():
+    if not available(conn):
         return None
     ids = [r[0] for r in conn.execute("""SELECT review_item_id FROM conflict_cards WHERE project_id = ?
                                          AND status = 'open' AND review_item_id IS NOT NULL""", (pid,))]
     if not ids:
         return None
+    if not client_has_ui():
+        return offered(pid).get("cards_off")
     return (f"Disagreement card waiting: call {show_call(project, ids)} so the user can tap "
             f"Keep A, Keep B or Keep both.")
 
@@ -855,24 +928,28 @@ def phone_card(db_path: Path, item: dict) -> Optional[dict]:
 
 # ---------------------------------------------------------------- MCP Apps registration
 def register(server) -> None:
-    """The ui:// document and its reader. Listed so a host can prefetch it."""
+    """The ui:// documents (this card's and the review card's) and their reader. Listed so a
+    host can prefetch them."""
     from mcp.server.lowlevel.helper_types import ReadResourceContents
     from mcp.types import Resource
 
+    from . import review_card_ui
     from .conflict_card_ui import CARD_HTML, MIME, UI_META, UI_URI
+    docs = {UI_URI: ("Disagreement card", "The in-chat card for two entries that disagree.", CARD_HTML),
+            review_card_ui.UI_URI: ("Review card", "The in-chat card for an item waiting for the "
+                                    "user's OK (Approve or Reject).", review_card_ui.CARD_HTML)}
 
     @server.list_resources()
     async def list_resources():
-        res = Resource(uri=UI_URI, name="Disagreement card",
-                       description="The in-chat card for two entries that disagree.",
-                       mimeType=MIME)
-        return [res.model_copy(update={"meta": UI_META})]
+        return [Resource(uri=uri, name=name, description=about, mimeType=MIME
+                         ).model_copy(update={"meta": UI_META})
+                for uri, (name, about, _doc) in docs.items()]
 
     @server.read_resource()
     async def read_resource(uri):
-        if str(uri) != UI_URI:
+        if str(uri) not in docs:
             raise ValueError(f"Unknown resource: {uri}")
-        return [ReadResourceContents(CARD_HTML, MIME, UI_META)]
+        return [ReadResourceContents(docs[str(uri)][2], MIME, UI_META)]
 
 
 def app_tool():
@@ -890,6 +967,7 @@ def app_tool():
             "keep": {"type": "string", "enum": ["a", "b", "both"],
                      "description": "a keeps the older entry, b the newer, both keeps both."},
             "project": {"type": "string", "description": "The project name the card is showing."},
+            "tap": {"type": "string", "description": "The card's one-use code for this tap."},
         }, "required": ["item_id", "keep", "project"]})
     return tool.model_copy(update={"meta": {"ui": {"resourceUri": UI_URI, "visibility": ["app"]}}})
 
@@ -966,31 +1044,150 @@ def show(db_path: Path, args: dict, pid: Optional[int]) -> dict:
                    "Show the user this text; they decide on the review page or their phone."
                    if open_ else "Already decided.")
     out["_ui"] = {"structured": {"cards": [c["structured"] for c in packed],
-                                 "more": out.get("more", 0)}}
+                                 "more": out.get("more", 0)},
+                  "taps": taps_for([c["structured"] for c in packed], "conflict",
+                                   lambda v: not v["resolved"])}
     return out
 
 
-def client_has_ui() -> bool:
-    try:
-        from .server import server
-        caps = server.request_context.session.client_params.capabilities
-    except Exception:  # noqa: BLE001 - no session, or a client that sent no extensions
-        return False
+def declares_ui(caps) -> bool:
+    """The client's capabilities name the MCP Apps extension: kept as an extra field by the
+    MCP SDK today, as a named `extensions` field should a later SDK add one."""
     extra = getattr(caps, "model_extra", None) or {}
-    ext = extra.get("extensions") or {}
+    ext = extra.get("extensions") or getattr(caps, "extensions", None) or {}
+    if not isinstance(ext, dict):
+        ext = getattr(ext, "model_extra", None) or getattr(ext, "__dict__", {}) or {}
     return isinstance(ext, dict) and UI_EXT in ext
 
 
+def ui_declared() -> bool:
+    """This connection says it shows MCP Apps (its own claim; client_has_ui decides)."""
+    try:
+        from .server import server
+        return declares_ui(server.request_context.session.client_params.capabilities)
+    except Exception:  # noqa: BLE001 - no session, or a client that sent no extensions
+        return False
+
+
+def client_has_ui() -> bool:
+    """Does this connection get the cards? It says it shows MCP Apps, and it is on the user's
+    card list (approvals.card_clients): the flag alone is the app's own claim. Which name is
+    checked depends on how it connected (card_trust.py): on stdio the client name it sends;
+    over the network its key's / token's / OAuth app's own name, never the name it sends;
+    the shared LAN token never. The tool list and every card call use this same check."""
+    try:
+        from .server import backend, server
+        caps = server.request_context.session.client_params.capabilities
+    except Exception:  # noqa: BLE001 - no session, or a client that sent no extensions
+        return False
+    if not declares_ui(caps):
+        return False
+    from . import card_trust
+    try:
+        return card_trust.allowed(backend.db_path, card_trust.caller())
+    except Exception:  # noqa: BLE001 - no list readable: no cards
+        return False
+
+
+CARDS_OFF = ("This app can draw FlowState's in-chat review cards, but the user hasn't turned "
+             "them on for it, so the text is the card here. Only the user can turn them on, on "
+             "the computer where FlowState runs: `{cmd}` in a terminal, or the review page's "
+             "Settings (\"Apps that may show review cards\"{tick}). Tell the user once if they "
+             "want to tap Approve / Reject in this chat; don't run it for them.")
+
+
+def cards_off(project=None) -> Optional[str]:
+    """For an app that says it shows MCP Apps but isn't on the user's card list (task 65): how
+    the user turns the cards on for it, the user's own step (no tool does it). Over the network
+    that is the sign-in's own name (card_trust.py), never the name the app sends; the shared
+    LAN token and HTTP calls without a sign-in get none (no cards there at all). None when the
+    app gets the cards, doesn't show MCP Apps, or outside a request. With `project`, a
+    network sign-in is first offered the cards on the user's review page (card_offer.py, task
+    65b): then the answer says that instead."""
+    try:
+        from .server import server
+        caps = server.request_context.session.client_params.capabilities
+    except Exception:  # noqa: BLE001
+        return None
+    if not declares_ui(caps) or client_has_ui():
+        return None
+    if project is not None:
+        off = offered(project).get("cards_off")
+        if off:
+            return off
+    from . import approvals, card_trust
+    try:
+        who = card_trust.caller()
+    except Exception:  # noqa: BLE001
+        return None
+    if who is None:
+        return None
+    name = re.sub(r'["`$\\]', "", approvals.clean_client_name(who.credential or who.sent))
+    if not name or name == "unknown":
+        return None
+    sign_in = who.credential is not None
+    cmd = f'flowstate approvals cards add {"--sign-in " if sign_in else ""}"{name}"'
+    return CARDS_OFF.format(cmd=cmd, tick=", with the sign-in tick" if sign_in else "")
+
+
+def tap_refusal(args: dict, item_id: int, card: str, client: str) -> Optional[dict]:
+    """None when the tap carries a live one-use code made for this card and this caller
+    (card_taps.py), else the refusal. The code also stops the model calling the hidden tool
+    itself. The code is only reserved here: card_taps.settle uses it up once the tap is saved,
+    and gives it back when the tap fails."""
+    from . import card_taps, card_trust
+    got = card_taps.redeem(args.get("tap"), item_id, card, card_trust.key(client))
+    if got is True:
+        return None
+    if got == card_taps.BUSY:
+        return {"error": "tap_in_progress", "message": card_taps.IN_PROGRESS}
+    return {"error": "not_a_card_tap", "message": card_taps.REFUSED, "expired": True}
+
+
+def own_refusal(item: dict, item_id: int) -> Optional[dict]:
+    """The app that queued an item doesn't decide it on its own card either (as in the chat,
+    review.own_item_refusal). Session summaries are queued by FlowState itself when a session
+    closes, not by the app, so their cards keep their buttons."""
+    if item.get("kind") == "session_summary":
+        return None
+    if review.own_item_refusal(item, identity.current(), "") is None:
+        return None
+    return {"error": "own_item", "message": OWN_CARD.format(id=item_id)}
+
+
+OWN_CARD = ("This app queued review item #{id} itself, so it isn't decided on this app's card. "
+            "Nothing was decided. Decide it on the review page, your phone, or with "
+            "`flowstate approve {id}` in a terminal.")
+
+
 def with_app_tool(tools: list) -> list:
-    """MCP Apps hosts also get the card's two tools: show (model) and resolve (app only)."""
+    """MCP Apps hosts also get each card's two tools: show (model) and resolve (app only),
+    for the disagreement card and the review card (review_cards.py)."""
     if not client_has_ui():
         return tools
-    return list(tools) + [show_tool(), app_tool()]
+    from . import review_cards
+    return list(tools) + [show_tool(), app_tool(), review_cards.show_tool(), review_cards.app_tool()]
 
 
 def paint(result, ui):
     """The card's data for the view: structuredContent, which the host passes to the card in
-    ui/notifications/tool-result. Only the card's own tools return it."""
-    if not isinstance(ui, dict) or ui.get("structured") is None:
+    ui/notifications/tool-result, and the cards' one-use tap codes in `_meta` (card_taps.py),
+    which the host gives the card but not the model (a refused tap's answer may carry only a
+    fresh code). Only the card's own tools return it."""
+    if not isinstance(ui, dict) or (ui.get("structured") is None and not ui.get("taps")):
         return result
-    return result.model_copy(update={"structuredContent": ui["structured"]})
+    update = {"structuredContent": ui["structured"]} if ui.get("structured") is not None else {}
+    if ui.get("taps"):
+        from .card_taps import META_KEY
+        update["meta"] = {META_KEY: ui["taps"]}
+    return result.model_copy(update=update)
+
+
+def taps_for(views: list, card: str, buttons) -> dict:
+    """The tap codes for the views that have buttons (`buttons(view)`), on card hosts only."""
+    if not client_has_ui():
+        return {}
+    from . import card_taps, card_trust
+    from .server import _client_name
+    return card_taps.for_cards([v["item_id"] for v in views if buttons(v)], card,
+                               card_trust.key(_client_name()))

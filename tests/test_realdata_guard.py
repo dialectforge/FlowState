@@ -81,7 +81,7 @@ def test_db_flag_moves_attachments_with_the_database(tmp_path):
     from mcp.client.stdio import stdio_client
     other = tmp_path / "elsewhere"
     other.mkdir()
-    env = server_env(tmp_path / "unused.db")
+    env = server_env(tmp_path / "unused.db", FLOWSTATE_TOOLS="full")   # manage_files: a full-profile tool
     env.pop("FLOWSTATE_DB")
     env["HOME"] = str(tmp_path / "home")
     f = tmp_path / "menu.md"

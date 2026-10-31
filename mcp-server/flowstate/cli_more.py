@@ -9,15 +9,21 @@
     flowstate import-memory  --project P FILE [--source Claude|ChatGPT] [--kind learning]
     flowstate git-capture    enable --project P --repo PATH | disable --project P | status | run [--project P]
     flowstate update         check [on|off|now]   (the daily update check: updates.py)
+    flowstate update         self-update [on|off] (may `flowstate update` update this computer: updates.py)
     flowstate update         [--dry-run] [--yes --user-said TEXT] [--rollback] [--db FILE] [--app NAME]
                              (move this install to the newest signed release: selfupdate.py)
+    flowstate name           ["New name" | --reset]   (this FlowState's display name: install_name.py)
 """
 
+import sys
 from pathlib import Path
+
+from . import term
 
 
 def say(msg: str) -> None:
-    print(msg, flush=True)
+    # text from apps and records is in many lines: no escape code reaches the terminal (NEW-7)
+    print(term.safe(msg, newlines=True), flush=True)
 
 
 def _db(a) -> Path:
@@ -42,7 +48,7 @@ def cmd_cleanup(a) -> int:
     kinds = tuple(k.strip() for k in a.kinds.split(",") if k.strip())
     found = cleanup.suggest(db, pid, kinds)
     for s in found:
-        say(f"- {s['summary']}")
+        say(f"- {term.safe(s['summary'])}")
     say(f"{len(found)} suggestion(s).")
     if a.queue:
         res = cleanup.queue(db, found, source="cleanup (cli)")
@@ -60,7 +66,7 @@ def cmd_apps(a) -> int:
     if a.action == "list":
         rows = activity.apps(db)
         for r in rows:
-            say(f"{r['app']}: {'PAUSED' if r['paused'] else 'on'}, last seen {r['last_seen'] or '-'}, "
+            say(f"{term.safe(activity.app_label(r))}: {'PAUSED' if r['paused'] else 'on'}, last seen {r['last_seen'] or '-'}, "
                 f"{r['calls']} calls ({r['writes'] or 0} writes, {r['errors'] or 0} errors)")
         say(f"{len(rows)} app(s).")
         return 0
@@ -68,12 +74,17 @@ def cmd_apps(a) -> int:
         if not a.app:
             say("Name the app with --app (see `flowstate apps list`).")
             return 1
-        activity.set_paused(db, a.app, a.action == "pause", "cli")
-        say(f"{a.app}: {'paused (it can still read; its writes are refused)' if a.action == 'pause' else 'resumed'}.")
+        held = activity.still_paused_by(db, a.app) if a.action == "resume" else {}
+        names = activity.set_paused_all(db, a.app, a.action == "pause", "cli")
+        also = f" (with the key / sign-in it uses: {term.safe(', '.join(names[1:]))})" if names[1:] else ""
+        say(f"{term.safe(a.app)}{also}: {'paused (it can still read; its writes are refused)' if a.action == 'pause' else 'resumed'}.")
+        for key, others in held.items():
+            say(term.safe(activity.held_text(a.app, key, others)))
         return 0
     for r in activity.recent(db, a.app, a.limit):
-        say(f"{r['at']} {r['app']}: {r['tool']}{('/' + r['action']) if r['action'] else ''}"
-            f"{(' [' + r['project'] + ']') if r['project'] else ''} "
+        say(f"{r['at']} {term.safe(r['app'])}: {term.safe(r['tool'])}"
+            f"{('/' + term.safe(r['action'])) if r['action'] else ''}"
+            f"{(' [' + term.safe(r['project']) + ']') if r['project'] else ''} "
             f"{'write' if r['write'] else 'read'} {'ok' if r['ok'] else 'error ' + (r['error'] or '')}")
     return 0
 
@@ -108,10 +119,11 @@ def cmd_export_md(a) -> int:
         if out.exists() and not a.force:
             say(f"{out} exists; add --force to overwrite it.")
             return 1
-        out.write_text(text, encoding="utf-8")
+        from .privatefs import write_private
+        write_private(out, text)   # it holds the project's records: owner-only (audit D9)
         say(f"Wrote {out}.")
-    else:
-        print(text, end="")
+    else:   # on a terminal, escape codes in record text are shown, not run (NEW-7)
+        print(term.safe(text, newlines=True) if sys.stdout.isatty() else text, end="")
     return 0
 
 
@@ -146,7 +158,7 @@ def cmd_git_capture(a) -> int:
     if a.action == "status":
         rows = G.status(db)
         for r in rows:
-            say(f"{r['project']}: {'on' if r['enabled'] else 'off'}, {r['repo_path']}, "
+            say(f"{term.safe(r['project'])}: {'on' if r['enabled'] else 'off'}, {term.safe(r['repo_path'])}, "
                 f"last commit {(r['last_commit'] or '-')[:8]}, last run {r['last_run_at'] or '-'}")
         say(f"{len(rows)} project(s) set up; every other project is off (the default).")
         return 0
@@ -156,7 +168,7 @@ def cmd_git_capture(a) -> int:
         for r in G.status(db):
             if r["enabled"]:
                 res = G.run(db, r["project_id"], S._save_commit)
-                say(f"{r['project']}: {res['captured']} new commit(s)")
+                say(f"{term.safe(r['project'])}: {res['captured']} new commit(s)")
         return 0
     if not a.project:
         say("Name the project with --project.")
@@ -183,16 +195,33 @@ def cmd_git_capture(a) -> int:
     return 0
 
 
+def _settings(fn) -> int:
+    """A settings command, with a broken or busy config.json said in one plain sentence."""
+    from . import paths
+    try:
+        return fn()
+    except (paths.ConfigUnreadable, TimeoutError) as e:
+        say(f"Not changed: {e}")
+        return 1
+
+
 def cmd_update(a) -> int:
     from . import updates
     if a.action == "check":
-        return updates.cli_check(a.sub, say)
+        return _settings(lambda: updates.cli_check(a.sub, say, _db(a)))
+    if a.action == "self-update":
+        return _settings(lambda: updates.cli_self_update(a.sub, _db(a), say))
     from . import selfupdate
     return selfupdate.cli(a, say)
 
 
+def cmd_name(a) -> int:
+    from . import install_name
+    return _settings(lambda: install_name.cli(a.value, a.reset, _db(a), say))
+
+
 COMMANDS = ("cleanup", "apps", "meaning", "review-page", "export-md", "import-md", "import-memory",
-            "git-capture", "update")
+            "git-capture", "update", "name")
 
 
 def register(sub) -> None:
@@ -218,7 +247,8 @@ def register(sub) -> None:
 
     p = sub.add_parser("review-page", help="open the review page (this computer only)")
     p.add_argument("--port", type=int, default=8770, help="default 8770 (8766/8767 are the servers)")
-    p.add_argument("--no-browser", action="store_true")
+    p.add_argument("--no-browser", action="store_true",
+                   help="don't open the browser; shows the one-time link on your terminal")
     p.add_argument("--print-url", action="store_true", help="also show the one-time link (on your terminal)")
     p.add_argument("--db")
     p.set_defaults(fn=cmd_review_page)
@@ -252,8 +282,9 @@ def register(sub) -> None:
     p.set_defaults(fn=cmd_git_capture)
 
     p = sub.add_parser("update", help="update to the newest signed release (only when the user asks); "
-                                      "`update check [on|off|now]`: the daily update check")
-    p.add_argument("action", nargs="?", choices=["check"])
+                                      "`update check [on|off|now]`: the daily update check; "
+                                      "`update self-update [on|off]`: may `flowstate update` run here")
+    p.add_argument("action", nargs="?", choices=["check", "self-update"])
     p.add_argument("sub", nargs="?", choices=["on", "off", "now"])
     p.add_argument("--dry-run", action="store_true", help="check everything and show the plan; change nothing")
     p.add_argument("--yes", action="store_true", help="don't ask in the terminal (needs --user-said)")
@@ -262,3 +293,10 @@ def register(sub) -> None:
     p.add_argument("--app", help="the AI app running this for the user (kept in the history)")
     p.add_argument("--db", help="the database to back up and migrate (default: as the server)")
     p.set_defaults(fn=cmd_update)
+
+    p = sub.add_parser("name", help='this FlowState\'s display name ("Main FlowState" until you '
+                                    'change it); the relay address stays the same')
+    p.add_argument("value", nargs="?", help="the new name (1-40 characters); none: show it")
+    p.add_argument("--reset", action="store_true", help='back to "Main FlowState"')
+    p.add_argument("--db", help="the database whose settings log records the change")
+    p.set_defaults(fn=cmd_name)

@@ -4,6 +4,9 @@ Suggestions only. They go to the review queue as items of kind `cleanup`; nothin
 closed or deleted until the user approves one. Approving applies just that suggestion
 (move a misfiled record, cancel a duplicate or stale todo) and records it in the edit
 history, so it can be undone. A suggestion the user rejected is not suggested again.
+Approving is tied to the exact rows listed when it was queued (task 74, as deletes are): if
+one changed, or one was added, is missing or was already removed, nothing is changed and the
+suggestion is closed; running the clean-up again suggests it anew.
 
 Misfiled: a record whose words match another project's names and components (project name,
 description, component names, weighted by how rare each word is across projects) much
@@ -314,35 +317,209 @@ def withdraw_unsure(db_path: Path, timeout: float = 5.0) -> int:
 
 def queue(db_path: Path, suggestions: list[dict], source: str = "cleanup") -> dict:
     """Add suggestions to the review queue (additive). Skips any already suggested before,
-    whatever its status (so rejected ones don't come back). First withdraws unsure ones
-    left by older versions (`withdrew`)."""
+    whatever its status (so rejected ones don't come back), except one FlowState closed
+    because its list went out of date (task 74): that one is asked again. Each item stores
+    the exact rows approving it would change (`bound`). A waiting item whose list no longer
+    matches is closed and queued again (`replaced`). First withdraws unsure ones left by
+    older versions (`withdrew`)."""
+    from . import deletes
     withdrew = withdraw_unsure(db_path)
     conn = dbconn.connect(str(db_path), timeout=5.0)
+    conn.row_factory = sqlite3.Row
     try:
         if not review.available(conn):
             raise review.ReviewError("review_queue_unavailable", "The review queue isn't set up.")
-        seen = set()
-        for (payload,) in conn.execute("SELECT payload FROM review_items WHERE kind = 'cleanup'"):
+        seen, waiting = set(), {}
+        for r in conn.execute("SELECT id, status, decided_by, payload FROM review_items "
+                              "WHERE kind = 'cleanup'"):
             try:
-                seen.add(json.loads(payload or "{}").get("fingerprint"))
+                p = json.loads(r["payload"] or "{}")
             except ValueError:
-                pass
-        added, skipped = [], 0
+                continue
+            if r["status"] == "rejected" and r["decided_by"] == VOIDED_BY:
+                continue   # closed as out of date: may be suggested again
+            seen.add(p.get("fingerprint"))
+            if r["status"] == "pending":
+                waiting[p.get("fingerprint")] = (r["id"], p)
+        added, skipped, stale = [], 0, []
         for s in suggestions:
             fp = _fingerprint(s)
-            if fp in seen:
-                skipped += 1
-                continue
             payload = {k: v for k, v in s.items() if k not in ("summary", "details", "project_id")}
             payload["fingerprint"] = fp
+            rows = bind(conn, payload)
+            if rows is not None:
+                payload["bound"] = rows
+            if fp in waiting and rows is not None and \
+                    (waiting[fp][1].get("bound") or {}).get("digest") != rows["digest"]:
+                then = waiting[fp][1].get("bound") or \
+                    (ERASED_WHY if waiting[fp][1].get("bound_erased") else None)
+                stale.append((waiting[fp][0], then, rows))   # its list is out of date: replaced
+            elif fp in seen:
+                skipped += 1
+                continue
             added.append(review.add_item(db_path, s["project_id"], "cleanup", s["summary"],
                                          s["details"], payload, source, conn=conn))
             seen.add(fp)
         conn.commit()
-        return {"queued": len(added), "item_ids": added, "already_suggested": skipped,
-                "withdrew": withdrew}
     finally:
         conn.close()
+    replaced = []
+    for iid, then, rows in stale:
+        why = (deletes._bound_diff(then, rows, _VERBS) if isinstance(then, dict)
+               else ERASED_WHY if then == ERASED_WHY else "queued by an older FlowState")
+        if deletes.void(db_path, iid, f"Replaced by a new suggestion: what it would change "
+                                      f"changed since it was suggested ({why}).", "cleanup"):
+            replaced.append(iid)
+    out = {"queued": len(added), "item_ids": added, "already_suggested": skipped,
+           "withdrew": withdrew}
+    if replaced:
+        out["replaced"] = replaced
+    return out
+
+
+# ---------------------------------------------------------------- the exact list (task 74)
+# Approving a clean-up that changes records is tied to the rows listed when it was queued,
+# the same way a delete is (deletes.bind, task 72): a changed row, or a row added, missing or
+# already removed, and approving it changes nothing and closes it (VOIDED_BY).
+VOIDED_BY = "flowstate (automatic)"
+# `flowstate erase` drops the list (ids, digest, hashes) of a clean-up about an erased record
+# and leaves `bound_erased` (erase.py, task 75): approving it changes nothing, as for any change
+ERASED_WHY = "a record on its list was erased"
+_VERBS = (("rows", "lists"),)
+NONE_LEFT = "none (no record on its list is still there)"   # e.g. its only record was erased
+_TABLE = {"todo": "todos", "learning": "learnings", "problem": "problems", "change": "changes"}
+
+
+def _targets(conn, payload: dict) -> Optional[dict]:
+    """The rows approving this suggestion would change, as they are now ({(table, id): row});
+    a move also lists the record's links, a duplicate the todo it keeps. None: it changes
+    nothing (a duplicate of learnings queued by an older version is only noted)."""
+    kind, recs = payload.get("type"), payload.get("records") or []
+    if not recs:
+        return None
+    if kind == "misfiled":
+        rkind, rid = recs[0]
+        keys = [(_TABLE.get(rkind), rid)]
+        if links.available(conn):
+            keys += [("record_links", r[0]) for r in conn.execute(
+                "SELECT id FROM record_links WHERE (from_type=? AND from_id=?) OR "
+                "(to_type=? AND to_id=?)", (rkind, rid, rkind, rid))]
+    elif kind in ("duplicate", "stale"):
+        if recs[-1][0] != "todo":
+            return None
+        keys = [("todos", rid) for rk, rid in recs if rk == "todo"]
+    else:
+        return None
+    if keys[0][0] is None:
+        return None
+    out = {}
+    for t, k in keys:
+        row = history._row(conn, t, k)
+        if row is not None:
+            out[(t, k)] = row
+    return out
+
+
+def bind(conn, payload: dict) -> Optional[dict]:
+    """The exact list for a suggestion (ids and hashes, no text), or None if it changes nothing."""
+    from . import deletes
+    rows = _targets(conn, payload)
+    return None if rows is None else deletes.bind(rows)
+
+
+def _check(conn, payload: dict) -> None:
+    """Refuse (deletes.DeleteError, closes the item) unless the rows approving this would
+    change are exactly the ones listed when it was queued. A no-op clean-up passes."""
+    from . import deletes
+    now = bind(conn, payload)
+    if now is None:
+        return
+    then = payload.get("bound")
+    if payload.get("bound_erased"):
+        raise deletes.DeleteError(
+            "changed_since_request", f"What this clean-up would change is not what it was "
+            f"suggested with ({ERASED_WHY}). Nothing was changed and the suggestion is closed; "
+            "run the clean-up again (manage_memory action=\"cleanup\") to get a new one.")
+    if not isinstance(then, dict) or not then.get("digest"):
+        raise deletes.DeleteError(
+            "request_outdated", "This clean-up suggestion was queued by an older FlowState and "
+            "isn't tied to an exact list of records, so it was closed. Nothing was changed; run "
+            "the clean-up again (manage_memory action=\"cleanup\") to get a new suggestion.")
+    if now["digest"] != then["digest"]:
+        raise deletes.DeleteError(
+            "changed_since_request", "What this clean-up would change is not what it was "
+            f"suggested with ({deletes._bound_diff(then, now, _VERBS)}). Nothing was changed "
+            "and the suggestion is closed; run the clean-up again (manage_memory "
+            "action=\"cleanup\") to get a new one.")
+
+
+def _role(kind: str, table: str, rid, recs: list) -> str:
+    if table == "record_links":
+        return "moves with it"
+    if kind == "misfiled":
+        return "moves"
+    if kind == "duplicate" and len(recs) > 1 and rid == recs[0][1]:
+        return "kept"
+    return "cancelled"
+
+
+def preview(db_path: Path, item: dict) -> Optional[dict]:
+    """The exact list for the review and phone pages, from the database: each record (id, a
+    short title from the live record, what happens to it), and whether it still matches the
+    list the suggestion was made with ('text': the list and any warning; 'listed': the list
+    alone; 'warning': the warning alone). None for a clean-up that changes nothing. A record
+    that is gone (deleted or erased) is shown by id only."""
+    from . import deletes
+    try:
+        payload = json.loads(item.get("payload") or "{}")
+    except ValueError:
+        return None
+    conn = links.connect(db_path)
+    try:
+        now_rows = _targets(conn, payload)
+        if now_rows is None:
+            return None
+        now = deletes.bind(now_rows)
+        then = payload.get("bound") if isinstance(payload.get("bound"), dict) else None
+        keys = {(t, k) for t, ks in ((then or {}).get("rows") or {}).items() for k in ks}
+        keys |= set(now_rows)
+        recs = payload.get("records") or []
+        lines = []
+        for t, k in sorted(keys, key=lambda x: (x[0] == "record_links", x[0], str(x[1]))):
+            name = deletes._NAMED.get(t, t)
+            if (t, k) not in now_rows:
+                lines.append(f"{name} #{k} (no longer there)")
+                continue
+            title = None if t == "record_links" else links.label(conn, name, k)
+            lines.append(f"{name} #{k}" + (f' "{_short(title, TITLE_MAX)}"' if title else "")
+                         + f": {_role(payload.get('type'), t, k, recs)}")
+    finally:
+        conn.close()
+    stale = then is None or then.get("digest") != now["digest"]
+    lines = lines or [NONE_LEFT]
+    listed = "Approving changes exactly these records: " + "; ".join(lines) + "."
+    text, warning = listed, None
+    if stale:
+        why = deletes._bound_diff(then, now, _VERBS) if then else \
+            ERASED_WHY if payload.get("bound_erased") else "queued by an older FlowState"
+        warning = (f"This list is not the one the suggestion was made with ({why}). Approving it "
+                   "changes nothing; run the clean-up again for a new suggestion.")
+        text += " " + warning
+    return {"lines": lines, "changed_since_request": stale, "text": text, "warning": warning,
+            "listed": listed}
+
+
+def html_for(db_path: Path, it: dict) -> str:
+    """The exact list as escaped HTML for the review page ('' for a no-op clean-up)."""
+    import html
+    got = preview(db_path, it)
+    if not got:
+        return ""
+    out = ("<p class='meta'>Approving changes exactly these records:</p><ul>"
+           + "".join(f"<li>{html.escape(x)}</li>" for x in got["lines"]) + "</ul>")
+    if got["warning"]:
+        out += f"<p><strong>{html.escape(got['warning'])}</strong></p>"
+    return out
 
 
 # ---------------------------------------------------------------- apply (on approval)
@@ -376,6 +553,7 @@ def apply(db_path: Path, item: dict, client: str, move_to: Optional[int] = None)
         target = move_to or payload.get("target_project_id")
         conn = links.connect(db_path)
         try:
+            _check(conn, payload)   # the listed rows, or nothing (again inside the write)
             if links.owner(conn, rkind, rid) is None:
                 raise review.ReviewError("record_not_found", f"{rkind} #{rid} no longer exists.")
             if conn.execute("SELECT 1 FROM projects WHERE id = ?", (target,)).fetchone() is None:
@@ -392,6 +570,7 @@ def apply(db_path: Path, item: dict, client: str, move_to: Optional[int] = None)
             conn = links.connect(db_path)
             try:
                 conn.execute("BEGIN IMMEDIATE")
+                _check(conn, payload)
                 if rkind == "todo":
                     conn.execute("UPDATE todos SET project_id = ?, component_id = NULL WHERE id = ?", (target, rid))
                 elif rkind == "learning":
@@ -418,12 +597,22 @@ def apply(db_path: Path, item: dict, client: str, move_to: Optional[int] = None)
         rkind, rid = recs[-1]   # the newer duplicate / the stale todo
         if rkind != "todo":
             return "none", None   # noted only
+        conn = links.connect(db_path)
+        try:
+            _check(conn, payload)   # the listed rows, or nothing (again inside the write)
+        finally:
+            conn.close()
         with history.tracked(db_path, [("todos", "id", rid)], f"cleanup/{kind}", client):
             conn = links.connect(db_path)
             try:
+                conn.execute("BEGIN IMMEDIATE")
+                _check(conn, payload)
                 conn.execute("UPDATE todos SET status = 'cancelled' WHERE id = ? AND status IN "
                              "('pending', 'in_progress', 'blocked')", (rid,))
                 conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
             finally:
                 conn.close()
         return "todos", rid

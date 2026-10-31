@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "flowstate"
-version = "2.4.3"
+version = "2.4.4"
 description = "Local-first shared project memory for AI apps (MCP server)"
 readme = "README.md"
 license = "MIT"
@@ -24,7 +24,7 @@ classifiers = [
     "Topic :: Software Development",
 ]
 dependencies = [
-    "mcp>=1.26,<2",
+    "mcp>=1.30,<2",
     "pydantic>=2.0.0",
 ]
 
@@ -34,10 +34,17 @@ Repository = "https://github.com/dialectforge/FlowState"
 Changelog = "https://github.com/dialectforge/FlowState/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
+# The off-site encryption needs `cryptography`. `mcp` already brings it, so it is listed here, not
+# in `dependencies`. (2.4.4 changes `dependencies` anyway: mcp>=1.30 for two security advisories,
+# so `flowstate update` to 2.4.4 makes a new .venv.)
+offsite = [
+    "cryptography>=42",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
     "httpx>=0.27",
+    "httpx2",
 ]
 embeddings = [
     "sentence-transformers>=2.2.0",

@@ -127,6 +127,14 @@ SIZE_NAMES = tuple(SIZES)
 _MORE = " ...(handoff list shows it all)"
 
 
+def _exposure_lines() -> list:
+    try:
+        from .remote_auth import exposure_lines
+        return exposure_lines()
+    except Exception:  # noqa: BLE001 - a warning line never breaks the brief
+        return []
+
+
 def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
                 cap: Optional[int] = None, size: str = "standard",
                 shown: Optional[list] = None, since: Optional[str] = None) -> str:
@@ -176,12 +184,22 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
         replaced = links.superseded_decisions(conn)
         replaces = {new: old for old, (new, _since) in replaced.items()}
         decisions = [d for d in decisions if d["id"] not in replaced][:n_dec]
+        # An open possible conflict: neither side is settled. The newer one stays, tagged;
+        # the older one's text is left out (one pointer per older one, which search reaches).
+        disputed, against = {}, {}   # older id -> newer ids; newer id -> older ids
+        pairs = [(r["new_id"], r["old_id"]) for r in conflicts.open_pairs(conn, pid)]
+        pairs += [p for p in conflicts.card_pairs(conn, pid) if p not in pairs]   # N-F16
+        for new_id, old_id in pairs:
+            disputed.setdefault(old_id, []).append(new_id)
+            against.setdefault(new_id, []).append(old_id)
         linked = links.brief_lines(conn, pid) if prof["linked"] else []
         alerts = links.alert_lines(conn, pid)
         conflict_line = conflicts.brief_line(conn, pid)
         from . import conflict_cards
         card_line = conflict_cards.brief_line(conn, pid)
         card_hint = conflict_cards.brief_hint(conn, pid, name)
+        from . import review_cards
+        card_hint = review_cards.brief_hint(conn, pid, name, card_hint)
         mode_line = review_mode.brief_line(db_path, pid) if review_mode.available(conn) else None
         from .deletes import recent_line
         deleted_line = recent_line(conn, pid, name)
@@ -235,8 +253,8 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
             if b.add(line):
                 _note(shown, "handoff", _HANDOFF_ID.match(line))
             room -= len(line) + 1
-    if project.get("description"):
-        b.add(_one_line(project["description"], 200))
+    for line in _exposure_lines():   # a remote token sent over the plain LAN (audit N-F27)
+        b.add(line)
     if session:
         b.add(f"Session #{session['session_id']} is open for you (opened automatically; "
               f"closes itself when idle). Log as you work: "
@@ -255,16 +273,10 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
         b.add(mode_line)
     if deleted_line:
         b.add(deleted_line)
-    for line in alerts:
-        b.add(line)
     if conflict_line:
         b.add(conflict_line)
-    if card_line:
-        b.add(card_line)
     if card_hint:
         b.add(card_hint)
-    if last:
-        b.add(f"Last session ({(last[0]['ended_at'] or '')[:10]}): {_one_line(last[0]['summary'], 280)}")
     if stale_line:
         b.add(_one_line(stale_line, 300))
 
@@ -279,9 +291,23 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
             line = fmt(it)
             if b.used + len(line) + 1 > stop or not b.add(line):
                 break
-            shown.append(f"{kind}:{it['id']}")
+            if not it.get("_left_out"):
+                shown.append(f"{kind}:{it['id']}")
 
     tag = lambda kind, rid: provenance.tag(meta[kind].get(rid))
+    from .stored import END, START
+    # Lines apps wrote (the project's description, linked-project alerts, the last session's
+    # summary) sit inside the fence with the records (task 56, N7), after the card line
+    written = ([_one_line(project["description"], 200)] if project.get("description") else []) \
+        + list(alerts) + ([f"Last session ({(last[0]['ended_at'] or '')[:10]}): "
+                           f"{_one_line(last[0]['summary'], 280)}"] if last else [])
+    marked = any((todos, problems, changes, decisions, learnings, card_line, written)) \
+        and b.add("\n" + START)   # audit D6: stored text is data, not instructions
+    fence = (len(b.lines) - 1,) if marked else ()
+    if marked and card_line:   # its topic is an app's words: inside the fence (N-F16)
+        b.add(_one_line(card_line, 240))
+    for line in written if marked else ():
+        b.add(line)
     section("Open todos", todos, todo_total,
             lambda t: f"- [{priority.label(t['priority'])}] #{t['id']} {_one_line(t['title'], 90)}"
                       + (f" ({t['status']})" if t["status"] in ("in_progress", "blocked") else "")
@@ -297,14 +323,32 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
                       + (f" - {_one_line(c['reason'] or c['new_value'], 90)}" if (c['reason'] or c['new_value']) else "")
                       + tag("change", c["id"]),
             prof["changes"][1], "change")
-    section("Recent decisions", decisions, len(decisions),
-            lambda d: f"- {(d['created_at'] or '')[:10]} #{d['id']} {_one_line(_first_decision(d), 140)}"
+    listed, pointed = {d["id"] for d in decisions}, set()
+    for d in decisions:
+        day = (d["created_at"] or "")[:10]
+        if d["id"] in disputed:
+            pointed.add(d["id"])
+            d["_left_out"] = True
+            d["_line"] = (f"- {day} #{d['id']} in dispute with {_ids(disputed[d['id']])}, "
+                          f"text left out: {_lookup(d['id'])}")
+            continue
+        extra = ""
+        if d["id"] in against:
+            far = [o for o in against[d["id"]] if o not in listed and o not in pointed]
+            pointed.update(far[:1])   # one pointer per line; the Possible conflicts line has all
+            extra = (f" (unsettled: may conflict with {_ids(against[d['id']])}"
+                     + "".join(f"; #{o} in dispute: {_lookup(o)}" for o in far[:1]) + ")")
+        d["_line"] = (f"- {day} #{d['id']} {_one_line(_first_decision(d), 100 if extra else 140)}"
                       + (f" (replaces #{replaces[d['id']]})" if d["id"] in replaces else "")
-                      + tag("decision", d["id"]), prof["decisions"][1], "decision")
+                      + extra + tag("decision", d["id"]))
+    section("Recent decisions", decisions, len(decisions), lambda d: d["_line"],
+            prof["decisions"][1], "decision")
     section("Key learnings", learnings, len(learnings),
             lambda l: f"- [{l['category'] or 'other'}{', verified' if l['verified'] else ''}] "
                       f"{_one_line(l['insight'], 160)}" + tag("learning", l["id"]),
             prof["learnings"][1], "learning")
+    if marked and b.add(END):
+        fence += (len(b.lines) - 1,)
     footer = ("\nMore detail: manage_todos(action=list), manage_problems(action=list), "
               "search (answer=true to ask).")
     if size != "deep":
@@ -318,14 +362,25 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
                 b.add(ln)
     b.add(footer)
 
-    text = b.text()
+    from .stored import unfence   # a fake START / END in stored text can't move the fence (N-F29)
+    text = "\n".join(ln if i in fence else unfence(ln) for i, ln in enumerate(b.lines))
     if len(text) > cap:  # cannot happen by construction; belt and braces
         text = text[: cap - 16] + "\n...(truncated)"
     return text
 
 
-_RULE_ID = re.compile(r"^- R(\d+): ")
+_RULE_ID = re.compile(r"^- R(\d+)[ :]")
 _HANDOFF_ID = re.compile(r"^- H(\d+) \(")
+
+
+def _ids(ids: list) -> str:
+    """#12, #9 (+2 more): at most two, so a tag stays short."""
+    more = f" (+{len(ids) - 2} more)" if len(ids) > 2 else ""
+    return ", ".join(f"#{i}" for i in ids[:2]) + more
+
+
+def _lookup(rid: int) -> str:
+    return f'search(query="D{rid}")'
 
 
 def _note(shown: list, kind: str, m) -> None:

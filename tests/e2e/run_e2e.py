@@ -40,9 +40,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # tests/: fsa_test_keys
-from fsclient import (PY, REPO, HttpClient, StdioClient, ToolError, guard_log, real_dirs,  # noqa: E402
+from fsclient import (PY, REPO, HttpClient, StdioClient, ToolError, _parse_result, guard_log, real_dirs,  # noqa: E402
                       sandbox_env, wait_port)
-from terminal_run import run_in_terminal, run_no_terminal  # noqa: E402
+from terminal_run import run_in_terminal, run_no_terminal, start_in_terminal, stop_in_terminal  # noqa: E402
 
 P = "Lakeside Bakery"
 SHARED = "Bakery Shared Auth"
@@ -56,6 +56,7 @@ READ_ACTIONS = {
     "start_here": None, "search": None,
     "manage_todos": {"list", "next"}, "manage_problems": {"list", "tree"},
     "manage_review": {"list", "get_mode", "walk"},   # walk: decisions are the user's, in boxes
+    "show_review_card": None,                        # MCP Apps hosts only (s15_review_card)
     "manage_handoffs": {"list"},
     "manage_rules": {"list"}, "manage_links": {"list"}, "manage_history": {"list", "who"},
     "manage_projects": {"list", "list_components"}, "manage_memory": {"stale"},
@@ -64,6 +65,9 @@ READ_ACTIONS = {
     "manage_methods": {"list"}, "manage_skills": {"list", "get_state", "list_metrics"},
 }
 
+
+# what apps elsewhere get instead of the phone link (approvals.PHONE_ELSEWHERE, task 54)
+PHONE_ELSEWHERE = ("Open the review list on your phone from the FlowState link you saved, or run `flowstate review-page` on your computer.")
 
 def utc(dt=None):
     return (dt or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M:%S")
@@ -100,7 +104,12 @@ class Report:
         13: "Approvals on: popup, phone link, terminal",
         14: "Only the user turns a guess into user_stated",
         15: "What's waiting, without a terminal: chat walk, local link, phone list",
-        16: "Own tunnel: the owner review page behind the passphrase"}
+        16: "Own tunnel: the owner review page behind the passphrase",
+        17: "Settings on the local review page",
+        18: "Review cards through the relay", 19: "The card offer (Allow tap cards in this app?)",
+        20: "Reopen possible conflicts after an undo",
+        21: "Link removal asks; erase and cut quotes",
+        22: "Project history page"}
 
     def __init__(self):
         self.checks = {n: [] for n in self.TITLES}
@@ -256,7 +265,7 @@ class World:
             conn.close()
 
     def w(self, sql, params=(), db=None):
-        """A direct edit of the temp DB (only to fake the clock)."""
+        """A direct edit of the temp DB (only to fake the clock, or a row an older version wrote)."""
         conn = sqlite3.connect(str(db or self.db), timeout=10)
         try:
             conn.execute(sql, params)
@@ -380,9 +389,16 @@ def s2_day(W):
 
     # rules, links, shared component
     r = cc1.call("manage_rules", action="add", project=P, rule="Never store customer card numbers in our database.")
-    R.check(2, "manage_rules add (user's hard rule)", "receipt" in r and not err(r), r)
-    W.rule_id = (r.get("rule") or {}).get("id")
+    R.check(2, "manage_rules add waits for the user (an app can't set a hard rule, audit D2)",
+            r.get("queued_for_review") and "receipt" in r and not err(r), r)
+    item = r.get("queued_for_review")
+    a = cursor.call("manage_review", action="approve", project=P, item_id=item,
+                    user_request="The user said: yes, add the card numbers rule")
+    R.check(2, "another app can't approve the hard rule for the user", a.get("error") == "user_only", a)
+    rc, out = W.cli_in_terminal(["approve", str(item)], ["y"])
+    R.check(2, "the user approves the rule in their own terminal", rc == 0, short(out, 300))
     r = cc1.call("manage_rules", action="list", project=P)
+    W.rule_id = next((x["id"] for x in r.get("rules", []) if "card numbers" in x.get("rule", "")), None)
     R.check(2, "manage_rules list shows the rule", "card numbers" in json.dumps(r), r)
     b = cursor.call("start_here", project=P, size="quick")
     R.check(2, "hard rule is shown first in the brief", "card numbers" in b.split("Open todos")[0], short(b, 300))
@@ -459,6 +475,10 @@ def s2_day(W):
     R.check(2, "cc2 refused while grok's claim is live", r.get("claimed") is not True, r)
     W.w("UPDATE todo_claims SET expires_at = ? WHERE todo_id = ?",
         (utc(datetime.now(timezone.utc) - timedelta(minutes=2)), t_load))   # fake the clock
+    r = grok.call("manage_todos", action="renew", project=P, todo_id=t_load, minutes=30)
+    R.check(2, "grok can't renew its expired claim (task 72)", r.get("error") == "claim_expired", r)
+    r = cc2.call("manage_todos", action="renew", project=P, todo_id=t_load, minutes=30)
+    R.check(2, "nor can cc2 renew it (task 72)", r.get("error") == "not_claimed", r)
     r = cc2.call("manage_todos", action="claim", project=P, todo_id=t_load)
     R.check(2, "after grok's claim expires cc2 can claim it", r.get("claimed") is True, r)
     r = cc2.call("manage_todos", action="handoff", project=P, todo_id=t_load,
@@ -593,11 +613,24 @@ def s2_day(W):
     subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
     r = cc1.call("manage_data_git", action="status")
     R.check(2, "manage_data_git status before init says it isn't a repository yet", r.get("initialized") is False, r)
-    for act, extra in (("init", {}), ("set_remote", {"remote_url": str(bare)})):
+    r = cc1.call("manage_data_git", action="init")
+    R.check(2, "manage_data_git init (sandbox data folder)", not err(r), r)
+    for act, extra in (("set_remote", {"remote_url": str(bare)}), ("sync", {})):
         r = cc1.call("manage_data_git", action=act, **extra)
-        R.check(2, f"manage_data_git {act} (sandbox data folder, local bare remote)", not err(r), r)
-    r = cc1.call("manage_data_git", action="sync", commit_message="e2e sync")
-    if not R.check(2, "manage_data_git sync to a new, empty remote pushes the first commit", r.get("success") is True, r):
+        R.check(2, f"manage_data_git {act} from an app is refused: the user's own command (D1)",
+                r.get("error") == "user_only", r)
+    rc, out = W.cli_no_terminal("data-git", "remote", str(bare), "--unchecked", stdin="y\n")
+    R.check(2, "an agent's shell can't set the data-git remote (no terminal, piped y)", rc == 2, short(out, 200))
+    rc, out = W.cli_in_terminal(["data-git", "remote", str(bare), "--unchecked"], ["y"])
+    R.check(2, "the user sets the data-git remote in their terminal", rc == 0, short(out, 300))
+    rc, out = W.cli_in_terminal(["data-git", "sync", "-m", "e2e sync"], ["y"])
+    r = {"success": rc == 0, "output": short(out, 300)}
+    pushed = subprocess.run(["git", "ls-tree", "-r", "--name-only", "HEAD"], cwd=bare,
+                            capture_output=True, text=True).stdout.split()
+    R.check(2, "data-git pushes only the markdown export and README, never the database (D1)",
+            pushed and all(p in ("README.md", ".gitignore") or p.startswith(("export/", "projects/"))
+                           for p in pushed) and any(p.startswith("export/") for p in pushed), pushed)
+    if not R.check(2, "data-git sync to a new, empty remote pushes the first commit", r.get("success") is True, r):
         R.finding("low", "First data-git sync to a new empty remote always fails, and calls it a conflict",
                   "manage_data_git init; set_remote <a new empty repo>; sync -> {success:false, step:'pull', "
                   "error:\"couldn't find remote ref main\", conflict:true}. git_sync pulls before the first push, "
@@ -606,22 +639,33 @@ def s2_day(W):
     r = cc1.call("manage_data_git", action="history", limit=5)
     R.check(2, "manage_data_git history shows the local commit", "e2e sync" in json.dumps(r), r)
     r = cc1.call("manage_data_git", action="clone", remote_url=str(bare), local_path=str(W.root / "clone"))
-    R.check(2, "manage_data_git clone into an empty folder answers (no crash)", isinstance(r, dict), r)
-    r = cc1.call("manage_data_git", action="set_remote", remote_url="https://flowstate-e2e.invalid/bakery.git")
-    r = cc1.call("manage_data_git", action="sync", commit_message="offline sync")
-    if not R.check(2, "manage_data_git sync to an unreachable host does not claim it pushed",
+    R.check(2, "manage_data_git clone from an app is refused (D1)", r.get("error") == "user_only", r)
+    W.cli_in_terminal(["data-git", "remote", "https://flowstate-e2e.invalid/bakery.git", "--unchecked"], ["y"])
+    rc, out = W.cli_in_terminal(["data-git", "sync", "-m", "offline sync"], ["y"])
+    r = {"success": rc == 0, "pushed": "Pushed." in out, "output": short(out, 300)}
+    if not R.check(2, "data-git sync to an unreachable host does not claim it pushed",
                    not (r.get("success") is True and r.get("pushed")), r):
         R.finding("medium", "Data-git sync reports success and pushed=true when the remote can't be reached",
                   "manage_data_git set_remote https://flowstate-e2e.invalid/x.git; sync -> {success:true, "
                   "pushed:true}. git_sync treats any 'Could not resolve host' error from pull and push as fine. "
                   "Offline, the user is told their data was pushed when no off-site copy exists.")
     r = cc1.call("manage_rules", action="add", project=P, rule="Always ask before changing prices.")
-    rid = (r.get("rule") or {}).get("id")
+    W.cli_in_terminal(["approve", str(r.get("queued_for_review"))], ["y"])   # the user's OK (D2)
+    rid = next((x["id"] for x in cc1.call("manage_rules", action="list", project=P).get("rules", [])
+                if "changing prices" in x.get("rule", "")), None)
     r = cursor.call("manage_rules", action="remove", project=P, rule_id=rid)
     R.check(2, "manage_rules remove without the user's words is refused", err(r), r)
     r = cursor.call("manage_rules", action="remove", project=P, rule_id=rid,
                     user_request="drop the rule about asking before changing prices")
-    R.check(2, "manage_rules remove with the user's words (kept as removed)", not err(r) and "receipt" in r, r)
+    item = r.get("queued_for_review")
+    R.check(2, "manage_rules remove with the user's words only queues it for the user (task 54)",
+            not err(r) and item and "changing prices" in cc1.call("start_here", project=P), r)
+    r = cursor.call("manage_review", action="approve", project=P, item_id=item,
+                    user_request="The user said: yes, remove that rule")
+    R.check(2, "no app can approve a hard rule's removal (task 54)", r.get("error") == "user_only", r)
+    rc, out = W.cli_in_terminal(["rules", "remove", str(rid)], ["y"])   # the user's own terminal
+    R.check(2, "flowstate rules remove in the user's terminal removes it (kept as removed)",
+            rc == 0 and "changing prices" not in cc1.call("start_here", project=P), short(out, 300))
     r = cc1.call("manage_rules", action="list", project=P, include_removed=True)
     R.check(2, "removed rule still listed with include_removed", "changing prices" in json.dumps(r), r)
     W.mid_brief = cc1.call("start_here", project=P, size="deep")
@@ -1110,6 +1154,38 @@ def s8_backups(W):
     else:
         R.check(8, "manage_memory cleanup asks one plain question for two near-identical todos",
                 False, review_lines(lst))
+    # task 74: a clean-up is bound to the rows it listed; an edit in between voids it
+    cursor.call("log_work", project=P, kind="todo", summary="Order more rye flour from the mill")
+    cc2.call("log_work", project=P, kind="todo", summary="Order more rye flour from the mill!")
+    r = cc1.call("manage_memory", action="cleanup", project=P, kinds=["duplicate"])
+    rye = [x for x in (r.get("item_ids") or []) if "rye flour" in
+           (W.q("SELECT summary FROM review_items WHERE id = ?", (x,))[0]["summary"] or "")]
+    tid = (W.q("SELECT id FROM todos WHERE title LIKE 'Order more rye flour%' ORDER BY id DESC")
+           or [{"id": None}])[0]["id"]
+    if rye and tid:
+        cursor.call("manage_todos", action="update", project=P, todo_id=tid, priority="urgent")
+        lst = cc1.call("manage_review", action="list", project=P, limit=100)
+        line = [x for x in review_lines(lst) if line_id(x) == rye[0]]
+        R.check(8, "the AI's list line says the clean-up is out of date (task 75)",
+                line and line[0].endswith("(out of date: approving changes nothing)"), line)
+        before = W.q("SELECT id, status, priority FROM todos ORDER BY id")
+        r = cursor.call("manage_review", action="approve", project=P, item_id=rye[0],
+                     user_request="yes cancel the duplicate rye flour todo")
+        st = W.q("SELECT status, decided_by FROM review_items WHERE id = ?", (rye[0],))[0]
+        R.check(8, "a clean-up whose todo was edited after it was queued changes nothing and is closed",
+                (r or {}).get("error") == "changed_since_request" and f"todo #{tid} was edited" in r.get("message", "")
+                and W.q("SELECT id, status, priority FROM todos ORDER BY id") == before
+                and (st["status"], st["decided_by"]) == ("rejected", "flowstate (automatic)"), short(r, 300))
+        r = cc1.call("manage_memory", action="cleanup", project=P, kinds=["duplicate"])
+        again = r.get("item_ids") or []
+        r2 = cursor.call("manage_review", action="approve", project=P, item_id=again[0] if again else -1,
+                      user_request="yes cancel the duplicate rye flour todo") if again else r
+        R.check(8, "running the clean-up again suggests it anew, and approving that one works",
+                len(again) == 1 and not err(r2)
+                and W.q("SELECT status FROM todos WHERE id = ?", (tid,))[0]["status"] == "cancelled", short(r2, 300))
+    else:
+        R.check(8, "a clean-up whose todo was edited after it was queued changes nothing and is closed",
+                False, short(r, 300))
     # stale, mark_checked, set_source, import
     r = cc1.call("manage_memory", action="stale", project=P, days=0, limit=5)
     R.check(8, "manage_memory stale (days=0 lists facts)", not err(r), r)
@@ -1612,6 +1688,23 @@ def s13_approvals(W):
     R.check(13, "the user approves it in their terminal", code == 0 and W.count("todos", "id=?", (tid,)) == 0,
             f"exit {code}: {short(out, 160)}")
 
+    # ---- the approval covers the exact rows asked about (task 72)
+    tid = todo("Flyer that gets edited while it waits")
+    r = cursor.call("manage_memory", action="delete", project=P, record_type="todo", record_id=tid)
+    old_item = r.get("delete_requested")
+    cc1.call("manage_todos", action="update", project=P, todo_id=tid, title="Flyer, now a poster")
+    code, out = W.cli_in_terminal(["approve", str(old_item)], ["y"])
+    R.check(13, "a row edited after the request: the user's approval deletes nothing and closes the request",
+            W.count("todos", "id=?", (tid,)) == 1 and not pending(old_item)
+            and W.q("SELECT status FROM review_items WHERE id=?", (old_item,)) == [{"status": "rejected"}]
+            and "changed since the request" in out, f"exit {code}: {short(out, 300)}")
+    r = cursor.call("manage_memory", action="delete", project=P, record_type="todo", record_id=tid)
+    new_item = r.get("delete_requested")
+    code, out = W.cli_in_terminal(["approve", str(new_item)], ["y"])
+    R.check(13, "asking again makes a new request, and approving that one deletes the edited row",
+            new_item and new_item != old_item and code == 0 and W.count("todos", "id=?", (tid,)) == 0,
+            f"exit {code}: {short(out, 200)}")
+
     # ---- review-setting change: turning review off waits; stricter changes don't
     r = cursor.call("manage_review", action="set_mode", project=P, mode="off",
                     user_request="User: turn review off for Lakeside")
@@ -2062,13 +2155,14 @@ def s15_without_terminal(W):
                     "nothing logged, the honest plain list with the links",
                 rc.server_requests == [] and "walked" not in r and r.get("items")
                 and r.get("note") == "No boxes were shown here; nothing was decided."
-                and "relay" in r.get("how_to_decide", "") and r.get("phone") == (pm.group(1) if pm else "?")
+                and "relay" in r.get("how_to_decide", "") and r.get("phone") == PHONE_ELSEWHERE
                 and W.count("approval_log") == rows, (rc.server_requests, r))
         R.check(15, "through the relay (the agent connects from 127.0.0.1): no 127.0.0.1 link in the brief or "
-                    "the walk, the bare phone link instead",
+                    "the walk, and no phone link with the handle either (task 54), a plain sentence",
                 pm and "127.0.0.1" not in rb and "127.0.0.1" not in json.dumps(r) and "review_page" not in r
-                and f"on their phone: {pm.group(1)}," in rline and "?n=" not in rline
-                and pm.group(1) in r.get("how_to_decide", ""), (rline, r))
+                and "e2e-bakery" not in rb and "e2e-bakery" not in json.dumps(r)
+                and "from the FlowState review link they saved" in rline and "?n=" not in rline
+                and "link they saved" in r.get("how_to_decide", ""), (rline, r))
         R.word(f"Brief line through the relay: {rline}")
         R.word(f"Walk through the relay: {r.get('how_to_decide')}")
         ls, lbase, llog = _test_listener(W, penv, "lan-remote", "s15-lan-remote-phone")
@@ -2077,9 +2171,11 @@ def s15_without_terminal(W):
             lline, lb, lr, _ = _from_elsewhere(W, lbase, Q)
         finally:
             _stop(ls, llog)
-        R.check(15, "an app on another computer on the LAN, relay set up: the bare phone link, no 127.0.0.1",
+        R.check(15, "an app on another computer on the LAN, relay set up: no phone link with the handle "
+                    "(task 54), no 127.0.0.1",
                 pm and "127.0.0.1" not in lb and "127.0.0.1" not in json.dumps(lr)
-                and f"on their phone: {pm.group(1)}," in lline and lr.get("phone") == pm.group(1)
+                and "e2e-bakery" not in lb and "e2e-bakery" not in json.dumps(lr)
+                and "from the FlowState review link they saved" in lline and lr.get("phone") == PHONE_ELSEWHERE
                 and "review_page" not in lr and lr.get("items") and "walked" not in lr, (lline, lr))
         with httpx.Client(timeout=30) as hc:
             # the bookmark link: the site (signed-in owner) sends the browser to /review/start with
@@ -2170,8 +2266,78 @@ def s15_without_terminal(W):
             (relay / f).unlink(missing_ok=True)
     R.check(15, "nothing in S15 was approved except by the user's own answer",
             W.count("review_items", f"id IN ({','.join(map(str, ids))}) AND status = 'approved' "
-                                    "AND decided_by NOT LIKE 'chat (%' AND decided_by NOT LIKE 'phone (%' "
+                                    "AND decided_by NOT LIKE 'chat (%' AND decided_by != 'phone' "   # no handle (D19)
                                     "AND decided_by != 'review-page'") == 0)
+
+
+def s15_review_card(W):
+    """An app that advertises MCP Apps (a real initialize, not a stub) gets the review card's
+    tools; a tap is saved through the same approve / reject and logged with path card."""
+    print("\n== S15 review cards (MCP Apps)", flush=True)
+    from fsclient import StdioClient
+    ui = {"extensions": {"io.modelcontextprotocol/ui": {"mimeTypes": ["text/html;profile=mcp-app"]}}}
+    c = StdioClient(W.env, "claude-ai", capabilities=ui, log_path=W.logs / "cards.log")
+    W.started.append(c.proc)
+    host, plain = Agent("cards", c), W.agents["cursor"]
+    try:
+        Q = "Corner Cafe e2e-15"
+        names = {t["name"] for t in c.tools()}
+        R.check(15, "an MCP Apps host lists show_review_card and resolve_review_card; others don't",
+                {"show_review_card", "resolve_review_card"} <= names
+                and not {"show_review_card", "resolve_review_card"} & {t["name"] for t in plain.c.tools()},
+                sorted(names))
+        a = plain.call("log_work", project=Q, kind="todo", summary="Clean the espresso machine", suggested=True)
+        b = plain.call("log_work", project=Q, kind="learning", summary="Oat milk sells out by noon",
+                       suggested=True)
+        ia, ib = a.get("queued_for_review"), b.get("queued_for_review")
+        walk = host.call("manage_review", action="walk", project=Q)
+        sc = walk.get("show_card") if isinstance(walk, dict) else None
+        R.check(15, "the walk on an MCP Apps host points at show_review_card",
+                isinstance(sc, str) and sc.startswith(f'show_review_card(project="{Q}"'), short(walk))
+        raw = c.request("tools/call", {"name": "show_review_card", "arguments": {"project": Q}})
+        shown = _parse_result(raw)
+        codes = (raw.get("_meta") or {}).get("flowstate/taps") or {}
+        seen = json.dumps(raw.get("content")) + json.dumps(raw.get("structuredContent"))
+        R.check(15, "each card's one-use tap code is only in the result's _meta, not in the text "
+                    "or the card data",
+                {str(ia), str(ib)} <= set(codes) and not any(v in seen for v in codes.values()),
+                sorted(codes))
+        ids = [x.get("review_item_id") for x in (shown.get("review_cards") or [])]
+        R.check(15, "show_review_card shows the waiting items oldest first and decides nothing",
+                ia in ids and ib in ids and ids.index(ia) < ids.index(ib)
+                and W.count("review_items", f"id IN ({ia}, {ib}) AND status = 'pending'") == 2, short(shown))
+        refused = host.call("resolve_review_card", item_id=ia, decision="approve", project=Q,
+                            user_request="the user said approve")
+        R.check(15, "a tap with chat text is refused", refused.get("error") == "not_a_card_tap", short(refused))
+        no_ui = plain.call("resolve_review_card", item_id=ia, decision="approve", project=Q)
+        R.check(15, "a tap from an app without MCP Apps is refused", no_ui.get("error") == "not_a_card_tap",
+                short(no_ui))
+        bare = host.call("resolve_review_card", item_id=ia, decision="approve", project=Q)
+        forged = host.call("resolve_review_card", item_id=ia, decision="approve", project=Q,
+                           tap="made-up-code-0123456789")
+        R.check(15, "a tap without the card's own code (the model calling the tool) is refused",
+                bare.get("error") == "not_a_card_tap" and forged.get("error") == "not_a_card_tap"
+                and W.count("review_items", f"id = {ia} AND status = 'pending'") == 1,
+                (short(bare), short(forged)))
+        ok_a = host.call("resolve_review_card", item_id=ia, decision="approve", project=Q,
+                         tap=codes.get(str(ia)))
+        ok_b = host.call("resolve_review_card", item_id=ib, decision="reject", project=Q,
+                         reject_reason="We know that already", tap=codes.get(str(ib)))
+        again = host.call("resolve_review_card", item_id=ib, decision="approve", project=Q,
+                          tap=codes.get(str(ib)))
+        R.check(15, "a tap code works once", again.get("error") in ("not_a_card_tap", "already_decided"),
+                short(again))
+        rows = W.q("SELECT item_id, path, decision FROM approval_log WHERE item_id IN (?, ?) ORDER BY id",
+                   (ia, ib))
+        R.check(15, "Approve saves the todo, Reject keeps the reason, both logged with path card",
+                not err(ok_a) and not err(ok_b)
+                and W.count("todos", "title = 'Clean the espresso machine'") == 1
+                and W.count("review_items", f"id = {ib} AND status = 'rejected' "
+                                            "AND reject_reason = 'We know that already'") == 1
+                and [(r["path"], r["decision"]) for r in rows] == [("card", "approved"), ("card", "rejected")],
+                (short(ok_a), short(ok_b), rows))
+    finally:
+        c.close()
 
 
 def s16_tunnel_page(W):
@@ -2319,6 +2485,141 @@ def report(W, started, test_changed, live_changed):
     return "\n".join(lines)
 
 
+def said(hc, base: str, r) -> str:
+    """The review page's answer to a post: kept on the page's side and shown once on the page
+    the post redirects to (2.4.4: never in the address)."""
+    import html as _html
+    if r.status_code != 303:
+        return ""
+    page = hc.get(base.rstrip("/").rsplit("/s/", 1)[0] + r.headers["location"]
+                  if r.headers["location"].startswith("/") else r.headers["location"])
+    m = re.search(r"<p class='ok'>(.*?)</p>", page.text, re.S)
+    return _html.unescape(m.group(1)) if m else ""
+
+
+def s17_settings_page(W):
+    """The Settings section: read-only on the page an AI's link opens; changed on the page
+    `flowstate review-page --print-url` opens (its one-time link read from its own terminal),
+    with the confirm page for turning approvals off; every change logged as review-page."""
+    import httpx
+    print("\n== S17 settings on the review page", flush=True)
+    cursor, cc1 = W.agents["cursor"], W.agents["cc1"]
+    Q = "Pottery Studio e2e-17"
+    cursor.call("manage_projects", action="create", name=Q, description="S17: settings page")
+    cursor.call("log_work", project=Q, kind="decision", summary="Glaze on Tuesdays", suggested=True)
+    b = brief_text(cc1.call("start_here", project=Q))
+    m = re.search(r"(http://127\.0\.0\.1:\d+/)", b)
+    link = m.group(1) if m else "http://127.0.0.1:1/"
+    before = W.count("review_mode_log")
+    settings = W.q("SELECT key, value FROM approval_settings ORDER BY key")
+    with httpx.Client(timeout=20) as hc:
+        r = hc.get(link)
+        csrf = re.search(r'name="csrf" value="([^"]+)"', r.text)
+        sec = r.text.split("<h2>Settings</h2>", 1)[-1]
+        R.check(17, "the link page shows the settings read-only (open `flowstate review-page` to change these)",
+                r.status_code == 200 and "<h2>Settings</h2>" in r.text and "flowstate review-page</code>" in sec
+                and "/settings/approvals" not in sec, r.status_code)
+        ro = hc.post(link + "settings/approvals", data={"csrf": csrf.group(1) if csrf else "", "scope": "",
+                                                        "state": "on"},
+                     headers={"Origin": link.rstrip("/")}, follow_redirects=False)
+        R.check(17, "a settings post on the link page changes nothing",
+                ro.status_code == 303 and "nothing changed" in said(hc, link, ro)
+                and W.q("SELECT key, value FROM approval_settings ORDER BY key") == settings
+                and W.count("review_mode_log") == before, ro.headers.get("location"))
+        # this FlowState's display name (task 43): set in the terminal, shown on the page, logged
+        code, out = W.cli("name", "Bakery back office")
+        r = hc.get(link)
+        sec = r.text.split("<h2>Settings</h2>", 1)[-1]
+        named = W.q("SELECT old_mode, new_mode, client FROM review_mode_log "
+                    "WHERE scope = 'config:display_name' ORDER BY id")
+        R.check(17, "`flowstate name` renames this FlowState; the page header and its Settings row show it, "
+                "read-only on the link page; the change is logged",
+                code == 0 and "now called \"Bakery back office\"" in out
+                and "FlowState review <span class='inst'>· Bakery back office</span>" in r.text
+                and "<b>Bakery back office</b>." in sec and "/settings/name" not in sec
+                and [tuple(x.values()) for x in named][-1:] == [("Main FlowState", "Bakery back office",
+                                                                  "command-line")], (code, out[:160]))
+        nb = cc1.call("start_here", project=Q)
+        bad, bout = W.cli("name", "x" * 41)
+        W.cli("name", "--reset")
+        R.check(17, "no app reads the name through FlowState; a too-long name is refused; --reset goes back",
+                "Bakery back office" not in json.dumps(nb) and bad == 2 and "at most 40" in bout
+                and "Main FlowState" in hc.get(link).text, bout[:120])
+    if os.name == "nt":
+        R.word("S17: the launch-key part runs on POSIX only (it reads the link from a pseudo-terminal).")
+        return
+    with socket.socket() as sk:
+        sk.bind(("127.0.0.1", 0))
+        port = sk.getsockname()[1]
+    pid, shown = start_in_terminal([PY, "-m", "flowstate", "review-page", "--no-browser", "--print-url",
+                                    "--port", str(port)], b"One-time link:", env=W.env, cwd=str(REPO),
+                                   timeout=40)
+    try:
+        lm = re.search(r"One-time link: (http://127\.0\.0\.1:\d+(/s/[A-Za-z0-9_-]+)/\?key=[A-Za-z0-9_-]+)", shown)
+        R.check(17, "`flowstate review-page --print-url` shows its one-time link on its own terminal", lm,
+                "(link not shown)")
+        if not lm:
+            return
+        origin = f"http://127.0.0.1:{port}"
+        base = origin + lm.group(2)   # the Settings page lives under its own secret path
+        wait_port("127.0.0.1", port, 20)
+        hdr = {"Origin": origin}
+        with httpx.Client(timeout=20, follow_redirects=False) as hc:
+            r = hc.get(lm.group(1))
+            page = hc.get(base + "/")
+            cs = re.search(r'name="csrf" value="([^"]+)"', page.text)
+            csrf = cs.group(1) if cs else ""
+            R.check(17, "the key opens the page with a Settings section that can change things; relay rows greyed out",
+                    r.status_code == 303 and "/settings/approvals" in page.text
+                    and "Only used with the FlowState relay (not set up here)." in page.text, r.status_code)
+
+            def post(path, **data):
+                return hc.post(base + path, data={"csrf": csrf, **data}, headers=hdr)
+            post("/settings/popup", op="add", name="e2e-editor")
+            on = post("/settings/approvals", scope="", state="on")
+            R.check(17, "approvals on and a popup app added from the page (no confirm needed)",
+                    on.status_code == 303
+                    and W.count("approval_settings", "key = 'approvals' AND value = 'on'") == 1
+                    and W.count("approval_settings", "key = 'popup_clients_add' AND value LIKE '%e2e-editor%'") == 1,
+                    on.headers.get("location"))
+            ask = post("/settings/approvals", scope="", state="off")
+            tok = re.search(r"name='token' value='([^']+)'", ask.text)
+            R.check(17, "turning approvals off shows the confirm page first; nothing changed yet",
+                    ask.status_code == 200 and tok and "Only do this if" in ask.text
+                    and W.count("approval_settings", "key = 'approvals' AND value = 'on'") == 1, ask.status_code)
+            form = {"token": tok.group(1) if tok else "", "setting": "approvals", "scope": "", "state": "off"}
+            wrong = post("/settings/confirm", **{**form, "setting": "relay_chat", "state": "on"})
+            R.check(17, "a confirm token used for another change changes nothing (and is used up)",
+                    "no longer valid" in said(hc, base, wrong)
+                    and W.count("approval_settings", "key = 'approvals' AND value = 'on'") == 1)
+            ask = post("/settings/approvals", scope="", state="off")
+            tok = re.search(r"name='token' value='([^']+)'", ask.text)
+            form["token"] = tok.group(1) if tok else ""
+            ok = said(hc, base, post("/settings/confirm", **form))   # each answer is shown once
+            replay = said(hc, base, post("/settings/confirm", **form))
+            R.check(17, "Yes on the confirm page turns them off; the same token again is refused",
+                    "now off" in ok and "no longer valid" in replay
+                    and W.count("approval_settings", "key = 'approvals' AND value = 'off'") == 1,
+                    (ok, replay))
+            ign = post("/settings/relay-chat", state="on")
+            R.check(17, "without the relay, a relay setting post is ignored",
+                    "not set up here" in said(hc, base, ign)
+                    and W.count("approval_settings", "key = 'relay_chat_approvals'") == 0)
+        rows = W.q("SELECT scope, client, caller, app, machine, identity_source FROM review_mode_log "
+                   "WHERE id > (SELECT COALESCE(MAX(id), 0) - 3 FROM review_mode_log) ORDER BY id")
+        R.check(17, "each change is logged as review-page with the identity fields",
+                len(rows) == 3 and all(x["client"] == "review-page" and x["caller"] == "review-page"
+                                       and x["app"] == "review-page" and x["machine"]
+                                       and x["identity_source"] == "self_reported" for x in rows)
+                and [x["scope"] for x in rows] == ["popup_clients", "approvals", "approvals"], rows)
+        tools = cursor.call("manage_review", action="set_mode", project=Q, mode="auto_only",
+                            scope="approvals", user_request="the user said turn approvals on")
+        R.check(17, "an MCP tool can't touch the approvals setting",
+                W.count("approval_settings", "key = 'approvals' AND value = 'off'") == 1, short(tools, 160))
+    finally:
+        stop_in_terminal(pid)
+
+
 def rmtree(root: Path) -> None:
     """Delete the sandbox. git's object files are read-only, which Windows won't delete as is."""
     def again(fn, path, _exc):
@@ -2329,6 +2630,461 @@ def rmtree(root: Path) -> None:
 
 def git(*a):
     return subprocess.run(["git", "-C", str(REPO), *a], capture_output=True, text=True).stdout.strip()
+
+
+def s18_relay_cards(W):
+    """Task 65: the in-chat cards through the relay. FlowState's HTTP app as the relay agent
+    builds it (relay=True), a connector signed in with its own remote token that says it shows
+    MCP Apps. Until the user puts that sign-in on the card list (in their own terminal) it gets
+    the text and how to turn cards on; then the card, and a tap with the card's code counts once,
+    while the AI's own manage_review approve stays phone only."""
+    print("\n== S18 review cards through the relay", flush=True)
+    Q = "Corner Cafe e2e-18"
+    ui = {"extensions": {"io.modelcontextprotocol/ui": {"mimeTypes": ["text/html;profile=mcp-app"]}}}
+    plain = W.agents["cursor"]
+    cowork = StdioClient(W.env, "local-agent-mode-flowstate", version="1.0.0", capabilities=ui,
+                         log_path=W.logs / "s18-cowork.log")
+    W.started.append(cowork.proc)
+    try:
+        names = {t["name"] for t in cowork.tools()}
+    finally:
+        cowork.close()
+    R.check(18, "Claude Desktop's Cowork mode on stdio (local-agent-mode-flowstate) gets the card tools "
+                "again (2.4.4 before task 65: text only)",
+            {"show_conflict_card", "resolve_conflict_card", "show_review_card"} <= names, sorted(names))
+    tok_file = W.root / "s18-connector-token.txt"
+    rc, out = W.cli("remote", "add-client", "--name", "Desktop connector", "--to-file", str(tok_file))
+    R.check(18, "the user makes the connector its own remote token", rc == 0 and tok_file.exists(), short(out))
+    token = tok_file.read_text().strip()
+    made = plain.call("manage_projects", action="create", name=Q, description="relay cards")
+    R.check(18, "a project for the relay cards", not err(made), short(made))
+    a = plain.call("log_work", project=Q, kind="decision", summary="Open at 7 on weekdays")["record"]["id"]
+    b = plain.call("log_work", project=Q, kind="decision", summary="Open at 8 on weekdays")["record"]["id"]
+    dis = plain.call("manage_links", action="flag_conflict", project=Q, topic="opening hours",
+                     item_id=a, target_id=b).get("flagged")
+    sug = plain.call("log_work", project=Q, kind="todo", summary="Descale the kettle",
+                     suggested=True).get("queued_for_review")
+    srv, base, plog = _test_listener(W, W.env, "relay", "s18-relay")
+    host = None
+    try:
+        wait_port("127.0.0.1", int(base.rsplit(":", 1)[1]), 40)
+        host = HttpClient(f"{base}/mcp", token, "claude-ai", capabilities=ui)
+        names = {t["name"] for t in host.tools()}
+        listed = host.call("manage_review", action="list", project=Q)
+        R.check(18, "through the relay, a connector not on the card list: no card tools, the text card, "
+                    "and the one-time offer on the user's review page (task 65b)",
+                not {"show_conflict_card", "resolve_conflict_card"} & names and "show_card" not in listed
+                and listed.get("conflict_cards")
+                and "Allow tap cards in claude-ai (signed in as Desktop connector)?" in listed.get("cards_off", ""),
+                short(listed))
+        rc, out = W.cli_in_terminal(["approvals", "cards", "add", "--sign-in", "Desktop connector"], ["y"])
+        R.check(18, "the user adds the connector's sign-in in their own terminal (y)", rc == 0, short(out))
+        tools = {t["name"]: t for t in host.tools()}
+        vis = ((tools.get("resolve_conflict_card") or {}).get("_meta") or {}).get("ui", {}).get("visibility")
+        page = host.request("resources/read", {"uri": "ui://flowstate/conflict-card.html"})
+        R.check(18, "then the card tools are listed (resolve app-only) and the card page reads over HTTP",
+                {"show_conflict_card", "show_review_card", "resolve_review_card"} <= set(tools)
+                and vis == ["app"] and "<!DOCTYPE html>" in page["contents"][0]["text"], sorted(tools))
+        ai = host.call("manage_review", action="approve", item_id=sug, project=Q,
+                       user_request="The user said: approve the kettle todo")
+        R.check(18, "the AI's own approve through the relay stays phone only",
+                ai.get("error") == "phone_only"
+                and W.count("review_items", f"id = {sug} AND status = 'pending'") == 1, short(ai))
+        raw = host.request("tools/call", {"name": "show_conflict_card",
+                                          "arguments": {"project": Q, "item_id": dis}})
+        code = ((raw.get("_meta") or {}).get("flowstate/taps") or {}).get(str(dis))
+        seen = json.dumps(raw.get("content")) + json.dumps(raw.get("structuredContent"))
+        R.check(18, "the card's data and its one-use code come back through the relay, the code only in _meta",
+                bool(code) and code not in seen and (raw.get("structuredContent") or {}).get("cards"),
+                short(raw))
+        bare = host.call("resolve_conflict_card", item_id=dis, keep="a", project=Q)
+        R.check(18, "a tap without the card's code (the model calling the hidden tool) is refused",
+                bare.get("error") == "not_a_card_tap", short(bare))
+        done = host.call("resolve_conflict_card", item_id=dis, keep="a", project=Q, tap=code)
+        again = host.call("resolve_conflict_card", item_id=dis, keep="b", project=Q, tap=code)
+        R.check(18, "a tap with the code decides it once; the same code again is refused",
+                done.get("resolved") == dis and again.get("error") in ("not_a_card_tap", "already_resolved")
+                and W.count("review_items", f"id = {dis} AND status = 'approved'") == 1,
+                (short(done), short(again)))
+        rows = W.q("SELECT path, client FROM approval_log WHERE item_id = ?", (dis,))
+        R.check(18, "the tap is logged as a card tap by the connector's sign-in",
+                [(r["path"], r["client"]) for r in rows] ==
+                [("card", "card (claude-ai, signed in as Desktop connector)")], rows)
+    finally:
+        if host:
+            host.close()
+        _stop(srv, plog)
+
+
+def s19_card_offer(W):
+    """Task 65b: a connector on its own sign-in that draws cards is OFFERED them once, in the
+    review queue ("Allow tap cards in <app>?"). No AI and not the terminal answers it; Allow on
+    the review page `flowstate review-page` opens turns the cards on for that sign-in; removing
+    it in the terminal makes it text-only again, with no new offer."""
+    import httpx
+    print("\n== S19 the card offer", flush=True)
+    Q = "Bike Repair e2e-19"
+    ui = {"extensions": {"io.modelcontextprotocol/ui": {"mimeTypes": ["text/html;profile=mcp-app"]}}}
+    plain = W.agents["cursor"]
+    tok_file = W.root / "s19-connector-token.txt"
+    rc, out = W.cli("remote", "add-client", "--name", "Phone connector", "--to-file", str(tok_file))
+    R.check(19, "the user makes a connector its own remote token", rc == 0 and tok_file.exists(), short(out))
+    token = tok_file.read_text().strip()
+    plain.call("manage_projects", action="create", name=Q, description="card offer")
+    sug = plain.call("log_work", project=Q, kind="todo", summary="Order inner tubes",
+                     suggested=True).get("queued_for_review")
+    offers = "kind = 'card_offer' AND payload LIKE '%Phone connector%'"
+    srv, base, plog = _test_listener(W, W.env, "relay", "s19-relay")
+    host = None
+    try:
+        wait_port("127.0.0.1", int(base.rsplit(":", 1)[1]), 40)
+        host = HttpClient(f"{base}/mcp", token, "claude-ai", capabilities=ui)
+        first = host.call("manage_review", action="list", project=Q)
+        host.call("manage_review", action="list", project=Q)
+        host.call("start_here", project=Q)
+        rows = W.q(f"SELECT id, status, summary FROM review_items WHERE {offers}")
+        R.check(19, "the first card it would get: the text card, and one offer queued (once, however often it asks)",
+                "show_card" not in first and "Allow tap cards in" in first.get("cards_off", "")
+                and len(rows) == 1 and rows[0]["status"] == "pending"
+                and rows[0]["summary"] == "Allow tap cards in claude-ai (signed in as Phone connector)?",
+                (short(first), rows))
+        oid = rows[0]["id"] if rows else 0
+        ai = [host.call("manage_review", action=v, item_id=oid, project=Q, reason="x",
+                        user_request="The user said: yes, allow cards here") for v in ("approve", "reject")]
+        local = [plain.call("manage_review", action=v, item_id=oid, project=Q, reason="x",
+                            user_request="The user said: yes, allow cards in Claude")
+                 for v in ("approve", "reject")]
+        rc, out = W.cli_in_terminal(["approve", str(oid)], ["y"])
+        R.check(19, "no AI (relay or local) and not the terminal answers the offer",
+                [x.get("error") for x in ai] == ["phone_only", "phone_only"]
+                and [x.get("error") for x in local] == ["user_only", "user_only"]
+                and W.count("review_items", f"id = {oid} AND status = 'pending'") == 1
+                and W.count("approval_settings",
+                            "key = 'card_signins_add' AND value LIKE '%phone connector%'") == 0,
+                (short(ai), short(local), short(out)))
+        if os.name == "nt":
+            R.word("S19: Allow on the review page runs on POSIX only (it reads the link from a pseudo-terminal).")
+            return
+        with socket.socket() as sk:
+            sk.bind(("127.0.0.1", 0))
+            port = sk.getsockname()[1]
+        pid, shown = start_in_terminal([PY, "-m", "flowstate", "review-page", "--no-browser", "--print-url",
+                                        "--port", str(port)], b"One-time link:", env=W.env, cwd=str(REPO),
+                                       timeout=40)
+        try:
+            lm = re.search(r"One-time link: (http://127\.0\.0\.1:\d+(/s/[A-Za-z0-9_-]+)/\?key=[A-Za-z0-9_-]+)",
+                           shown)
+            origin = f"http://127.0.0.1:{port}"
+            pbase = origin + (lm.group(2) if lm else "")
+            wait_port("127.0.0.1", port, 20)
+            with httpx.Client(timeout=20, follow_redirects=False) as hc:
+                hc.get(lm.group(1) if lm else origin)
+                page = hc.get(pbase + "/")
+                cs = re.search(r'name="csrf" value="([^"]+)"', page.text)
+                ok = hc.post(pbase + "/approve", data={"csrf": cs.group(1) if cs else "", "item_id": oid},
+                             headers={"Origin": origin})
+                R.check(19, "the user taps Allow on the review page: the sign-in is on the card list, logged",
+                        "Allow tap cards in claude-ai (signed in as Phone connector)?" in page.text
+                        and ok.status_code == 303
+                        and W.count("review_items", f"id = {oid} AND status = 'approved'") == 1
+                        and W.count("approval_settings",
+                                    "key = 'card_signins_add' AND value LIKE '%phone connector%'") == 1
+                        and [(r["path"], r["decision"]) for r in
+                             W.q("SELECT path, decision FROM approval_log WHERE item_id = ?", (oid,))]
+                        == [("review page", "approved")], page.status_code)
+        finally:
+            stop_in_terminal(pid)
+        listed = host.call("manage_review", action="list", project=Q)
+        raw = host.request("tools/call", {"name": "show_review_card",
+                                          "arguments": {"project": Q, "item_id": sug}})
+        code = ((raw.get("_meta") or {}).get("flowstate/taps") or {}).get(str(sug))
+        done = host.call("resolve_review_card", item_id=sug, decision="approve", project=Q, tap=code)
+        R.check(19, "then the next manage_review on that connection points to the card, and a tap counts",
+                listed.get("show_card") == f'show_review_card(project="{Q}", item_id={sug})'
+                and "cards_off" not in listed and done.get("resolved") == sug,
+                (short(listed), short(done)))
+        rc, out = W.cli("approvals", "cards", "remove", "--sign-in", "Phone connector")
+        plain.call("log_work", project=Q, kind="todo", summary="True the back wheel", suggested=True)
+        names = {t["name"] for t in host.tools()}
+        after = host.call("manage_review", action="list", project=Q)
+        R.check(19, "removed in the terminal: text only again, and no new offer",
+                rc == 0 and "show_review_card" not in names and "show_card" not in after
+                and "--sign-in" in after.get("cards_off", "") and W.count("review_items", offers) == 1,
+                (short(out), short(after)))
+    finally:
+        if host:
+            host.close()
+        _stop(srv, plog)
+
+
+def s20_reopen_after_undo(W):
+    """Task 69: an app undoes its own decision that had replaced another; the possible conflict
+    that replacement closed is not reopened by the app, and FlowState asks the user once.
+    No AI and not the terminal answers it; Reopen on the review page puts it back in the
+    brief, with history and the approval log."""
+    import httpx
+    print("\n== S20 reopen possible conflicts after an undo", flush=True)
+    Q = "Tea Shop e2e-20"
+    cc1, cursor = W.agents["cc1"], W.agents["cursor"]
+    cc1.call("manage_projects", action="create", name=Q, description="reopen after undo")
+    cc1.call("manage_projects", action="add_component", project=Q, name="till", description="Till")
+    a = cc1.call("log_work", project=Q, kind="decision", component="till",
+                 summary="Use a paper ledger for the till")
+    b = cc1.call("log_work", project=Q, kind="decision", component="till",
+                 summary="Use a tablet ledger for the till")
+    da, db_ = a["record"]["id"], b["record"]["id"]
+    pair = W.q("SELECT id FROM decision_conflicts WHERE new_id = ? AND old_id = ?", (db_, da))
+    c = cursor.call("log_work", project=Q, kind="decision", component="till",
+                    summary="Use the card reader's own ledger for the till", replaces=da)
+    dc = c["record"]["id"]
+    cid = pair[0]["id"] if pair else 0
+    R.check(20, "a replacing decision closes the possible conflict (it leaves the brief)",
+            cid and W.count("decision_conflicts", f"id = {cid} AND status = 'resolved_replaced'") == 1
+            and f"D{db_} vs D{da}" not in cc1.call("start_here", project=Q), short(c))
+    asks = "kind = 'reopen_conflict'"
+    u1 = cursor.call("manage_history", action="undo", project=Q, record_type="decision", record_id=dc)
+    cursor.call("manage_history", action="undo", project=Q, record_type="decision", record_id=dc)
+    u3 = cursor.call("manage_history", action="undo", project=Q, record_type="decision", record_id=dc)
+    rows = W.q(f"SELECT id, status, summary, details FROM review_items WHERE {asks}")
+    item = rows[0]["id"] if rows else 0
+    R.check(20, "undo / redo / undo: the pair stays closed, and ONE question waits for the user, "
+                "naming both decisions in plain words",
+            len(rows) == 1 and rows[0]["status"] == "pending"
+            and "Use a paper ledger for the till" in rows[0]["summary"]
+            and "Use a tablet ledger for the till" in rows[0]["summary"]
+            and (u1.get("reopen_question") or {}).get("item_id") == item
+            and (u3.get("reopen_question") or {}).get("item_id") == item
+            and W.count("decision_conflicts", f"id = {cid} AND status = 'resolved_replaced'") == 1,
+            (short(u1), rows))
+    words = "The user said: yes, reopen the till conflict please"
+    tried = [ag.call("manage_review", action=v, item_id=item, project=Q, reason="x", user_request=words)
+             for ag in (cc1, cursor) for v in ("approve", "reject")]
+    rc, out = W.cli_in_terminal(["approve", str(item)], ["y"])
+    R.check(20, "no AI (either app, approve or reject) and not the terminal answers it; nothing changes",
+            [t.get("error") for t in tried] == ["user_only"] * 4
+            and W.count("review_items", f"id = {item} AND status = 'pending'") == 1
+            and W.count("decision_conflicts", f"id = {cid} AND status = 'resolved_replaced'") == 1
+            and W.count("approval_log", f"item_id = {item}") == 0, (short(tried), short(out)))
+    if os.name == "nt":
+        R.word("S20: Reopen on the review page runs on POSIX only (it reads the link from a pseudo-terminal).")
+        return
+    with socket.socket() as sk:
+        sk.bind(("127.0.0.1", 0))
+        port = sk.getsockname()[1]
+    pid, shown = start_in_terminal([PY, "-m", "flowstate", "review-page", "--no-browser", "--print-url",
+                                    "--port", str(port)], b"One-time link:", env=W.env, cwd=str(REPO),
+                                   timeout=40)
+    try:
+        lm = re.search(r"One-time link: (http://127\.0\.0\.1:\d+(/s/[A-Za-z0-9_-]+)/\?key=[A-Za-z0-9_-]+)",
+                       shown)
+        origin = f"http://127.0.0.1:{port}"
+        pbase = origin + (lm.group(2) if lm else "")
+        wait_port("127.0.0.1", port, 20)
+        with httpx.Client(timeout=20, follow_redirects=False) as hc:
+            hc.get(lm.group(1) if lm else origin)
+            page = hc.get(pbase + "/")
+            cs = re.search(r'name="csrf" value="([^"]+)"', page.text)
+            ok = hc.post(pbase + "/approve", data={"csrf": cs.group(1) if cs else "", "item_id": item},
+                         headers={"Origin": origin})
+    finally:
+        stop_in_terminal(pid)
+    hist = W.q("SELECT tool, app FROM record_history WHERE table_name = 'decision_conflicts' "
+               "AND record_id = ? AND tool = 'queue/conflict_reopened'", (cid,))
+    R.check(20, "the user taps Reopen on the review page: open again, in the history and the approval log",
+            "Reopen" in page.text and ok.status_code == 303
+            and W.count("review_items", f"id = {item} AND status = 'approved'") == 1
+            and W.count("decision_conflicts", f"id = {cid} AND status = 'open'") == 1
+            and len(hist) == 1 and hist[0]["app"] == "review-page"
+            and [(r["path"], r["decision"]) for r in
+                 W.q("SELECT path, decision FROM approval_log WHERE item_id = ?", (item,))]
+            == [("review page", "approved")], (page.status_code, hist))
+    b2 = cursor.call("start_here", project=Q)
+    R.check(20, "the pair is back in the brief, and asked again in the review queue",
+            f"D{db_} vs D{da}" in b2
+            and W.count("review_items", f"kind = 'conflict' AND status = 'pending' AND "
+                                        f"payload LIKE '%\"conflict_id\": {cid},%'") == 1, short(b2, 300))
+
+
+def s21_link_remove_and_erase(W):
+    """Task 70: removing a supersedes link that had closed a possible conflict asks the user
+    the same one question (FlowState itself queued it; no AI and not the terminal answers it),
+    and `flowstate erase` leaves no part of an erased decision in a possible-conflict item, also
+    one an older version stored with the quote cut short with "...". Task 71: the other items
+    keep their edit history, with the erased text blanked inside it."""
+    print("\n== S21 link removal asks; erase and cut quotes", flush=True)
+    Q = "Bike Shop e2e-21"
+    cc1, cursor = W.agents["cc1"], W.agents["cursor"]
+    cc1.call("manage_projects", action="create", name=Q, description="link removal and erase")
+    cc1.call("manage_projects", action="add_component", project=Q, name="repairs", description="Repairs")
+    a = cc1.call("log_work", project=Q, kind="decision", component="repairs",
+                 summary="Book repairs by phone only")
+    b = cc1.call("log_work", project=Q, kind="decision", component="repairs",
+                 summary="Book repairs by email only")
+    da, db_ = a["record"]["id"], b["record"]["id"]
+    pair = W.q("SELECT id FROM decision_conflicts WHERE new_id = ? AND old_id = ?", (db_, da))
+    cid = pair[0]["id"] if pair else 0
+    c = cursor.call("log_work", project=Q, kind="decision", component="repairs",
+                    summary="Book repairs in the shop's web calendar")
+    dc = c["record"]["id"]
+    link = dict(project=Q, link_type="supersedes", item_type="decision", item_id=dc,
+                target_type="decision", target_id=da)
+    added = cursor.call("manage_links", action="add", **link)
+    lid = (added.get("link") or {}).get("id")
+    r1 = cursor.call("manage_links", action="remove", **link)
+    cursor.call("manage_links", action="remove", project=Q, link_id=lid)
+    cursor.call("manage_links", action="add", **link)
+    cursor.call("manage_links", action="remove", **link)
+    rows = W.q("SELECT id, status, summary, app, identity_source FROM review_items WHERE "
+               "kind = 'reopen_conflict' AND project_id = (SELECT id FROM projects WHERE name = ?)", (Q,))
+    item = rows[0]["id"] if rows else 0
+    R.check(21, "removing the supersedes link (also again, and after adding it back) asks ONE question, "
+                "queued by FlowState itself; the pair stays closed",
+            cid and len(rows) == 1 and rows[0]["status"] == "pending"
+            and (rows[0]["app"], rows[0]["identity_source"]) == ("FlowState", "flowstate")
+            and "Book repairs by phone only" in rows[0]["summary"]
+            and (r1.get("reopen_question") or {}).get("item_id") == item
+            and W.count("decision_conflicts", f"id = {cid} AND status = 'resolved_replaced'") == 1,
+            (short(r1), rows))
+    words = "The user said: yes, reopen the repairs conflict please"
+    tried = [ag.call("manage_review", action=v, item_id=item, project=Q, reason="x", user_request=words)
+             for ag in (cc1, cursor) for v in ("approve", "reject")]
+    rc, out = W.cli_in_terminal(["approve", str(item)], ["y"])
+    R.check(21, "no AI (either app, approve or reject) and not the terminal answers it; nothing changes",
+            [t.get("error") for t in tried] == ["user_only"] * 4
+            and W.count("review_items", f"id = {item} AND status = 'pending'") == 1
+            and W.count("approval_log", f"item_id = {item}") == 0, (short(tried), short(out)))
+    long = ("Close the workshop on Mondays so the two mechanics can rebuild the wheel truing stand, "
+            "sort the spare parts shelves and order tyres for the spring rush before it starts")
+    d = cc1.call("log_work", project=Q, kind="decision", component="repairs", summary=long)
+    dd = d["record"]["id"]
+    pid = W.q("SELECT id FROM projects WHERE name = ?", (Q,))[0]["id"]
+    cut = long[:67].rstrip() + "..."
+    W.w("INSERT INTO review_items (project_id, kind, summary, details, payload, source, created_at) "
+        "VALUES (?, 'conflict', ?, 'FlowState found these decisions read alike.', ?, 'cursor', "
+        "'2025-11-02T10:00:00Z')",
+        (pid, f'Possible conflict: D{dd} "{cut}" vs D{da} "Book repairs by phone only"',
+         json.dumps({"conflict_id": None, "new_id": dd, "old_id": da, "score": 0.5})))
+    old_item = W.q("SELECT id FROM review_items WHERE kind = 'conflict' AND summary LIKE ?",
+                   (f'%D{dd} "{cut}"%',))[0]["id"]
+    W.w("INSERT INTO record_history (edit_id, table_name, record_id, project_id, tool, old_row, "
+        "new_row, client, created_at) VALUES ('e2e-21-old', 'review_items', ?, ?, 'queue/review_edit', "
+        "?, NULL, 'cursor', '2025-11-02T10:00:00Z')",
+        (old_item, pid, json.dumps({"summary": f'Possible conflict: D{dd} "{cut}"'})))
+    sug = cursor.call("log_work", project=Q, kind="todo", suggested=True,
+                      summary=f"Ask the team about this: {long}")
+    sid = sug.get("queued_for_review") or 0
+    cc1.call("manage_review", action="approve", project=Q, item_id=sid,
+             summary="Ask the team about closing on Mondays",
+             user_request="The user said: approve the team question, but make it shorter")
+    cc1.call("manage_memory", action="delete", project=Q, record_type="decision", record_id=dd)
+    rc, out = W.cli_in_terminal(["erase", f"decision:{dd}"], ["y"])
+    hist = W.q("SELECT record_id, old_row, new_row FROM record_history WHERE table_name = "
+               "'review_items' AND record_id IN (?, ?)", (old_item, sid))
+    blob = " ".join(f"{h['old_row']} {h['new_row']}" for h in hist)
+    left = W.count("review_items", "summary || COALESCE(details, '') || payload LIKE ?",
+                   ("%Close the workshop on Mondays%",))
+    R.check(21, "erase (the user's y) leaves nothing of the decision in a possible-conflict item an older "
+                "version stored with a cut quote",
+            rc == 0 and left == 0
+            and W.count("review_items", "kind = 'conflict' AND summary LIKE ?",
+                        (f'%D{dd} "[erased]"%Book repairs by phone only%',)) == 1, (rc, short(out)))
+    R.check(21, "erase keeps the edit history of the other items (the old item's row, an approve with "
+                "edits of a todo that quoted it), with the decision's text blanked inside",
+            rc == 0 and sorted(h["record_id"] for h in hist) == sorted([old_item, sid])
+            and "workshop on Mondays" not in blob and "two mechanics" not in blob
+            and "[erased]" in blob and "Ask the team about closing on Mondays" in blob, short(hist))
+
+
+def s22_project_history(W):
+    """Task 73: the review page's Project history, opened from the link in a real app's brief:
+    the project's path in time order with who did each step, the Todos view (who created each
+    todo, its status), one todo's whole timeline (claim, completion), a decision replaced by
+    another, an erased decision shown as [erased] with its text nowhere, read-only (no form
+    that posts), and no such page on the HTTP listener's address."""
+    import httpx
+    print("\n== S22 project history page", flush=True)
+    Q = "Garden Centre e2e-22"
+    cc1, cursor = W.agents["cc1"], W.agents["cursor"]
+    gone_text = "Water the seedlings with the blue hose at dawn"
+    cc1.call("manage_projects", action="create", name=Q, description="S22: history page")
+    t = cc1.call("log_work", project=Q, kind="todo", summary="Repot the lemon tree")
+    tid = t["record"]["id"]
+    cursor.call("manage_todos", action="claim", project=Q, todo_id=tid)
+    cursor.call("manage_todos", action="update", project=Q, todo_id=tid, status="done")
+    old = cc1.call("log_work", project=Q, kind="decision", summary="Open the shop at eight")["record"]["id"]
+    new = cursor.call("log_work", project=Q, kind="decision", summary="Open the shop at nine",
+                      replaces=old)["record"]["id"]
+    gone = cc1.call("log_work", project=Q, kind="decision", summary=gone_text)["record"]["id"]
+    cc1.call("manage_memory", action="delete", project=Q, record_type="decision", record_id=gone)
+    rc, out = W.cli_in_terminal(["erase", f"decision:{gone}"], ["y"])
+    p = W.q("SELECT id FROM projects WHERE name = ?", (Q,))
+    pid = p[0]["id"] if p else 0
+    # something waiting for review, so the brief carries the page's link
+    cursor.call("log_work", project=Q, kind="todo", summary="Order more terracotta pots", suggested=True)
+    b = brief_text(cc1.call("start_here", project=Q))
+    m = re.search(r"(http://127\.0\.0\.1:\d+/)", b)
+    R.check(22, "the brief carries the local review page's link", m, short(b[-300:]))
+    if not m:
+        return
+    link = m.group(1)
+    with httpx.Client(timeout=20) as hc:
+        h = hc.get(f"{link}?view=history&project={pid}")
+        R.check(22, "the brief's review link opens Project history: the project's path in time order, "
+                    "each step with its app and machine",
+                h.status_code == 200 and "<h2>Project history</h2>" in h.text
+                and "project created" in h.text and "Repot the lemon tree" in h.text
+                and h.text.index("project created") > h.text.index("Repot the lemon tree")
+                and "by claude-code" in h.text and "by cursor" in h.text and " · on " in h.text,
+                (h.status_code, short(h.text[-300:])))
+        o = hc.get(f"{link}?view=history&project={pid}&order=oldest").text
+        q0 = hc.get(link).text
+        R.check(22, "newest first by default, oldest first on request, and the brief's page links to "
+                    "Project history like Who did what (task 75)",
+                "project created" in o and o.index("project created") < o.index("Repot the lemon tree")
+                and "?view=history'>Project history</a>" in q0 and "?view=who'>Who did what</a>" in q0,
+                short(q0[:400]))
+        other = [r["id"] for r in W.q("SELECT id FROM projects WHERE id != ? ORDER BY id LIMIT 1", (pid,))]
+        tdo = W.q("SELECT id FROM todos WHERE project_id = ? ORDER BY id LIMIT 1", (pid,))
+        if other and tdo:
+            rr = hc.get(f"{link}?view=record&project={other[0]}&type=todo&id={tdo[0]['id']}",
+                        follow_redirects=False)
+            R.check(22, "a record page under another project goes to the record's own project (task 75)",
+                    rr.status_code == 303 and f"project={pid}&" in rr.headers.get("location", ""),
+                    (rr.status_code, rr.headers.get("location")))
+        R.check(22, "a decision replaced by another shows as one step, both named",
+                f"decision #{new} replaces decision #{old}" in h.text and "Open the shop at eight" in h.text,
+                short(h.text[-300:]))
+        alltext = h.text + hc.get(f"{link}?view=history&project={pid}&q=seedlings").text \
+            + hc.get(f"{link}?view=record&project={pid}&type=decision&id={gone}").text
+        R.check(22, "an erased decision (the user's y on `flowstate erase`) shows as [erased]; its text "
+                    "is nowhere on the page, in search or on its record page",
+                rc == 0 and "[erased]" in alltext and "blue hose" not in alltext.replace(
+                    'value="seedlings"', "") and "seedlings" not in alltext.replace('value="seedlings"', ""),
+                (rc, short(out)))
+        td = hc.get(f"{link}?view=todos&project={pid}")
+        rec = hc.get(f"{link}?view=record&project={pid}&type=todo&id={tid}")
+        R.check(22, "the Todos view lists who created each todo and its status; the todo's page has its "
+                    "claim and its completion, with before and after",
+                td.status_code == 200 and "Repot the lemon tree" in td.text and ">done<" in td.text
+                and "created" in td.text and rec.status_code == 200 and "claimed todo" in rec.text
+                and "completed (pending -&gt; done)" in rec.text and "class='new'>done" in rec.text,
+                short(rec.text[-400:]))
+        body = h.text.split("<h2>Project history</h2>", 1)[-1] + td.text.split("<h2>Project history</h2>", 1)[-1] \
+            + rec.text.split("<h2>Project history</h2>", 1)[-1]
+        R.check(22, "the history pages are read-only (no form posts anything)",
+                "method='post'" not in body.lower().replace('"', "'"), "")
+        api = None
+        if getattr(W, "http", None) and W.http.poll() is None:
+            try:
+                api = hc.get(f"http://127.0.0.1:{W.port}/?view=history&project={pid}",
+                             headers={"Authorization": f"Bearer {W.shared_token}"})
+            except httpx.ConnectError:
+                api = None
+        R.check(22, "a fresh browser without the page's cookie can't reuse someone's session; the "
+                    "HTTP listener has no history page",
+                (api is None or api.status_code in (401, 404)) and
+                httpx.get(f"{link}?view=history&project={pid}", headers={"Host": "evil.example"}).status_code == 403,
+                api.status_code if api is not None else "no HTTP listener in this run")
 
 
 def main():
@@ -2348,7 +3104,9 @@ def main():
     try:
         for step in (s1_fresh, s2_day, s3_conflicts, s4_review, s5_receipts, s6_windows, s7_undo,
                      s8_backups, s9_ledger, lambda w: s10_upgrade(w, args.skip_upgrade), s11_edges,
-                     s13_approvals, s14_user_stated, s15_without_terminal, s16_tunnel_page,
+                     s13_approvals, s14_user_stated, s15_without_terminal, s15_review_card,
+                     s16_tunnel_page, s17_settings_page, s18_relay_cards, s19_card_offer,
+                     s20_reopen_after_undo, s21_link_remove_and_erase, s22_project_history,
                      deferred_window,
                      s12_descriptions):
             try:

@@ -37,11 +37,10 @@ import tempfile
 import time
 import urllib.request
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
-from . import paths, updates
+from . import updates
 
 ORIGIN_URLS = ("https://github.com/dialectforge/FlowState", "https://github.com/dialectforge/FlowState.git")
 MIN_GIT = (2, 34)
@@ -51,6 +50,7 @@ PYPROJECT = "mcp-server/pyproject.toml"
 OPT_OUT_FILE = ".flowstate-no-self-update"
 LOCK_NAME = "update.lock"
 LOCK_STALE_SECONDS = 2 * 3600
+PASSPHRASE_REHASHED_IN = "2.4.4"   # the owner passphrase's stronger hash (remote_auth, audit D21)
 TEMP_REF = "refs/flowstate-update/"
 STOP_WAIT_SECONDS = 15
 FOLDER = Path(__file__).resolve().parents[2]
@@ -884,6 +884,9 @@ class Updater:
             if self.git.run("cat-file", "-e", f"{back.sha}^{{commit}}").returncode != 0:
                 raise Refused(f"the old commit {back.sha[:8]} is no longer in this clone")
             back.services = self.services.find(self.folder)
+            note = self._passphrase_note(last.get("from"))
+            if note:
+                self.say("Note: " + note)
             words = self.confirm(f"Go back from FlowState {self.running} to {last.get('from')}?", yes, user_said)
             lock = self._lock()
         except Refused as e:
@@ -892,6 +895,34 @@ class Updater:
             return self._apply_rollback(back, cur, last, words, app)
         finally:
             lock.unlink(missing_ok=True)
+
+    @staticmethod
+    def _passphrase_note(to: Optional[str]) -> Optional[str]:
+        """Going back to a version before 2.4.4 with an owner passphrase 2.4.4 stored in its
+        stronger form (audit D21): the older version can't check it, and every try counts
+        toward its lockout. The passphrase itself is never kept, so the old form can't be put
+        back; the user sets it again there. None when that doesn't apply."""
+        if not to or not updates.newer(PASSPHRASE_REHASHED_IN, str(to)):
+            return None
+        try:
+            from . import remote_auth
+            f = remote_auth.auth_db_path()
+            if not f.is_file():
+                return None
+            conn = sqlite3.connect(f"file:{f}?mode=ro", uri=True, timeout=2.0)
+            try:
+                row = conn.execute("SELECT salt FROM owner WHERE id = 1").fetchone()
+            finally:
+                conn.close()
+            if not row or remote_auth._log2n(row[0]) <= 14:
+                return None
+        except Exception:  # noqa: BLE001 - only a note; never blocks going back
+            return None
+        return (f"Your remote-access owner passphrase is stored in the stronger form FlowState "
+                f"{PASSPHRASE_REHASHED_IN} uses, which FlowState {to} can't check: signing in "
+                f"there would fail, and each try counts toward the lockout. After going back, set "
+                f"it again in your terminal with `flowstate remote passphrase` (the same "
+                f"passphrase is fine). Your app tokens and OAuth sign-ins keep working.")
 
     def _apply_rollback(self, back: Plan, cur: Plan, last: dict, words: str, app: str) -> int:
         to = back.target["latest"]
@@ -928,6 +959,9 @@ class Updater:
             self.say("Going back did not fully work: " + "; ".join(problems))
             return 1
         self.say(f"Done. FlowState {to} is back. Quit and reopen your AI apps so they use it.")
+        note = self._passphrase_note(to)
+        if note:
+            self.say("Next: " + note)
         return 0
 
 

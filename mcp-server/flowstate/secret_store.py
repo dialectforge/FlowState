@@ -29,6 +29,18 @@ class StoreError(Exception):
     pass
 
 
+class AlreadyStored(StoreError):
+    """create() found an item already there: it is never overwritten."""
+
+
+# get() returns None only when the store says definitely "no such item"; any other failure
+# (a locked Keychain, a denied prompt, an unreadable file) raises StoreError, so a caller
+# never mistakes "couldn't read it" for "there is none" and writes a new one over it
+# (re-audit N-F6).
+ERROR_NOT_FOUND = 1168          # Windows CredReadW
+MAC_NOT_FOUND = 44              # `security`: errSecItemNotFound
+
+
 # ---------------------------------------------------------------- Windows
 class WindowsStore:
     name = "Windows Credential Manager"
@@ -79,13 +91,22 @@ class WindowsStore:
         ctypes, CREDENTIAL, adv = self._api()
         out = ctypes.POINTER(CREDENTIAL)()
         if not adv.CredReadW(self.target, 1, 0, ctypes.byref(out)):
-            return None
+            err = ctypes.get_last_error()
+            if err == ERROR_NOT_FOUND:
+                return None
+            raise StoreError(f"Credential Manager couldn't be read (error {err})")
         try:
             c = out.contents
             raw = ctypes.string_at(c.CredentialBlob, c.CredentialBlobSize)
             return raw.decode("utf-16-le")
         finally:
             adv.CredFree(out)
+
+    def create(self, token: str) -> None:
+        """Check before write: Credential Manager has no add-only flag."""
+        if self.get() is not None:
+            raise AlreadyStored("Credential Manager already holds this item; it was not replaced")
+        self.set(token)
 
     def delete(self) -> bool:
         ctypes, _C, adv = self._api()
@@ -108,10 +129,31 @@ class MacStore:
         if r.returncode != 0:
             raise StoreError("Keychain refused the write")
 
+    def create(self, token: str) -> None:
+        """Add the item only if there is none (no -U: `security` refuses a duplicate)."""
+        if any(c in token for c in "\"\\\n\r "):
+            raise StoreError("token contains characters the Keychain command can't take")
+        if self.get() is not None:   # check before write, and no -U below either
+            raise AlreadyStored("the Keychain already holds this item; it was not replaced")
+        cmd = f'add-generic-password -a {ACCOUNT} -s {self.service} -w "{token}"\n'
+        r = self.run(["security", "-i"], input=cmd, text=True, capture_output=True)
+        if r.returncode != 0:
+            if self.get() is not None:
+                raise AlreadyStored("the Keychain already holds this item; it was not replaced")
+            raise StoreError("Keychain refused the write")
+
     def get(self) -> Optional[str]:
-        r = self.run(["security", "find-generic-password", "-a", ACCOUNT, "-s", self.service,
-                      "-w"], text=True, capture_output=True)
-        return r.stdout.strip() or None if r.returncode == 0 else None
+        try:
+            r = self.run(["security", "find-generic-password", "-a", ACCOUNT, "-s",
+                          self.service, "-w"], text=True, capture_output=True)
+        except OSError as e:
+            raise StoreError(f"the Keychain couldn't be read ({type(e).__name__})") from None
+        if r.returncode == 0:   # "" for an item that is there but empty (not "none")
+            return r.stdout.strip()
+        if r.returncode == MAC_NOT_FOUND:
+            return None
+        raise StoreError(f"the Keychain couldn't be read (security exit {r.returncode}; is it "
+                         f"locked, or was the prompt denied?)")
 
     def delete(self) -> bool:
         r = self.run(["security", "delete-generic-password", "-a", ACCOUNT, "-s", self.service],
@@ -135,13 +177,33 @@ class FileStore:
         fd = os.open(str(self.path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(token + "\n")
-        os.chmod(self.path, 0o600)
+        try:
+            os.chmod(self.path, 0o600)
+        except OSError:
+            pass
+
+    def create(self, token: str) -> None:
+        """Write the item only if the file isn't there yet (O_EXCL: never overwritten)."""
+        from .privatefs import private_dir
+        private_dir(self.path.parent)
+        try:
+            fd = os.open(str(self.path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            raise AlreadyStored(f"{self.path.name} already exists; it was not replaced") from None
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(token + "\n")
+        try:
+            os.chmod(self.path, 0o600)
+        except OSError:
+            pass
 
     def get(self) -> Optional[str]:
         try:
-            return self.path.read_text(encoding="utf-8").strip() or None
-        except OSError:
+            return self.path.read_text(encoding="utf-8").strip()   # "": there, but empty
+        except FileNotFoundError:
             return None
+        except (OSError, UnicodeDecodeError) as e:
+            raise StoreError(f"{self.path.name} couldn't be read ({type(e).__name__})") from None
 
     def delete(self) -> bool:
         try:

@@ -26,6 +26,8 @@ from . import history, identity
 PER_PAGE = 50
 MAX_PER_PAGE = 100
 _ID = ("app", "model", "machine", "identity_source")
+_VIA_IN = ", ".join(f"'{x}'" for x in identity.VIA_SOURCES)
+_SIGNED_IN = "instr(COALESCE(u.machine, ''), '(signed in as ')"
 
 
 class WhoError(Exception):
@@ -249,9 +251,15 @@ def recent(db_path: Path, app: Optional[str] = None, model: Optional[str] = None
             return {"rows": [], "total": 0, "page": 1, "pages": 1, "per_page": per_page}
         where, params = ["u.at IS NOT NULL"], []
         for col, val in (("app", app), ("model", model), ("machine", machine)):
-            if val not in (None, ""):
-                where.append(f"instr(lower(COALESCE(u.{col}, '')), lower(?)) > 0")
+            if val in (None, ""):
+                continue
+            test = f"instr(lower(COALESCE(u.{col}, '')), lower(?)) > 0"
+            params.append(str(val).strip())
+            if col == "app":   # also the key / token the app signed in with (identity.via)
+                test = f"({test} OR (u.identity_source IN ({_VIA_IN}) AND {_SIGNED_IN} > 0 " \
+                       f"AND instr(lower(substr(u.machine, {_SIGNED_IN})), lower(?)) > 0))"
                 params.append(str(val).strip())
+            where.append(test)
         if project_id is not None:
             where.append("u.project_id = ?")
             params.append(int(project_id))
@@ -273,12 +281,15 @@ def recent(db_path: Path, app: Optional[str] = None, model: Optional[str] = None
         for r in rows:
             undo = _undoable(conn, r)
             what = _edit_what(conn, r) if r["kind"] == "edit" else (r["what"] or "")
-            rtype = history.TYPE_OF.get(r["record_type"], r["record_type"]) \
-                if r["kind"] == "edit" else r["record_type"]
+            rtype = history.type_of(r["record_type"]) if r["kind"] == "edit" else r["record_type"]
             out.append({"at": local_time(r["at"]), "at_utc": r["at"], "app": r["app"],
                         "model": r["model"], "machine": r["machine"],
                         "identity_source": r["identity_source"],
                         "identity": identity.label(r["identity_source"]),
+                        # the relay / own-tunnel sign-in the app came in on (its name is the
+                        # app's own claim there)
+                        **({"via": v} if (v := identity.via(r["machine"], r["identity_source"]))
+                           else {}),
                         "session": _session_of(conn, r, rtype, has),
                         "project_id": r["project_id"], "project": r["project"],
                         "record_type": rtype, "record_id": r["record_id"],

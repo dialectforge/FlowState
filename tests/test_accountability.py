@@ -90,10 +90,13 @@ def pre_012_db(tmp_path, monkeypatch):
     return db
 
 
+LATER = {"project_rules": ["set_by_user"]}   # added by later migrations (024)
+
+
 def _snapshot(db):
     out = {}
     for t in AFFECTED:
-        old_cols = [c for c in _cols(db, t) if c not in AFFECTED[t]]
+        old_cols = [c for c in _cols(db, t) if c not in AFFECTED[t] and c not in LATER.get(t, ())]
         out[t] = _q(db, f'SELECT {", ".join(old_cols)} FROM "{t}" ORDER BY rowid')
     return out
 
@@ -150,7 +153,8 @@ def test_recording_still_works_before_012(pre_012_db):
     """Writers check the columns, so a database 012 has not reached keeps working."""
     from flowstate import review, rules
     item = review.add_item(pre_012_db, 1, "todo", "still works", None, {}, "Cursor")
-    assert item and rules.add(pre_012_db, 1, "Keep it short", "Cursor")["rule"]["id"]
+    assert item and rules.add(pre_012_db, 1, "Keep it short", "Cursor")["queued_for_review"]
+    assert rules.add_by_user(pre_012_db, 1, "Keep it shorter")["rule"]["id"]
 
 
 # ---------------------------------------------------------------- identity: stdio
@@ -177,6 +181,8 @@ def test_stdio_machine_defaults_to_hostname_and_model_to_env(backend, seeded_db,
     monkeypatch.delenv("FLOWSTATE_WORKSPACE", raising=False)
     monkeypatch.setenv("FLOWSTATE_MODEL", "env-model")
     _call(backend, [("rules", {"action": "add", "project": "Alpha", "rule": "No force push"})])
+    from conftest import approve_rules   # the app's rule waits for the user (audit D2)
+    approve_rules(seeded_db)             # approved, it keeps the asking app's identity
     assert _q(seeded_db, "SELECT app, model, machine, identity_source FROM project_rules") == \
         [("Test App", "env-model", identity.clean(socket.gethostname()), "self_reported")]
     # the argument wins over the environment
@@ -234,15 +240,19 @@ def test_resolve_rules():
             self.identity_source, self.client_name, self.workspace = src, name, ws
     h = {"x-flowstate-model": "hdr-model", "x-flowstate-workspace": "hdr-ws"}
     r = identity.resolve
+    # 2.4.4 (task 47): the app's own name, the key's name beside its workspace
     assert r("Claimed", True, Tok("app_key", ws="key-ws"), h).as_dict() == \
-        {"app": "Key App", "model": "hdr-model", "machine": "key-ws", "identity_source": "app_key"}
-    assert r("Claimed", True, Tok("app_key"), h, "arg-model").machine == "hdr-ws"
+        {"app": "Claimed", "model": "hdr-model", "machine": "key-ws (signed in as Key App)",
+         "identity_source": "app_key"}
+    assert r("unknown", True, Tok("app_key"), h).app == "Key App"   # no name sent: the key's
+    assert r("Claimed", True, Tok("app_key"), h, "arg-model").machine == \
+        "hdr-ws (signed in as Key App)"
     assert r("Claimed", True, Tok("app_key"), h, "arg-model").model == "arg-model"
     assert r("Claimed", True, Tok("shared_token", "owner (LAN token)"), h).as_dict() == \
         {"app": "Claimed", "model": "hdr-model", "machine": "hdr-ws",
          "identity_source": "shared_token"}
     assert r("Claimed", True, Tok("oauth_client", "claude.ai"), h).as_dict() == \
-        {"app": "claude.ai", "model": "hdr-model", "machine": "claude.ai",
+        {"app": "Claimed", "model": "hdr-model", "machine": "lan (signed in as claude.ai)",
          "identity_source": "oauth_client"}
     assert r("Claimed", True, Tok("remote_token", "Phone"), {}).model is None
     assert identity.label("shared_token") == "shared token (legacy)"
@@ -378,8 +388,7 @@ def test_review_page_undo_link_is_protected_and_uses_history(page, backend):
     assert 'action="/undo"' in c.get("/?view=who&app=review-page").text
     bad = c.post("/undo", data={"record_type": "nonsense", "record_id": "1", "project_id": "1",
                                 "csrf": csrf})
-    assert "Unknown+record+type" in bad.headers["location"] or \
-        "Unknown%20record%20type" in bad.headers["location"]
+    assert "Unknown record type" in c.get(bad.headers["location"]).text
 
 
 def test_who_paging(backend, seeded_db):

@@ -79,6 +79,9 @@ tool. They are never listed.
 | `core` | start_here, log_work, search, manage_todos, manage_review, manage_handoffs |
 | `full` (or `all`) | the 12 plus manage_sessions, manage_files, manage_data_git, manage_variables, manage_methods, manage_skills |
 
+Since 2.4.4 the six specialist tools (and their older names `git`, `file`, `session`, `variable`,
+`method`, `self_improve`) are refused outside `full` when called by name (`not_in_profile`).
+
 ## Old -> new
 
 | v2.0 call | v2.1 call |

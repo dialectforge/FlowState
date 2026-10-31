@@ -251,7 +251,9 @@ def test_withdraw_unsure_items_from_older_versions(messy):
     # a later run withdraws a new leftover, says so, and doesn't ask about the withdrawn one again
     other = _old_item(db, ids["fs"], ("learning", 999), "unsure")
     r = _j(call(S, "manage_memory", {"action": "cleanup", "project": "FlowState", "kinds": ["misfiled"]}))
-    assert r["withdrew"] == 1 and r["queued"] == 0, r
+    # the older "likely" one has no exact list (task 74): it can't be approved, so it is
+    # replaced by a new suggestion with its list
+    assert r["withdrew"] == 1 and r["queued"] == 1 and r["replaced"] == [likely], r
     assert _q(db, "SELECT status FROM review_items WHERE id = ?", other) == [("rejected",)]
     assert _q(db, "SELECT count(*) FROM review_items WHERE payload LIKE ?",
               f"%learning#{ids['misfiled']}%") == [(1,)]

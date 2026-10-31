@@ -245,14 +245,15 @@ def test_git_sync_refuses_token_and_log_files(tmp_path, monkeypatch):
     data = tmp_path / "data"
     data.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=data, check=True)
-    (data / "notes.txt").write_text("ok", encoding="utf-8")
-    (data / "http-token.txt").write_text("fake-" + "q" * 20, encoding="utf-8")
-    (data / "server.log").write_text("log", encoding="utf-8")
+    (data / "projects").mkdir()
+    (data / "projects" / "notes.txt").write_text("ok", encoding="utf-8")
+    for d in (data, data / "projects"):   # secrets at the top and inside projects/
+        (d / "http-token.txt").write_text("fake-" + "q" * 20, encoding="utf-8")
+        (d / "server.log").write_text("log", encoding="utf-8")
     monkeypatch.setattr(git_ops.utils, "data_dir", lambda: data)
     r = git_ops.git_sync("test")
-    assert r["success"] is False and set(r["refused"]) == {"http-token.txt", "server.log"}
-    staged = subprocess.run(["git", "diff", "--cached", "--name-only"], cwd=data,
-                            capture_output=True, text=True).stdout.split()
-    assert "http-token.txt" not in staged and "server.log" not in staged
-    log = subprocess.run(["git", "log", "--oneline"], cwd=data, capture_output=True, text=True)
-    assert log.stdout.strip() == ""  # nothing committed
+    assert r["success"] is True, r
+    tracked = subprocess.run(["git", "ls-files"], cwd=data, capture_output=True,
+                             text=True).stdout.split()
+    assert "projects/notes.txt" in tracked
+    assert not [p for p in tracked if p.endswith(("http-token.txt", "server.log"))], tracked

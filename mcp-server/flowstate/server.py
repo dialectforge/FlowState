@@ -1,10 +1,10 @@
-﻿"""FlowState MCP Server - v2 Phase A.
+"""FlowState MCP server: the tools, the `flowstate` entry point and both transports.
 
 Any MCP client (Claude Desktop, Grok Build, Cursor, Codex, Claude Code, ...) gets:
 initialize instructions, a `start_here` brief (<= 4,000 chars), implicit sessions that
 open on first use and close when idle, a project check on every write, and fail-safe
 behaviour (timeouts and errors come back as tool errors, never as broken connections).
-Transports: stdio (default) and streamable HTTP with a bearer token.
+Transports: stdio (default) and streamable HTTP (http_app.py; LAN key/token, tunnel OAuth, relay).
 """
 
 import asyncio
@@ -28,7 +28,7 @@ from . import activity
 from . import approvals
 from . import claims
 from . import cleanup
-from . import conflicts, conflict_cards
+from . import card_offer, card_trust, conflicts, conflict_cards, conflict_reopen
 from . import connections
 from . import deletes
 from . import history
@@ -37,27 +37,27 @@ from . import ledger
 from . import legacy_args
 from . import links
 from . import review
-from . import review_mode
-from . import safety
+from . import review_apply, review_cards, review_mode
+from . import privatefs, safety
 from . import saves
 from . import tasks
 from . import extras, priority
-from . import provenance
+from . import provenance, rules
 from . import receipts
 from . import secrets_scan
 from .autosession import AutoSessions, ensure_schema
 from .brief import build_brief, candidates_text, resolve_project
 from .database import Database, default_db_path
-from .guard import EXEMPT_ACTIONS, GuardError, WRITES, check_write, explicit_project, is_write, writes_text
+from .guard import EXEMPT_ACTIONS, GuardError, check_write, explicit_project, is_write, writes_text
 
 log = logging.getLogger("flowstate")
 
 # Create server instance; instructions reach every client at initialize.
-server = Server("flowstate", version="2.4.3", instructions=guide.INSTRUCTIONS)
+server = Server("flowstate", version="2.4.4", instructions=guide.INSTRUCTIONS)
 
 
 from .tooldefs import ALL_TOOLS  # noqa: E402 - the public tools (surface.py maps their calls)
-from . import __version__, surface, tool_labels, updates, waiting  # noqa: E402
+from . import __version__, offsite, stored, surface, tool_labels, updates, waiting  # noqa: E402
 from .routing import route_tool  # noqa: E402
 
 
@@ -85,6 +85,7 @@ def init_backend(db_path: Optional[Path] = None) -> None:
     path = Path(db_path) if db_path else default_db_path()
     backend.db_path, backend.error, backend.tracker = path, None, None
     backend.migration_error = None
+    privatefs.auto_tighten(path)   # owner-only what an older version left readable; never raises
     try:
         db = Database(path)
         conn = sqlite3.connect(str(path), timeout=5.0)
@@ -158,13 +159,15 @@ def _identity(client: str, args: dict) -> identity.Identity:
         req = None
     if req is None:
         return identity.resolve(client, model_arg=args.get("model"))
-    tok = getattr(getattr(req, "scope", {}).get("user"), "access_token", None)
+    from .remote_auth import LISTENER_KEY
+    scope = getattr(req, "scope", {}) or {}
+    tok = getattr(scope.get("user"), "access_token", None)
     try:
         headers = {k.lower(): v for k, v in req.headers.items()}
     except AttributeError:
         headers = {}
     return identity.resolve(client, http=True, token=tok, headers=headers,
-                            model_arg=args.get("model"))
+                            model_arg=args.get("model"), listener=scope.get(LISTENER_KEY))
 
 
 # A write that creates a record: (tool, action) -> record type, for the activity log.
@@ -189,9 +192,9 @@ def _error(code: str, message: str, **extra) -> types.CallToolResult:
 def _ok(result: Any) -> types.CallToolResult:
     ui = result.pop("_ui", None) if isinstance(result, dict) else None
     if isinstance(result, dict) and "error" in result and len(result) <= 3:
-        return types.CallToolResult(
+        return conflict_cards.paint(types.CallToolResult(
             content=[TextContent(type="text", text=json.dumps(result, indent=2, default=str))],
-            isError=True)
+            isError=True), ui)
     text = result if isinstance(result, str) else json.dumps(priority.show(result), indent=2, default=str)
     out = types.CallToolResult(content=[TextContent(type="text", text=text)], isError=False)
     return conflict_cards.paint(out, ui)
@@ -239,6 +242,11 @@ async def _call_internal(name: str, arguments: dict, shown: str = "") -> types.C
     if denied:
         log.info("refused %s for %s: %s", name, who, denied[0])
         return _error(*denied)
+    hidden = surface.outside_profile(shown or name, name, arguments or {}, tool_labels.profile()) \
+        if shown else None   # a call by name (call_tool); FlowState's own calls pass no name
+    if hidden:   # hidden is refused, not just unlisted (audit D1)
+        return _error("not_in_profile", surface.NOT_IN_PROFILE.format(
+            tool=hidden, profile=tool_labels.profile()))
     client = _client_name()
     ident = _identity(client, arguments or {})
     app = ident.app
@@ -261,7 +269,8 @@ async def _call_internal(name: str, arguments: dict, shown: str = "") -> types.C
     try:
         try:
             result = await asyncio.wait_for(
-                asyncio.to_thread(_paused_or_call, write, app, name, dict(arguments or {}), client, meta),
+                asyncio.to_thread(_paused_or_call, write, (app, ident.credential), name,
+                                  dict(arguments or {}), client, meta),
                 timeout=call_timeout())
             if result is _PAUSED:
                 out = _error("paused_by_user", PAUSED.format(app=app))
@@ -283,6 +292,9 @@ async def _call_internal(name: str, arguments: dict, shown: str = "") -> types.C
         except Exception as e:  # noqa: BLE001
             out = _error("tool_failed", f"{type(e).__name__}: {e}")
             return out
+        result = card_trust.defused(result) if name in CARD_TOOLS else \
+            stored.defuse_all(stored.mark(name, result))   # stored text is data (audit D6)
+        result = _safe_call(approvals.scrub_handle, result) or result   # 2.4.3 labels (D19)
         out = _ok(result)
         return out
     finally:   # bookkeeping gets what is left of the time; past it, it finishes on its own
@@ -315,9 +327,10 @@ async def _call_internal(name: str, arguments: dict, shown: str = "") -> types.C
 _PAUSED = object()
 
 
-def _paused_or_call(write: bool, app: str, name: str, args: dict, client: str, meta: dict):
-    """The user paused this app's writes? (inside the call's time limit) Else the call."""
-    if write and _safe_bool(activity.is_paused, backend.db_path, app):
+def _paused_or_call(write: bool, apps: tuple, name: str, args: dict, client: str, meta: dict):
+    """The user paused this app's writes (the app's name, or through the relay also the name
+    of the sign-in it used)? (inside the call's time limit) Else the call."""
+    if write and any(_safe_bool(activity.is_paused, backend.db_path, a) for a in apps if a):
         return _PAUSED
     return handle_call(name, args, client, meta)
 
@@ -375,9 +388,12 @@ def handle_call(name: str, args: dict, client: str = "unknown", meta: Optional[d
                        _one_commit(name, args))
     # something now waits in the review queue: say how the user decides it (after the save).
     # The card's own tools show or decide a card; they queue nothing.
-    if name in ("show_conflict_card", "resolve_conflict_card"):
+    if name in CARD_TOOLS:
         return result
     return waiting.queue_guidance(result, backend.db_path, client)
+
+
+CARD_TOOLS = ("show_conflict_card", "resolve_conflict_card", "show_review_card", "resolve_review_card")
 
 
 def _one_commit(name: str, args: dict) -> bool:
@@ -385,7 +401,7 @@ def _one_commit(name: str, args: dict) -> bool:
     safety copy first) and undo (it restores with foreign-key checks off)."""
     key = (name, args.get("action"))
     return writes_text(name, args) and not (
-        name in receipts.NO_RECEIPT or name in ("delete_request", "review_approve")
+        name in receipts.NO_RECEIPT or name in ("delete_request", "review_approve", "resolve_review_card")
         or key in _DELETE_ACTIONS or key == ("history", "undo"))
 
 
@@ -459,6 +475,11 @@ def _handle(name: str, args: dict, client: str, meta: dict) -> Any:
         result = conflict_cards.resolve_card(db_path, args, client)
     elif name == "show_conflict_card":
         result = conflict_cards.show(db_path, args, pid)
+    elif name == "resolve_review_card":
+        result = review_cards.resolve_card(db_path, args, pid, client,
+                                           review_apply.for_card(db_path, client))
+    elif name == "show_review_card":
+        result = review_cards.show(db_path, args, pid)
     elif name == "review_mode":
         result = _review_mode(args, client)
     elif name == "history":
@@ -551,7 +572,8 @@ def _start_here(args: dict, client: str, meta: Optional[dict] = None) -> str:
         links.mark_looked(db_path, project["id"], client)
     except Exception as e:  # noqa: BLE001
         log.warning("could not record start_here time: %s", e)
-    warning = "\n".join(w for w in (backend.health, _relay_warning(), updates.brief_lines(__version__)) if w)
+    warning = "\n".join(w for w in (backend.health, _relay_warning(), updates.brief_lines(__version__),
+                                     _safe_call(offsite.key_line)) if w)
     return f"{warning}\n\n{text}" if warning else text
 
 
@@ -783,7 +805,9 @@ def _review_mode(args: dict, client: str) -> Any:
     if args.get("action") == "set":
         who, _scopes = _caller()
         try:
-            if approvals.is_on(backend.db_path, pid):   # turning review off waits for the user
+            # turning review off waits for the user if approvals are on for any project it reaches
+            if review_mode.off_needs_user(backend.db_path, args.get("mode"), pid,
+                                          bool(args.get("clear"))):
                 item = review_mode.queue_if_off(backend.db_path, args.get("mode"), args.get("kinds"),
                                                 pid, args.get("user_request") or "", client,
                                                 bool(args.get("clear")))
@@ -953,7 +977,10 @@ def _claim_after(pid: Optional[int], args: dict, result: Any, client: str) -> An
     return {**result, "claim_warning": warn} if warn else result
 
 
-_SCAN_PER_ITEM = {"import_memory": ("text",)}
+# keys not scanned for secrets: import checks each memory itself; a card tap's `tap` is the
+# card's own one-use code (card_taps.py), never stored
+_SCAN_PER_ITEM = {"import_memory": ("text",), "resolve_review_card": ("tap",),
+                  "resolve_conflict_card": ("tap",)}
 MAX_IMPORT = 200_000
 
 
@@ -1045,6 +1072,9 @@ def _delete_request(pid: int, name: str, args: dict, client: str) -> Any:
                     "message": f"record_type must be one of: {', '.join(deletes.RECORD_TYPES)}. "
                                f"Projects and components: manage_projects(action=\"delete\" / "
                                f"\"delete_component\")."}
+        if rtype == "rule":   # hard rules: removed by the user only (task 54, re-audit N-F4)
+            from .rules import DELETE_REFUSAL
+            return {"error": "user_only", "message": DELETE_REFUSAL}
     else:
         return {"error": "bad_action", "message": "action must be project, component or record."}
     try:
@@ -1065,6 +1095,15 @@ def _user_only(out: dict, item_id: int, client: str) -> dict:
     return out
 
 
+def _own_text(item: dict) -> dict:
+    """A disagreement's own words are its two claims (the card text), not only its headline,
+    so the app that made it can't decide it by quoting its own record."""
+    if item.get("kind") != "disagreement":
+        return item
+    packed = _safe_call(conflict_cards.ui_for_item, backend.db_path, item)
+    return {**item, "details": packed["text"]} if packed else item
+
+
 def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
     if args.get("item_id") is None:
         return {"error": "item_id_required", "message": "Name the review item (item_id)."}
@@ -1080,13 +1119,18 @@ def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
     done: dict = {}
     try:
         item = review.get_item(backend.db_path, int(args["item_id"]))
+        if item is None:
+            return {"error": "record_not_found", "message": f"No review item with id {args['item_id']}."}
         agent = identity.current() is not None   # None: command line, review page, popup, phone
         locked = approvals.user_only(item) and item["status"] == "pending"
-        if locked and agent and (no := provenance.agent_refusal(backend.db_path, item, name)):
-            return no   # a "did the user say this?" item: the user's alone
+        if (no := card_offer.refusal(item, client, agent) or conflict_reopen.refusal(item, client, agent)) or (
+                locked and agent and (no := provenance.agent_refusal(backend.db_path, item, name))):
+            return no   # "Allow tap cards?", "Reopen?": pages / phone only; "did you say this?"
+        if locked and agent and item["kind"] == "rule":   # hard rules: the user's alone (D2)
+            return rules.agent_refusal(item)
         if locked and agent and name == "review_approve":   # only the user's own click or key
             return _user_only({"item_id": item["id"], "kind": item["kind"]}, item["id"], client)
-        own = review.own_item_refusal(item, identity.current(), user_request)
+        own = review.own_item_refusal(_own_text(item), identity.current(), user_request)
         if own:
             return own
         if name == "review_approve" and item and item.get("kind") == "disagreement":
@@ -1100,28 +1144,13 @@ def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
                     return {"error": DELETE_REFUSAL[0], "message": DELETE_REFUSAL[1]}
                 deletes.check_approval(item, args.get("confirm_name"))
         if name == "review_reject":
-            out = review.reject(backend.db_path, int(args["item_id"]), args.get("reason") or "",
-                                user_request, client)
+            out = review_apply.reject(backend.db_path, item, args.get("reason") or "",
+                                      user_request, client)
             if (item or {}).get("kind") != "disagreement" and (
                     locked or approvals.logs_every_decision(client, agent)):   # chat walk, phone list too
                 _safe_call(approvals.log_decision, backend.db_path, item,
                            "agent" if agent else approvals.path_of(client), client, "rejected")
-            if out.get("kind") == "conflict":   # the user says the two decisions fit together
-                out.update(conflicts.dismiss(backend.db_path, int(args["item_id"]), client))
-            elif out.get("kind") == "disagreement":
-                out.update(_safe_call(conflict_cards.on_reject, backend.db_path, item, client) or {})
             return out
-
-        def apply(item: dict, payload: dict):   # a source tag is the queuing app's say-so
-            r = _log_work(item["project_id"], payload, None, (item.get("app") or client, item.get("model")))
-            if isinstance(r, dict) and "error" in r:
-                raise review.ReviewError(r["error"], r.get("message", "could not create the record"))
-            rec = r.get("record") if isinstance(r, dict) else None
-            rid = rec.get("id") if isinstance(rec, dict) else None
-            if rid is not None:
-                _safe_call(history.record_created, backend.db_path, payload["kind"], rid,
-                           "approve", client)
-            return _RECORD_TABLE[payload["kind"]], rid
 
         move_to = None
         if args.get("move_to") not in (None, ""):
@@ -1130,38 +1159,8 @@ def _review_decide(name: str, pid: int, args: dict, client: str) -> Any:
                 return {"error": "project_not_found", "message": f"No single project matches "
                         f"{args['move_to']!r}.", "candidates": res.get("candidates", [])}
             move_to = res["project"]["id"]
-
-        def apply_cleanup(item: dict, _edits: dict):
-            return cleanup.apply(backend.db_path, item, client, move_to)
-
-        def apply_edit(item: dict, _edits: dict):
-            from .markdown_io import apply_edit as do
-            return do(backend.db_path, item, client)
-
-        def apply_conflict(item: dict, _edits: dict):
-            done["note"] = ("Kept as a possible conflict; it stays in the brief until a decision "
-                            "replaces one of them (log_work replaces= or manage_links supersedes). "
-                            "Ask the user which one stands.")
-            return conflicts.confirm(backend.db_path, item)
-
-        def apply_delete(item: dict, _edits: dict):
-            done.update(deletes.execute(backend.db_path, item, client, args.get("confirm_name")))
-            return deletes.TYPES[done["deleted"]["record_type"]][0], done["deleted"]["id"]
-
-        def apply_setting(item: dict, _edits: dict):
-            return review_mode.apply_queued(backend.db_path, item, client)
-
-        edits = {k: args.get(k) for k in ("summary", "details", "priority", "category", "component")}
-        if safety.needs_copy(item):   # a verified copy first, or no change at all
-            done["safety_copy"] = safety.copy_before(backend.db_path).name
-        def apply_disagreement(item: dict, _edits: dict):
-            return conflict_cards.apply_keep(backend.db_path, item, args.get("keep"), client)
-
-        out = review.approve(backend.db_path, int(args["item_id"]), user_request, client, apply, edits,
-                             others={"cleanup": apply_cleanup, "edit": apply_edit,
-                                     "delete": apply_delete, "conflict": apply_conflict,
-                                     "setting": apply_setting, "disagreement": apply_disagreement,
-                                     "source": lambda it, _e: provenance.confirm(backend.db_path, it)})
+        out = review_apply.approve(backend.db_path, item, args, user_request, client, done,
+                                   move_to=move_to)
         if (item or {}).get("kind") != "disagreement" and (locked or approvals.logs_every_decision(client, agent)):
             _safe_call(approvals.log_decision, backend.db_path, item, approvals.path_of(client),
                        client, "approved")
@@ -1269,7 +1268,7 @@ def main():
                     help="public mode: also accept the owner's LAN token")
     ap.add_argument("--tools", choices=["default", "core", "full", "all"], default=None,
                     help="which tools to list (also FLOWSTATE_TOOLS): default 12, core 6, "
-                         "full 18 (all = full); every tool name still answers")
+                         "full 18 (all = full); a tool outside the profile is refused")
     args = ap.parse_args()
     if args.tools:
         os.environ["FLOWSTATE_TOOLS"] = args.tools
@@ -1283,6 +1282,9 @@ def main():
         elif len(token) < 16:
             raise SystemExit("HTTP transport requires a bearer token of 16+ characters: set "
                              "FLOWSTATE_TOKEN, or store one with `flowstate token migrate --from <file>`")
+        from .remote_auth import lan_warning
+        if not args.public_url and lan_warning(args.host):
+            log.warning(lan_warning(args.host))
         run_http(args.host, args.port, token, db_path=db_path, public_url=args.public_url,
                  allow_master_token=args.allow_master_token)
     else:

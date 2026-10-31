@@ -171,7 +171,8 @@ def test_offsite_pushes_only_the_allow_list(seeded_db, bare_repo):
     manifest = json.loads(subprocess.run(
         ["git", "--git-dir", str(bare), "show", "flowstate-backup:manifest.json"],
         capture_output=True, text=True).stdout)
-    assert manifest["integrity_check"] == "ok" and manifest["tables"]["projects"] == 2
+    # re-audit N-F35: only format, date, size and checksum are unencrypted on GitHub
+    assert set(manifest) == {"format", "created_utc", "bytes", "sha256"}
     assert "token" not in json.dumps(manifest).lower()
 
 

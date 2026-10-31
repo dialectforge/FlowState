@@ -212,8 +212,8 @@ def test_sign_out_ends_the_session(tunnel):
     assert r.status_code == 303 and "__Host-fs_review_tunnel=" in r.headers["set-cookie"]
     assert "Owner passphrase" in c.get("/review/tunnel").text
     # the old cookie is dead on the server too
-    r = c.post("/review/tunnel/approve", data={"csrf": csrf, "item_id": str(item)}, headers=ORIGIN,
-               cookies={"__Host-fs_review_tunnel": cookie})
+    c.cookies.set("__Host-fs_review_tunnel", cookie)
+    r = c.post("/review/tunnel/approve", data={"csrf": csrf, "item_id": str(item)}, headers=ORIGIN)
     assert r.status_code == 403 and status(item and db, item)[0] == "pending"
 
 
@@ -372,3 +372,17 @@ def test_ask_line_names_the_tunnel_page_only_through_the_public_listener(backend
         f"in a terminal).")
     monkeypatch.setattr(review_tunnel, "PUBLIC_URL", None)
     assert "tunnel" not in approvals.ask_line(db, item)
+
+
+# ---------------------------------------------------------------- (task 39) no Settings here
+def test_no_settings_section_or_routes_on_the_tunnel_page(tunnel):
+    c, db = tunnel
+    sign_in(c)
+    csrf, r = page_csrf(c)
+    assert "<h2>Settings</h2>" not in r.text and "/settings/" not in r.text
+    for name in ("approvals", "relay-chat", "phone", "popup", "self-update", "update-check",
+                 "confirm", "cancel"):
+        resp = c.post(f"/review/tunnel/settings/{name}", data={"csrf": csrf, "state": "off"},
+                      headers=ORIGIN)
+        assert resp.status_code == 404, name
+    assert not approvals.is_on(db)

@@ -10,8 +10,8 @@ saved or failed, and the record ids. Never the text.
   answer then says so ("did save, as learning #31"), or that it failed.
 - Duplicates: the same arguments from the same connection within WINDOW_SECONDS of a saved
   write return that write's receipt instead of saving a copy. If the first one is still
-  saving (it timed out), the repeat waits for it. Undo (undo again = redo) and claim renewals
-  are never treated as repeats. This check is in memory: a connection's writes all pass
+  saving (it timed out), the repeat waits for it. Undo (undo again = redo), claim renewals
+  delete requests and clean-up runs are never treated as repeats. This check is in memory: a connection's writes all pass
   through this process, so it costs the write nothing.
 
 Nothing here may break a write: callers wrap these in try/except, and a database without
@@ -34,7 +34,15 @@ from . import dbconn
 
 WINDOW_SECONDS = 120
 NOT_REPEATS = {("history", "undo"), ("todo", "renew"), ("review_approve", None),
-               ("review_reject", None)}   # asking the user again (approvals.py) is not a repeat
+               ("review_reject", None), ("resolve_review_card", None),   # asking the user again (approvals.py) is not a repeat
+               # a delete asked again after its request was closed as out of date gets a new
+               # request (deletes.request answers an identical waiting one itself; task 72)
+               ("delete_request", "project"), ("delete_request", "component"),
+               ("delete_request", "record"), ("variable", "delete"), ("method", "delete"),
+               ("file", "remove"),
+               # a clean-up run again after a suggestion was closed as out of date suggests it
+               # anew (cleanup.queue skips one that is waiting and still matches; task 74)
+               ("cleanup_suggest", None)}
 NO_RECEIPT = {"git"}   # runs git on the data repo (status, history, sync): not a record write
 _IGNORED_ARGS = ("model",)   # the same content however the caller names itself
 _PROJECT_ARGS = ("project", "project_id", "project_name")   # compared by the project's id

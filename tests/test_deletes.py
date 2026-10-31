@@ -97,6 +97,8 @@ def rich(backend, seeded_db):
     ok(call(S, "manage_todos", {"action": "add", "project": "Alpha", "title": "after the bug",
                                 "blocked_by_problem": 1}))
     ok(call(S, "manage_rules", {"action": "add", "project": "Alpha", "rule": "never push"}))
+    from conftest import approve_rules   # an app's rule waits for the user (audit D2)
+    approve_rules(S.backend.db_path)
     ok(call(S, "manage_handoffs", {"action": "leave", "project": "Alpha", "where_i_was": "half way",
                                    "next_step": "finish"}))
     ok(call(S, "manage_variables", {"action": "create", "project": "Alpha", "name": "port",
@@ -260,7 +262,7 @@ def test_approve_deletes_and_undo_restores_exactly(rich, seeded_db):
 
 
 @pytest.mark.parametrize("rtype,rid", [("decision", 1), ("change", 1), ("learning", 1), ("todo", 1),
-                                       ("attempt", 1), ("handoff", 1), ("rule", 1), ("link", 1),
+                                       ("attempt", 1), ("handoff", 1), ("link", 1),
                                        ("variable", 1), ("method", 1)])
 def test_every_record_type_deletes_and_comes_back(rich, seeded_db, rtype, rid):
     S = rich
@@ -336,7 +338,9 @@ def test_approval_refused_if_more_would_go_than_the_user_saw(rich, seeded_db):
     r = _j(call(S, "manage_review", {"action": "approve", "project": "Alpha", "item_id": item,
                                      "user_request": ASK}))
     assert r["error"] == "changed_since_request"
-    assert dump(seeded_db) == before and (item, "delete", "pending") in _pending(seeded_db)
+    # 2.4.4 (task 72): the out-of-date request is closed; asking again makes a new one
+    assert dump(seeded_db) == before and (item, "delete", "pending") not in _pending(seeded_db)
+    assert _q(seeded_db, "SELECT status FROM review_items WHERE id = ?", item) == [("rejected",)]
 
 
 def test_undo_of_a_child_refused_while_its_parent_is_deleted(rich, seeded_db):

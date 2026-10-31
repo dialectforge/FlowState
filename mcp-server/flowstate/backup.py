@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import paths
+from .privatefs import private_dir, private_file
 
 KEEP_DAILY = 14
 KEEP_WEEKLY = 8
@@ -80,7 +81,7 @@ def backup_now(db_path: Path, dest_dir: Optional[Path] = None, prune: bool = Tru
     if not db_path.is_file():
         raise BackupError(f"database not found: {db_path}")
     dest_dir = Path(dest_dir) if dest_dir else paths.backup_dir()
-    dest_dir.mkdir(parents=True, exist_ok=True)
+    private_dir(dest_dir)   # owner-only when FlowState makes it (audit D9)
     now = now or datetime.now()
     name = f"{PREFIX}{now:%Y%m%d-%H%M%S}" + (f"-{label}" if label else "") + ".db"
     final = dest_dir / name
@@ -90,6 +91,8 @@ def backup_now(db_path: Path, dest_dir: Optional[Path] = None, prune: bool = Tru
         n += 1
     partial = final.with_name(final.name + ".partial")
     try:
+        partial.unlink(missing_ok=True)
+        private_file(partial)   # each copy owner-only from the start
         _copy(db_path, partial)
         check = integrity(partial)
     except Exception as e:  # noqa: BLE001
@@ -187,9 +190,10 @@ def restore(backup_file: Path, target: Path, force: bool = False,
         pre = backup_now(target, backup_dir, prune=False, label="pre-restore")["path"]
         _copy(backup_file, target)
     else:
-        target.parent.mkdir(parents=True, exist_ok=True)
+        private_dir(target.parent)
         partial = target.with_name(target.name + ".partial")
         partial.unlink(missing_ok=True)
+        private_file(partial)
         _copy(backup_file, partial)
         partial.replace(target)
     verify_db(target, expected)

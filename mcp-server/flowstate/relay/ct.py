@@ -8,7 +8,8 @@ whoever controls the relay's DNS) got a certificate for the hostname and could r
 traffic: it is logged as an ERROR, kept in ct.json and shown at the top of `start_here` and
 in `flowstate relay status` until the user acknowledges it.
 
-Only the hostname is sent to crt.sh.
+Only the hostname is sent to crt.sh, with a plain "flowstate" user agent (no version). Like
+any web request it also shows crt.sh this computer's IP address; the privacy policy says so.
 """
 
 import json
@@ -29,7 +30,8 @@ MAX_FETCH = 50  # certificates downloaded per run (be polite to crt.sh)
 
 
 def _fetch(url: str) -> bytes:
-    status, _, body = http_request("GET", url, headers={"Accept": "*/*"}, timeout=60)
+    status, _, body = http_request("GET", url, headers={"Accept": "*/*", "User-Agent": "flowstate"},
+                                   timeout=60)
     if status != 200:
         raise RelayError(f"crt.sh answered {status}")
     return body

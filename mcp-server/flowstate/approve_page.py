@@ -13,6 +13,9 @@ fragment never reaches a server or a log. This page:
   POST /approve/<item>/decide   the tap: the same grant, checked again, plus the page token in
                                 the body and the cookie. Approve or Reject uses the grant and the
                                 item's one-use code
+  POST /approve/<item>/record   a session summary's per-record Keep / Remove / Bring back
+                                (session_records.py): the same grant and page token, not used
+                                up, so the page's final Keep all / Don't keep still works
 
 Strict CSP (no inline script or style: both are files under /approve/assets/), frame-ancestors
 'none' + X-Frame-Options DENY, no-store, no referrer. POSTs must be JSON, from this origin.
@@ -24,7 +27,7 @@ import json
 import secrets
 from datetime import datetime, timezone
 
-from . import approvals
+from . import approvals, install_name
 
 HEADERS = {
     "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; "
@@ -51,6 +54,7 @@ SHELL = """<!doctype html>
   <p class="eyebrow" id="project"></p>
   <p id="summary"></p>
   <p id="details" class="muted"></p>
+  <div id="saved"></div>
   <p id="who" class="faint"></p>
   <label id="name-row" hidden>Type the project's exact name to delete it
     <input id="confirm-name" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
@@ -59,7 +63,7 @@ SHELL = """<!doctype html>
     <button id="reject" class="btn ghost" type="button">Reject</button>
   </div>
 </section>
-<p class="faint small">Your FlowState, on your own computer, shows this page. flowstatemcp.com
+<p class="faint small" id="foot">Your FlowState, on your own computer, shows this page. flowstatemcp.com
 only confirmed it's you; it never sees what's in it.</p>
 </main></body></html>
 """
@@ -85,7 +89,104 @@ input{display:block;width:100%;margin-top:6px;font:inherit;padding:12px 14px;bor
 .btn.ghost{background:none;color:var(--ink);border:1px solid var(--line)}
 .btn.ghost:hover{border-color:var(--ink);background:none}
 .err{color:var(--danger)}
+.saved{margin:8px 0 0;padding-left:18px}.saved li{margin:8px 0;overflow-wrap:anywhere}
+.saved .ex{color:var(--muted);font-size:14px;margin:2px 0 0}
+.btn.more{flex:none;font-size:15px;padding:10px 18px;margin:4px 0 8px}
+.state{display:inline-block;margin-left:8px;font-size:13px;border:1px solid var(--line);border-radius:999px;padding:0 8px;color:var(--accent)}
+.state.st-removed,.state.st-gone{color:var(--danger)}.state.st-changed{color:var(--muted)}
+.recrow{display:flex;gap:10px;margin:6px 0 2px}
+.btn.rec{flex:none;font-size:15px;padding:8px 16px;min-height:44px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+"""
+
+# What a session saved, drawn on the phone pages (this one and review_phone.py): the first
+# `shown` records, then a "Show N more" button that opens the rest in place. Every record sent
+# is already in the page's data (session_contents.public, send=PHONE_MAX), so opening them asks
+# nothing of the server. Text only (textContent), never markup. Spliced into each page's own
+# function at /*SAVED_JS*/ (defines mk, localTime, endTime, savedItem and saved there).
+SAVED_JS = r"""  function mk(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) { e.className = cls; }
+    if (text) { e.textContent = text; }
+    return e;
+  }
+  function localTime(utc) {          // the reader's own time; UTC, labelled, if it can't
+    var d = utc ? new Date(String(utc).replace(" ", "T") + "Z") : null;
+    if (!d || isNaN(d.getTime())) { return utc ? utc + " UTC" : ""; }
+    return d.toLocaleString([], {dateStyle: "medium", timeStyle: "short"});
+  }
+  function endTime(a, b) {          // the end alone when the session ends the day it began
+    var x = new Date(String(a).replace(" ", "T") + "Z"), y = new Date(String(b).replace(" ", "T") + "Z");
+    if (isNaN(x.getTime()) || isNaN(y.getTime()) || x.toDateString() !== y.toDateString()) {
+      return localTime(b);
+    }
+    return y.toLocaleTimeString([], {timeStyle: "short"});
+  }
+  var ACT = {keep: "Keep", remove: "Remove", restore: "Bring back"};
+  function savedItem(e, act) {       // act(entry, action, buttons): a record's own Keep / Remove
+    var li = mk("li", "");
+    li.appendChild(mk("strong", "", e.head || ""));
+    if (e.state) { li.appendChild(mk("span", "state st-" + e.state, e.state_label || e.state)); }
+    if (e.excerpt) { li.appendChild(mk("p", "ex", e.excerpt)); }
+    if (e.solution) { li.appendChild(mk("p", "ex", "Solution: " + e.solution)); }
+    if (act && e.actions && e.actions.length) {
+      var row = mk("div", "recrow"), btns = [];
+      e.actions.forEach(function (a) {
+        var b = mk("button", "btn ghost rec", ACT[a] || a);
+        b.type = "button";
+        b.addEventListener("click", function () {
+          btns.forEach(function (x) { x.disabled = true; });
+          act(e, a, btns);
+        });
+        btns.push(b);
+        row.appendChild(b);
+      });
+      li.appendChild(row);
+    }
+    return li;
+  }
+  function saved(c, act) {           // what a session saved: each record, written as text
+    var box = mk("div", "");
+    if (c.started_utc) {
+      box.appendChild(mk("p", "faint", "Session " + localTime(c.started_utc) +
+        (c.ended_utc ? " to " + endTime(c.started_utc, c.ended_utc) : "") + (c.app ? ", by " + c.app : "")));
+    }
+    var entries = c.entries || [];
+    if (!entries.length) {
+      box.appendChild(mk("p", "muted", c.note || ""));
+      return box;
+    }
+    var shown = c.shown || entries.length;
+    box.appendChild(mk("p", "muted", "What this session saved (" + c.total + "):"));
+    if (act && c.explain) { box.appendChild(mk("p", "faint", c.explain)); }
+    var ul = mk("ul", "saved");
+    entries.slice(0, shown).forEach(function (e) { ul.appendChild(savedItem(e, act)); });
+    box.appendChild(ul);
+    var rest = entries.slice(shown);
+    if (rest.length) {               // the rest is already here: open it in place
+      var hid = mk("ul", "saved");
+      hid.hidden = true;
+      rest.forEach(function (e) { hid.appendChild(savedItem(e, act)); });
+      var more = "Show " + rest.length + " more", less = "Show fewer";
+      var btn = mk("button", "btn ghost more", more);
+      btn.type = "button";
+      btn.setAttribute("aria-expanded", "false");
+      btn.addEventListener("click", function () {
+        hid.hidden = !hid.hidden;
+        btn.textContent = hid.hidden ? more : less;
+        btn.setAttribute("aria-expanded", hid.hidden ? "false" : "true");
+      });
+      box.appendChild(hid);
+      box.appendChild(btn);
+    }
+    if (c.more) {
+      box.appendChild(mk("p", "faint", c.more + " more not sent to this page: " +
+        "the review page on your computer lists all."));
+    } else if (rest.length) {
+      box.appendChild(mk("p", "faint", "The review page on your computer lists them too."));
+    }
+    return box;
+  }
 """
 
 JS = r"""(function () {
@@ -119,17 +220,35 @@ JS = r"""(function () {
       else { say("Not done", r.j.message || "Something went wrong.", true); }
     }, function () { say("Not done", "Your FlowState didn't answer.", true); });
   }
+/*SAVED_JS*/
   if (!grant) { say("This link is incomplete", "Open it again from the chat.", true); return; }
   post("/open", {grant: grant}).then(function (r) {
     if (!r.ok) { say("Can't show this request", r.j.message || "", true); return; }
     var it = r.j.item;
     token = r.j.token;
     needsName = !!it.needs_name;
+    if (typeof r.j.name === "string" && r.j.name) {   // this FlowState's name, as text (textContent)
+      $("foot").textContent = r.j.name + ", your FlowState on your own computer, shows this page. " +
+        "flowstatemcp.com only confirmed it's you; it never sees what's in it.";
+    }
     say(it.question, "");
-    $("project").textContent = it.project;
+    $("project").textContent = it.project + (r.j.name ? " · " + r.j.name : "");
     $("summary").textContent = it.summary;
     $("details").textContent = it.details || "";
-    $("who").textContent = "Asked by " + it.queued_by + ", " + it.queued_at + " UTC";
+    function drawSaved(c) {
+      var box = $("saved");
+      while (box.firstChild) { box.removeChild(box.firstChild); }
+      box.appendChild(saved(c, function (e, action, btns) {
+        post("/record", {grant: grant, token: token, record: e.key, action: action}).then(function (r) {
+          if (r.ok && r.j.item && r.j.item.contents) { drawSaved(r.j.item.contents); $("status").textContent = r.j.message; }
+          else { btns.forEach(function (x) { x.disabled = false; }); $("status").textContent = r.j.message || "Not done."; $("status").className = "err"; }
+        }, function () { btns.forEach(function (x) { x.disabled = false; }); say("Not done", "Your FlowState didn't answer.", true); });
+      }));
+    }
+    if (it.contents) { drawSaved(it.contents); }
+    $("approve").textContent = it.yes || "Approve";
+    $("reject").textContent = it.no || "Reject";
+    $("who").textContent = "Asked by " + it.queued_by + ", " + localTime(it.queued_at);
     $("name-row").hidden = !needsName;
     $("item").hidden = false;
     if (it.card && it.card.sides) {
@@ -163,7 +282,7 @@ JS = r"""(function () {
     $("reject").addEventListener("click", function () { decide("reject"); });
   }, function () { say("Can't show this request", "Your FlowState didn't answer.", true); });
 })();
-"""
+""".replace("/*SAVED_JS*/\n", SAVED_JS)
 
 
 def _sha(s: str) -> str:
@@ -185,7 +304,8 @@ def view(db_path, item_id: int) -> dict:
         conn.close()
     project = row[0] if row else f"project #{item['project_id']}"
     p = json.loads(item.get("payload") or "{}")
-    app = item.get("app") or item.get("source") or "An app"
+    from .identity import shown_row
+    app = shown_row(item, fallback=item.get("source") or "An app")
     ask = approvals.describe(item, project, db_path)
     card = None
     summary = review.strip_tag(item.get("summary") or "")
@@ -193,8 +313,12 @@ def view(db_path, item_id: int) -> dict:
     if item["kind"] == "cleanup":   # FlowState's own idea: one plain question and its reason
         why = p.get("reason") or ""
         question = f"Should FlowState {ask}?" + (f" {why[:1].upper()}{why[1:]}." if why else "")
+        from . import cleanup   # the exact list, flagged if it changed (task 74)
+        listed = cleanup.preview(db_path, item)
+        if listed:
+            details = (details + "\n" if details else "") + listed["text"]
     elif item["kind"] == "session_summary":   # what Keep / Don't keep really do
-        question = f"{review.KEEP_QUESTION} {review.KEEP_HOW}"
+        question = f"{review.KEEP_QUESTION} {review.KEEP_HOW}"   # Keep all: below, with records
     elif item["kind"] == "delete":   # the rows the database says will go, not the agent's words
         from . import deletes
         got = deletes.preview(db_path, item)
@@ -204,17 +328,37 @@ def view(db_path, item_id: int) -> dict:
         card = conflict_cards.phone_card(db_path, item)
         question = (card or {}).get("headline") or "Two AIs disagree."
         summary, details = "", ""
+    elif item["kind"] == "card_offer":   # FlowState's own offer (card_offer.py), not an app's ask
+        question = item["summary"] + " Approve allows it: its taps on the cards count as yours. " \
+            "Reject keeps the text, and it isn't asked again."
+    elif item["kind"] == "reopen_conflict":   # FlowState's question after an undo (conflict_reopen.py)
+        question = item["summary"] + " Approve reopens them: back in the brief, and you are " \
+            "asked again whether they conflict. Reject leaves them closed."
     else:
         question = f"{app} wants to {ask}."
     keep = item["kind"] == "session_summary"
+    contents = None
+    if keep:   # what the session saved: titles and excerpts, not just counts
+        from . import session_contents
+        c = session_contents.for_item(db_path, {**item, "project": project})
+        contents = session_contents.public(c, send=session_contents.PHONE_MAX)
+        if contents and contents["entries"]:   # Keep all: the summary and every record not removed
+            question = f"{review.KEEP_QUESTION} {review.KEEP_ALL_HOW}"
     out = {"id": item["id"], "project": project, "kind": item["kind"], "question": question,
            "summary": summary, "details": details,
-           "yes": review.KEEP if keep else "Approve", "no": review.DONT_KEEP if keep else "Reject",
-           "queued_by": app + (f" on {item['machine']}" if item.get("machine") else ""),
+           "yes": (review.KEEP_ALL if contents and contents["entries"] else review.KEEP)
+           if keep else "Approve", "no": review.DONT_KEEP if keep else "Reject",
+           "queued_by": shown_row(item, on_machine=True, fallback=item.get("source") or "An app"),
            "queued_at": item.get("created_at") or "",
            "needs_name": item["kind"] == "delete" and p.get("record_type") == "project"}
     if card:
         out["card"] = card
+    if contents is not None:
+        from . import session_contents
+        out["contents"] = contents
+        out["contents_text"] = "\n".join(
+            [session_contents.when_line(c)] + session_contents.lines(c)).strip()
+    out["queued_at_utc"] = out["queued_at"]
     return out
 
 
@@ -285,7 +429,8 @@ def routes(db_path_fn):
             item = await asyncio.to_thread(view, db, item_id)
         except approvals.ApprovalError as e:
             return refuse(e)
-        return answer({"item": item, "token": token}, cookie=token, path=f"/approve/{item_id}")
+        return answer({"item": item, "token": token, "name": install_name.get()}, cookie=token,
+                      path=f"/approve/{item_id}")
 
     async def decide(request):
         item_id = request.path_params["item"]
@@ -306,7 +451,7 @@ def routes(db_path_fn):
         except approvals.ApprovalError as e:
             return refuse(e)
         from .popup import as_user
-        label = f"phone ({claims.get('handle')})"
+        label = "phone"   # never the relay handle: apps read decision labels (audit D19)
         keep = {"keep_a": "a", "keep_b": "b", "keep_both": "both"}.get(body["decision"])
         if body["decision"] == "approve" or keep:
             args = {"item_id": item_id, "confirm_name": body.get("confirm_name"),
@@ -328,8 +473,34 @@ def routes(db_path_fn):
             if body["decision"] == "approve" and isinstance(res, dict) and res.get("undo") else ""
         return answer({"ok": True, "message": f"{done}. You can close this page.{extra}"})
 
+    async def record(request):
+        """Keep / Remove / Bring back on one record of the session summary this page shows:
+        the same grant and page token as the tap (the grant stays usable for Keep all)."""
+        item_id = request.path_params["item"]
+        db = db_path_fn()
+        try:
+            body = await _body(request)
+            claims = await asyncio.to_thread(approvals.verify_grant, db, body["grant"], item_id)
+            token = body.get("token")
+            await asyncio.to_thread(approvals.require_phone_on, db)   # off closes open pages
+            if not isinstance(token, str) or request.cookies.get(COOKIE) != token \
+                    or not await asyncio.to_thread(_open_page, db, body["grant"], item_id, token):
+                raise approvals.ApprovalError("bad_token", "This page's session doesn't match. "
+                                                           "Open the link again from the chat.")
+            if not isinstance(body.get("record"), str) or not isinstance(body.get("action"), str):
+                raise approvals.ApprovalError("bad_request", "Choose Keep or Remove for a record.")
+        except approvals.ApprovalError as e:
+            return refuse(e)
+        res = await asyncio.to_thread(record_as_user, db, item_id, body["record"], body["action"],
+                                      "phone")
+        item = await asyncio.to_thread(view, db, item_id)
+        if "error" in res:
+            return answer({"error": res["error"], "message": res["message"], "item": item}, 409)
+        return answer({"ok": True, "message": res["message"], "item": item})
+
     return [Route("/approve/assets/{name}", asset, methods=["GET"]),
             Route("/approve/{item:int}", shell, methods=["GET"]),
+            Route("/approve/{item:int}/record", record, methods=["POST"]),
             Route("/approve/{item:int}/open", open_, methods=["POST"]),
             Route("/approve/{item:int}/decide", decide, methods=["POST"])]
 
@@ -345,6 +516,31 @@ def _remember(db_path, grant: str, item_id: int, token: str, exp: int) -> bool:
              datetime.fromtimestamp(exp, timezone.utc).strftime("%Y-%m-%d %H:%M:%S")))
         conn.commit()
         return cur.rowcount == 1
+    finally:
+        conn.close()
+
+
+def record_as_user(db_path, item_id: int, record: str, action: str, label: str) -> dict:
+    """A record decision from a phone page (session_records.decide) as the user: no agent
+    identity, labelled `label`. Errors come back as their payload."""
+    from . import identity, session_records
+    tok = identity.set_current(None)
+    try:
+        return session_records.decide(db_path, item_id, record, action, label)
+    except session_records.RecordError as e:
+        return e.payload
+    finally:
+        identity.reset(tok)
+
+
+def _open_page(db_path, grant: str, item_id: int, token: str) -> bool:
+    """This grant's page is open with this token, not yet used for the final tap, not expired."""
+    conn = approvals._conn(db_path)
+    try:
+        return conn.execute(
+            """SELECT 1 FROM approval_grants WHERE grant_hash = ? AND item_id = ?
+               AND page_token_hash = ? AND used_at IS NULL AND expires_at > ?""",
+            (approvals.grant_hash(grant), item_id, _sha(token), _now())).fetchone() is not None
     finally:
         conn.close()
 

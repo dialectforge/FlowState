@@ -7,8 +7,11 @@ the 2026-07-28 style, so that one isn't offered. The wait (at most approvals.POP
 runs after the tool's own work has committed, outside the call's time limit and holding no
 database lock; only accept with approve=true approves. Anything else leaves the item queued.
 
-No box at all (no_box) for requests that came through the relay or the public listener: the
-app's name there is its own say-so. And an answer that comes back faster than a person could
+No box at all (no_box) for requests that came through the relay or the public listener, or to
+the LAN listener from another computer. On stdio the popup list is checked against the name the
+app sends (its own say-so, from an app the user started on this computer); a LAN app on this
+computer is checked by its key's or token's own name on the list's sign-in part, never by the
+name it sends, which it could set to "claude-code" (task 57, H-1; as card_trust.py for cards). And an answer that comes back faster than a person could
 read the box (HUMAN_SECONDS) means the box was never shown: it counts as no answer, is not
 logged as the user's decision, and FlowState falls back to the plain line / list.
 """
@@ -87,9 +90,31 @@ def no_box(session, client: str, db_path) -> Optional[str]:
     if via not in ("stdio", "lan"):
         return ("This request came from outside this computer, so FlowState shows no "
                 "Approve / Reject boxes here.")
-    if session is None or not approvals.popup_allowed(db_path, client, declared(session)):
+    if via == "lan" and not on_this_computer():
+        return ("This request came from another computer, so FlowState shows no "
+                "Approve / Reject boxes here.")
+    if session is None:
+        return "This app can't show FlowState's Approve / Reject boxes."
+    if via == "stdio":
+        ok = approvals.popup_allowed(db_path, client, declared(session))
+    else:   # the LAN listener, from this computer: the sign-in's own name, never the sent one
+        from . import card_trust
+        who = card_trust.caller()
+        ok = who is not None and who.credential is not None and \
+            approvals.popup_allowed_credential(db_path, who.credential, declared(session), who.source)
+    if not ok:
         return "This app can't show FlowState's Approve / Reject boxes."
     return None
+
+
+def decider_label(path: str, client: str) -> str:
+    """The decider label of a popup / walk answer: "popup (claude-code)", or with the sign-in
+    over the LAN, "chat (claude-code, signed in as Laptop key)"."""
+    from . import card_trust
+    who = card_trust.caller()
+    if who is not None:
+        return who.label(path)
+    return f"{path} ({client or 'unknown'})"[:card_trust.LABEL_MAX]
 
 
 async def elicit(session, message: str, form: dict, related_request_id=None,
@@ -182,11 +207,12 @@ async def ask_user(result: dict, session_obj, client: str) -> dict:
         rid = S.server.request_context.request_id
     except LookupError:
         rid = None
-    label = f"popup ({client})"
+    from . import card_trust
+    label, where = decider_label("popup", client), card_trust.shown(client)
 
     async def decide(item_id: int, content: dict):
         args = {"item_id": item_id, "confirm_name": content.get("confirm_name"),
-                "user_request": f"The user approved this in the popup in {client}."}
+                "user_request": f"The user approved this in the popup in {where}."}
         return await asyncio.wait_for(asyncio.to_thread(as_user, "review_approve", args, label),
                                       S.call_timeout())
 

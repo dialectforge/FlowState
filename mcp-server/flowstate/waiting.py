@@ -19,7 +19,9 @@ Three ways, none of which shows anything unless the user asks (or has approvals 
      other computer 127.0.0.1 is that computer itself, so those apps get the phone link or a
      plain note to ask for the list instead (`flowstate review-page` on this computer).
   3. Relay users: a bookmarkable phone link to the whole list, https://flowstatemcp.com/review/
-     <handle> (approvals.review_link, review_phone.py; no code in the chat).
+     <handle> (approvals.review_link, review_phone.py; no code in the chat). Like the local
+     link, only for apps on this computer (2.4.4, audit D19): an app elsewhere gets a plain
+     sentence instead (approvals.PHONE_ELSEWHERE), so the handle stays out of cloud chat logs.
 
 Plus two the user opens themselves: the "FlowState review" desktop shortcut setup makes
 (`flowstate review-page`), and, for users with their own tunnel, https://<tunnel>/review/tunnel
@@ -64,9 +66,13 @@ def _wanted_port() -> Optional[int]:
 
 
 def _state_file(db_path: Path) -> Path:
+    """Which port serves this database's page. Under FLOWSTATE_HOME when it is set (a test or
+    second install keeps it out of the per-OS data folder), else the per-OS data folder."""
     from . import paths
     from .review_page import db_tag
-    return paths.data_root() / "review-page" / f"{db_tag(db_path)}.json"
+    home = (os.environ.get("FLOWSTATE_HOME") or "").strip()
+    root = Path(home).expanduser() if home else paths.data_root()
+    return root / "review-page" / f"{db_tag(db_path)}.json"
 
 
 def _ping(port: int, db_path: Path) -> bool:
@@ -106,7 +112,7 @@ def _start(db_fn) -> int:
     from .review_page import Page, create_app
     sock = _bind(_wanted_port() or 0)
     port = sock.getsockname()[1]
-    page = Page(db_fn, port, open_link=True)
+    page = Page(db_fn, port, open_link=True, settings="read")   # no launch key: settings read-only
     # log_config=None: uvicorn must not touch logging; stdout is the stdio transport's channel
     server = uvicorn.Server(uvicorn.Config(create_app(page), log_config=None, log_level="warning",
                                            access_log=False, lifespan="off"))
@@ -175,13 +181,24 @@ def links(db_path: Path, local: Optional[bool] = None) -> dict:
     page = local_link(db_path) if local else None
     if page:
         out["review_page"] = page
-    try:
-        phone = approvals.review_link(db_path)
+    try:   # an app elsewhere gets a plain sentence: the link carries the handle (D19)
+        phone = approvals.review_link(db_path) or \
+            (approvals.PHONE_ELSEWHERE if approvals.phone_hidden(db_path) else None)
     except Exception:  # noqa: BLE001 - no phone link, nothing more
         phone = None
     if phone:
         out["phone"] = phone
     return out
+
+
+def _is_link(v) -> bool:
+    return isinstance(v, str) and v.startswith(("http://", "https://"))
+
+
+def _where(k: str, v: str) -> str:
+    if k == "phone" and not _is_link(v):   # an app elsewhere: no link (approvals.PHONE_ELSEWHERE)
+        return "on their phone, from the FlowState review link they saved"
+    return f"{'on the computer where FlowState runs' if k == 'review_page' else 'on their phone'}: {v}"
 
 
 def where_line(db_path: Path) -> str:
@@ -193,7 +210,7 @@ def where_line(db_path: Path) -> str:
     if ways.get("review_page"):
         parts.append(f"on the computer where FlowState runs at {ways['review_page']}")
     if ways.get("phone"):
-        parts.append(f"on their phone: {ways['phone']}")
+        parts.append(_where("phone", ways["phone"]))
     parts.append('in this chat when they ask (manage_review action="walk")')
     if not local:   # an app on another computer: no 127.0.0.1 link (it would open its own)
         parts.append(ELSEWHERE)
@@ -209,11 +226,15 @@ ELSEWHERE = ("on the computer where FlowState runs (the FlowState review shortcu
 # ---------------------------------------------------------------- 1. the chat walk
 _KIND = {"session_summary": "session summary", "cleanup": "clean-up idea", "edit": "markdown edit",
          "conflict": "possible conflict", "disagreement": "disagreement",
-         "setting": "review setting", "source": "said by you?", "delete": "delete request"}
+         "setting": "review setting", "source": "said by you?", "delete": "delete request",
+         "rule": "hard rule", "handoff": "handoff note", "card_offer": "allow cards?",
+         "reopen_conflict": "reopen conflict?"}
 
 
 LINE_MAX = 160          # one item's line, as the app reads it in the JSON answer
 LIST_BUDGET = 12_000    # all lines of one page (limit 100: 120 each; the answer stays < 16,000)
+# a clean-up whose exact list changed since it was queued (task 75; the review page's warning)
+OUT_OF_DATE = "(out of date: approving changes nothing)"
 FULL_ITEM = ('One item in full (details, payload; needed before approving with edits): '
              'manage_review(action="list", item_id=<id>).')
 
@@ -241,8 +262,12 @@ def _plain(it: dict, room: int = LINE_MAX, status: bool = False) -> str:
 
 
 KEEP_NOTE = ('A session summary asks the user "Keep this session summary?": approve keeps it as '
-             "the session's record (edits allowed); reject means don't keep it (the session keeps "
-             "only a note saying so); nothing is deleted.")
+             "the session's record (edits allowed) and every listed record the user hasn't "
+             "removed (Keep all); reject means don't keep it (the session keeps only a note "
+             "saying so); nothing is deleted. Each listed record's own Keep / Remove is the "
+             "user's alone, on the review page, their phone, the review card or "
+             "`flowstate review record` in their terminal; the record states shown here are "
+             "read-only for you.")
 
 
 def _keep_note(items: list) -> dict:
@@ -252,7 +277,7 @@ def _keep_note(items: list) -> dict:
 def _lines(items: list, status: bool = False, db_path: Optional[Path] = None) -> list:
     """One line each. A disagreement or a delete is the server's own text (the card, or the
     rows that would go), not a 160-character cut of whatever an agent wrote."""
-    from . import conflict_cards, deletes
+    from . import cleanup, conflict_cards, deletes
     room = min(LINE_MAX, LIST_BUDGET // max(1, len(items)))
     out = []
     for it in items:
@@ -263,10 +288,32 @@ def _lines(items: list, status: bool = False, db_path: Optional[Path] = None) ->
             if db_path is not None and it.get("kind") == "delete":
                 out.append(deletes.list_line(db_path, it, status))
                 continue
+            if db_path is not None and it.get("kind") == "session_summary":
+                tail = _records_tail(db_path, it)
+                if tail:
+                    out.append(_plain(it, max(60, room - len(tail)), status) + tail)
+                    continue
+            if db_path is not None and it.get("kind") == "cleanup" and it.get("status") == "pending":
+                got = cleanup.preview(db_path, it)   # the review page's check (task 74)
+                if got and got["changed_since_request"]:
+                    out.append(_plain(it, max(60, room - len(OUT_OF_DATE) - 1), status)
+                               + " " + OUT_OF_DATE)
+                    continue
         except Exception:  # noqa: BLE001 - a list line must not fail the whole answer
             log.warning("review line for #%s skipped", it.get("id"))
         out.append(_plain(it, room, status))
     return out
+
+
+def _records_tail(db_path: Path, it: dict) -> str:
+    """' [3 records: 1 kept, 1 removed by you, 1 not decided yet]' for a session summary's line."""
+    from . import session_contents, session_records
+    c = session_contents.for_item(db_path, it)
+    if not c or not c["entries"]:
+        return ""
+    states = session_records.count_line(c["entries"])
+    return (f" [{c['total']} record{'s' if c['total'] != 1 else ''}: "
+            + (states[len("records: "):] if states else "none decided yet") + "]")
 
 
 def _page(listing: dict, after: Optional[int], action: str) -> dict:
@@ -308,8 +355,10 @@ def review_list(args: dict, walk: bool, scopes) -> dict:
         return e.payload
     if walk:
         plan = prepare(out, S.backend.db_path, scopes, pid, after)
-        if isinstance(plan, dict) and plan.get("_walk", {}).get("cards"):
-            plan.update(_card_pointer(out["items"][:WALK_MAX]))
+        if isinstance(plan, dict) and "_walk" in plan:
+            shown = out["items"][:WALK_MAX]
+            plan.update(_card_pointer(shown))
+            plan["_walk"]["boxed_pointer"] = _card_pointer(shown, review=False)   # after boxes
         return plan
     page = _page(out, after, "list")   # one line per item; item_id= for one in full
     db = S.backend.db_path
@@ -326,20 +375,33 @@ def review_list(args: dict, walk: bool, scopes) -> dict:
             cards.append({"review_item_id": packed["review_item_id"], "text": packed["text"]})
     if cards:
         result["conflict_cards"] = cards
-        if out["status"] == "pending":
-            result.update(_card_pointer(out["items"]))
+    if out["status"] == "pending":
+        result.update(_card_pointer(out["items"]))
     return result
 
 
-def _card_pointer(items: list) -> dict:
-    """show_card for the waiting disagreements (MCP Apps hosts only; conflict_cards.pointer).
-    Cards in several projects: the first project's; the list names the rest."""
-    from . import conflict_cards
-    waiting = [it for it in items if it.get("kind") == "disagreement" and it.get("status") == "pending"]
-    if not waiting:
-        return {}
-    project = waiting[0].get("project")
-    return conflict_cards.pointer(project, [it["id"] for it in waiting if it.get("project") == project])
+def _card_pointer(items: list, review: bool = True) -> dict:
+    """show_card for the waiting items on MCP Apps hosts: show_conflict_card for
+    disagreements (conflict_cards.pointer), show_review_card for the rest (review_cards.pointer;
+    not with review=False), both calls when both wait. Items in several projects: the first
+    project's; the list names the rest."""
+    from . import conflict_cards, review_cards
+
+    def first(group: list, fn) -> dict:
+        if not group:
+            return {}
+        project = group[0].get("project")
+        return fn(project, [it["id"] for it in group if it.get("project") == project])
+    waiting = [it for it in items if it.get("status") == "pending"]
+    dis = first([it for it in waiting if it.get("kind") == "disagreement"], conflict_cards.pointer)
+    rest = first([it for it in waiting if it.get("kind") != "disagreement"],
+                 review_cards.pointer) if review else {}
+    out = review_cards.both(dis, rest)
+    if not out and waiting:   # an app that shows cards, not on the card list: how to turn them on
+        off = conflict_cards.cards_off()
+        if off:
+            out = {"cards_off": off}
+    return out
 
 
 def _safe_card(db_path: Path, it: dict):
@@ -373,6 +435,29 @@ def _one_item(db_path: Path, item_id, pid: Optional[int], named) -> dict:
         it["details"] = got["details"]
         if got.get("ai_note"):
             it["ai_note"] = got["ai_note"]
+    elif it.get("kind") == "session_summary":   # the short line, and beside it what it saved
+        from . import session_contents
+        c = session_contents.for_item(db_path, it)
+        saved = [x for x in [session_contents.when_line(c)] if x] + session_contents.lines(c)
+        if saved:
+            it["saved_records"] = saved
+        if c and c["entries"]:   # read-only: each record's Keep / Remove is the user's
+            it["record_states"] = [{"record": e["key"], "state": e.get("state") or "undecided"}
+                                   for e in c["entries"]]
+            answer["record_note"] = ("Each record's Keep / Remove is the user's alone (review "
+                                     "page, phone, review card, or `flowstate review record` in "
+                                     "their terminal); you can't decide records.")
+    elif it.get("kind") == "cleanup" and it.get("status") == "pending":
+        from . import cleanup   # the review page's exact list and warning (task 76)
+        try:
+            got = cleanup.preview(db_path, it)
+        except Exception:  # noqa: BLE001 - the item is still shown without its list
+            log.warning("clean-up list for #%s skipped", it.get("id"))
+            got = None
+        if got:
+            it["would_change"] = got["text"]
+            if got["warning"]:
+                it["out_of_date"] = got["warning"]
     elif it.get("kind") == "disagreement":
         packed = _safe_card(db_path, it)
         if packed:
@@ -401,7 +486,23 @@ def prepare(listing: dict, db_path: Path, scopes, project_id: Optional[int] = No
     # A disagreement has four outcomes, so it is not a yes/no box. The card text stays
     # in the answer (walk() puts it back after it drops the item lines).
     cards = [conflict_cards_line(db_path, it) for it in items if it.get("kind") == "disagreement"]
-    out["_walk"] = {"ids": [it["id"] for it in items if it.get("kind") != "disagreement"],
+    # Hard rules (adding or removing one) never get a box: an app that answers its own box
+    # could pass for the user (task 54; re-audit N-F26). They stay listed with where to decide.
+    held = [it for it in items if it.get("kind") == "rule"]
+    # "Did you say this?" items too: only the user turns an app's claim into "you said so",
+    # on the review page, their phone or in their terminal (AGENTS.md; task 56 Info)
+    said = [it for it in items if it.get("kind") == "source"]
+    # "Allow tap cards in <app>?" (card_offer.py): only on the review page or the phone page
+    offers = [it for it in items if it.get("kind") == "card_offer"]
+    # "Reopen these possible conflicts?" after an undo (conflict_reopen.py): the same
+    reopen = [it for it in items if it.get("kind") == "reopen_conflict"]
+    out["_walk"] = {"ids": [it["id"] for it in items
+                            if it.get("kind") not in ("disagreement", "rule", "source", "card_offer",
+                                                      "reopen_conflict")],
+                    "reopen": _lines(reopen, db_path=db_path) if reopen else [],
+                    "held": _lines(held, db_path=db_path) if held else [],
+                    "offers": _lines(offers, db_path=db_path) if offers else [],
+                    "said": _lines(said, db_path=db_path) if said else [],
                     "cards": [c for c in cards if c], "project_id": project_id,
                     "may_decide": scopes is None or "flowstate:write" in scopes,
                     "links": links(db_path, local), "local": local}
@@ -417,13 +518,25 @@ def conflict_cards_line(db_path: Path, it: dict) -> Optional[str]:
 
 
 NOT_SHOWN = "No boxes were shown here; nothing was decided."
+HELD_NOTE = ("Hard rules get no box here: the user adds or removes one only on the review page, "
+             "their phone or with `flowstate approve <id>` in their terminal.")
+
+
+SAID_NOTE = ("\"Did you say this?\" items get no box here: only the user confirms that they said "
+             "something, on the review page, their phone or with `flowstate approve <id>` in "
+             "their terminal.")
+
+REOPEN_NOTE = ("\"Reopen these possible conflicts?\" gets no box here: only the user answers it, "
+               "on the review page, their phone review page or by tapping its review card.")
+
+OFFER_NOTE = ("\"Allow tap cards in <app>?\" gets no box here: only the user answers it, on the "
+              "review page or their phone review page.")
 
 
 def how_to_decide(ways: dict, why: str, local: bool = True, show: str = "this list") -> str:
     """The walk's plain guidance (also given with every answer that queues something for the
     user, queue_guidance): why no boxes, where the user decides, and not to decide for them."""
-    where = [f"{'on the computer where FlowState runs' if k == 'review_page' else 'on their phone'}: {v}"
-             for k, v in ways.items()]
+    where = [_where(k, v) for k, v in ways.items()]
     if not local:   # no 127.0.0.1 link for an app on another computer
         where.append(ELSEWHERE)
     return (f"{why} Show the user {show}. They decide each item themselves: "
@@ -495,9 +608,10 @@ def queue_guidance(result, db_path: Optional[Path], client: str):
         for k in ("review_page", "phone"):
             if k in ways and k not in result:
                 result[k] = ways[k]
-        result["how_to_decide"] = how_to_decide(ways, why, local, "the link" if ways else
+        linked = any(_is_link(v) for v in ways.values())
+        result["how_to_decide"] = how_to_decide(ways, why, local, "the link" if linked else
                                                 "where to decide it")
-        result["dont_approve"] = DONT_APPROVE if ways else DONT_APPROVE_NO_LINK
+        result["dont_approve"] = DONT_APPROVE if linked else DONT_APPROVE_NO_LINK
     except Exception as e:  # noqa: BLE001 - guidance is extra; the queued item is saved
         log.warning("review guidance skipped: %s", e)
     return result
@@ -516,8 +630,9 @@ PHONE_ONLY_WHY = ("This request came through the relay, where approving and reje
 def phone_only(db_path: Optional[Path], item_id) -> Optional[dict]:
     """An AI's manage_review approve / reject (server._review_decide). Through the relay, while
     chat approvals are off (the default; `flowstate relay chat-approvals on` allows them), a
-    pending item is refused with its own phone link (else the review list's) and the walk's
-    guidance. None: go on as usual (another connection, the setting is on, or the item is
+    pending item is refused with where the user decides (the item's phone link only for an
+    app on this computer; through the relay a sentence, approvals.PHONE_ELSEWHERE) and the
+    walk's guidance. None: go on as usual (another connection, the setting is on, or the item is
     missing or already decided: the usual answer says so)."""
     from .popup import listener
     if db_path is None or listener() != "relay" or approvals.relay_chat_on(db_path):
@@ -542,9 +657,10 @@ def phone_only(db_path: Optional[Path], item_id) -> Optional[dict]:
     out = {"error": "phone_only", "message": PHONE_ONLY.format(id=iid), "item_id": iid,
            "kind": item.get("kind"), "status": "waiting for the user", "next": nxt}
     out.update(ways)
+    linked = any(_is_link(v) for v in ways.values())
     out["how_to_decide"] = how_to_decide(ways, PHONE_ONLY_WHY, False,
-                                         "the link" if ways else "where to decide it")
-    out["dont_approve"] = DONT_APPROVE if ways else DONT_APPROVE_NO_LINK
+                                         "the link" if linked else "where to decide it")
+    out["dont_approve"] = DONT_APPROVE if linked else DONT_APPROVE_NO_LINK
     return out
 
 
@@ -552,9 +668,25 @@ def _form(it: dict, i: int, n: int) -> tuple[str, dict]:
     from .popup import NOTE_FIELD
     details = " ".join(str(it.get("details") or "").split())
     details = details if len(details) <= 600 else details[:597] + "..."
-    who = it.get("app") or it.get("source") or "an app"
+    from .identity import shown_row
+    who = shown_row(it, fallback=it.get("source") or "an app")
     from .review import DONT_KEEP, KEEP, KEEP_HOW, KEEP_QUESTION, strip_tag
     keep = it["kind"] == "session_summary"   # Keep / Don't keep: what approve / reject do
+    if keep:   # what the session saved, so the box isn't a blind Keep / Don't keep
+        from . import server as S, session_contents
+        c = session_contents.for_item(S.backend.db_path, it)
+        saved = [x for x in [session_contents.when_line(c)] if x] + session_contents.lines(c)
+        if saved:
+            details = "\n".join(([details] if details else []) + saved)
+        if c and c["entries"]:   # the box is Keep all; one record: the review page or phone
+            from .review import KEEP_ALL, KEEP_ALL_HOW
+            KEEP, KEEP_HOW = KEEP_ALL, KEEP_ALL_HOW + (" To keep or remove one record, use the "
+                                                       "review page or your phone.")
+    if it["kind"] == "cleanup":   # its list changed: say so before the user ticks (task 75)
+        from . import cleanup, server as S
+        got = cleanup.preview(S.backend.db_path, it)
+        if got and got["warning"]:
+            details = "\n".join(([details] if details else []) + [got["warning"]])
     msg = (f"Waiting for you ({i} of {n}), {it['project']}, {_KIND.get(it['kind'], it['kind'])} "
            f"#{it['id']} from {who}:\n{strip_tag(it.get('summary'))}" + (f"\n{details}" if details else "")
            + (f"\n{KEEP_QUESTION} {KEEP_HOW}\nTick {KEEP} and submit to keep it; submit it unticked "
@@ -588,7 +720,7 @@ async def walk(result: dict, session, client: str) -> dict:
     A box answered faster than a person could (popup.HUMAN_SECONDS) was not shown: the walk
     stops there, logs nothing for it and, if nothing was decided, answers with the plain list."""
     from . import server as S
-    from .popup import as_user, elicit, no_box
+    from .popup import as_user, decider_label, elicit, no_box
     plan = result.pop("_walk")
     db = S.backend.db_path
     ways, local = plan["links"], plan.get("local", True)
@@ -602,7 +734,8 @@ async def walk(result: dict, session, client: str) -> dict:
         rid = S.server.request_context.request_id
     except LookupError:
         rid = None
-    label = f"chat ({client})"
+    from . import card_trust
+    label, where = decider_label("chat", client), card_trust.shown(client)
     done, n, unseen = [], len(plan["ids"]), False
     for i, item_id in enumerate(plan["ids"], 1):
         it = await asyncio.to_thread(S._safe_call, _item_view, db, item_id)
@@ -620,7 +753,7 @@ async def walk(result: dict, session, client: str) -> dict:
             note = " ".join(str(content.get("note") or "").split())[:300]
             args = {"item_id": item_id, "confirm_name": content.get("confirm_name"),
                     "user_request": f"The user {'approved' if choice else 'rejected'} this in the "
-                                    f"review walk in {client}.",
+                                    f"review walk in {where}.",
                     **({"reason": note or "rejected by the user in the chat"} if not choice else {})}
             out = await asyncio.wait_for(asyncio.to_thread(as_user, name, args, label),
                                          S.call_timeout())
@@ -643,14 +776,27 @@ async def walk(result: dict, session, client: str) -> dict:
         return _plain_answer(result, ways, "This app answered FlowState's box at once, faster "
                                            "than a person could, so no box was shown.", local)
     left = await asyncio.to_thread(S._safe_call, _pending_total, db, plan.get("project_id"))
-    for k in ("items", "showing", "next_page"):
+    for k in ("items", "showing", "next_page", "show_card", "card_note", "cards_off"):
         result.pop(k, None)
+    result.update(plan.get("boxed_pointer") or {})   # the boxes asked the rest: cards only for disagreements
     result["walked"] = done
     result["still_waiting"] = left
     if left:
         result.update(ways)
     if plan.get("cards"):
         result["conflict_cards"] = plan["cards"]
+    if plan.get("held"):
+        result["hard_rules"] = plan["held"]
+        result["hard_rules_note"] = HELD_NOTE
+    if plan.get("said"):
+        result["said_by_you"] = plan["said"]
+        result["said_by_you_note"] = SAID_NOTE
+    if plan.get("offers"):
+        result["card_offers"] = plan["offers"]
+        result["card_offers_note"] = OFFER_NOTE
+    if plan.get("reopen"):
+        result["reopen_questions"] = plan["reopen"]
+        result["reopen_questions_note"] = REOPEN_NOTE
     result["note"] = _counts(done) + (
         " Then this app answered a box at once, faster than a person could, so FlowState "
         "stopped: that box was not shown and nothing more was decided." if unseen else "")

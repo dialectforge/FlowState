@@ -107,7 +107,8 @@ def test_agent_wording_is_only_a_labeled_note(backend, seeded_db):
     assert "Core" in line
     one = _j(call(S, "manage_review", {"action": "list", "project": "Alpha", "item_id": item}))
     assert one["item"]["summary"] == got["headline"]
-    assert one["item"]["ai_note"] == got["ai_note"]
+    from flowstate.stored import defuse   # tool answers break <script> (audit D6)
+    assert one["item"]["ai_note"] == defuse(got["ai_note"])
     assert one["item"]["would_delete"]["title"] == "Alpha"
     child_names = [c["name"] for c in one["item"]["would_delete"]["children"]]
     assert "Rotate the session key" in child_names and "Alpha todo" in child_names

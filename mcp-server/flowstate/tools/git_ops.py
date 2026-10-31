@@ -6,10 +6,15 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 from . import utils
 
-def _run_git_command(args: list[str], cwd: Optional[Path] = None) -> tuple[bool, str, str]:
-    """Run a git command and return (success, stdout, stderr)."""
+def _run_git_command(args: list[str], cwd: Optional[Path] = None,
+                     env: Optional[dict] = None, input_text: Optional[str] = None) -> tuple[bool, str, str]:
+    """Run a git command and return (success, stdout, stderr). `input_text`: what git reads on
+    its stdin (else nothing)."""
+    feed = {"input": input_text} if input_text is not None else {"stdin": subprocess.DEVNULL}
     try:
         result = subprocess.run(
             ["git"] + args,
@@ -20,9 +25,9 @@ def _run_git_command(args: list[str], cwd: Optional[Path] = None) -> tuple[bool,
             # Never hand git the server's stdin: in a stdio server that is the MCP pipe, and on
             # Windows a child touching a pipe another thread is reading blocks until the next
             # message arrives (every data-git call then timed out).
-            stdin=subprocess.DEVNULL,
+            **feed,
             # never wait on a password prompt nobody can see: fail instead
-            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0", **(env or {})}
         )
         return result.returncode == 0, result.stdout, result.stderr
     except subprocess.TimeoutExpired:
@@ -35,52 +40,62 @@ def git_init() -> dict:
     """
     Initialize FlowState data directory as a Git repository.
     Creates standard .gitignore for FlowState.
-    
+
+    An existing README.md is left as it is, and an existing .gitignore keeps its lines (the
+    ones FlowState needs are added at its end): audit N-F25.
+
     Returns:
         Git status info
     """
-    # Ensure data directory exists
-    utils.data_dir().mkdir(parents=True, exist_ok=True)
-    projects_dir = utils.data_dir() / "projects"
-    projects_dir.mkdir(exist_ok=True)
-    
+    from .. import privatefs
+    # Ensure data directory exists (owner-only when FlowState makes it)
+    privatefs.private_dir(utils.data_dir())
     # Check if already initialized
     git_dir = utils.data_dir() / ".git"
     if git_dir.exists():
         return git_status()
-    
-    # Initialize git
-    success, stdout, stderr = _run_git_command(["init"])
+    unsafe = unsafe_entries(utils.data_dir())
+    if unsafe:
+        return {"success": False, "initialized": False, "unsafe": unsafe, "error": UNSAFE_HERE.format(
+            paths=_list(unsafe))}
+    privatefs.private_dir(utils.data_dir() / "projects")
+
+    success, stderr = _init_on_main()
     if not success:
         return {"success": False, "error": stderr}
-    
-    # Create .gitignore
-    gitignore_content = """# OS files
-.DS_Store
-Thumbs.db
 
-# SQLite temporary/lock files (both .db and .sqlite extensions)
-*.db-journal
-*.db-wal
-*.db-shm
-*.sqlite-journal
-*.sqlite-wal
-*.sqlite-shm
-*.tmp
-*.bak
+    write_gitignore()
 
-# Local backups (don't sync conflict backups)
-*.local-backup-*
+    readme_path = utils.data_dir() / "README.md"
+    if not os.path.lexists(readme_path):
+        safe_write(readme_path, README)
 
-# Large media (optional - user can toggle)
-# *.mp4
-# *.mov
-"""
-    gitignore_path = utils.data_dir() / ".gitignore"
-    gitignore_path.write_text(gitignore_content)
-    
-    # Create README
-    readme_content = """# FlowState Data
+    # Initial commit: only what may ever be committed (see ALLOWED_TOP)
+    _run_git_command(["add", "-A"])
+    enforce_index()
+    _run_git_command(["commit", "-m", "FlowState initialized"])
+
+    return git_status()
+
+
+BRANCH = "main"   # every new data-git repository's branch, whatever git's own default is
+TWINS = ("main", "master")   # the two names git has used for a new repository's branch
+
+
+def _init_on_main() -> tuple:
+    """`git init` on BRANCH: with git's own default (`master` on many Linux gits, `main` on
+    others) two computers would each sync their own branch and never see each other's commits.
+    (success, git's error)"""
+    ok, _o, err = _run_git_command(["init", "-b", BRANCH])
+    if ok:
+        return True, ""
+    ok, _o, err = _run_git_command(["init"])   # git before 2.28 has no -b
+    if ok:
+        ok, _o, err = _run_git_command(["symbolic-ref", "HEAD", f"refs/heads/{BRANCH}"])
+    return ok, err
+
+
+README = """# FlowState Data
 
 This repository contains your FlowState development memory.
 
@@ -88,14 +103,6 @@ This repository contains your FlowState development memory.
 
 Manage through the FlowState app or MCP server.
 """
-    readme_path = utils.data_dir() / "README.md"
-    readme_path.write_text(readme_content)
-    
-    # Initial commit
-    _run_git_command(["add", "."])
-    _run_git_command(["commit", "-m", "FlowState initialized"])
-    
-    return git_status()
 
 
 def git_status() -> dict:
@@ -115,11 +122,9 @@ def git_status() -> dict:
             "error": "Not a git repository. Run git_init first."
         }
     
-    # Get branch
     success, stdout, _ = _run_git_command(["branch", "--show-current"])
     branch = stdout.strip() if success else "unknown"
     
-    # Get remote
     success, stdout, _ = _run_git_command(["remote", "-v"])
     has_remote = bool(stdout.strip())
     remote_url = None
@@ -159,6 +164,40 @@ def git_status() -> dict:
 _SECRET_FILE = re.compile(
     r"(token|secret|credential|password|passwd|\.env($|\.)|\.pem$|\.key$|\.p12$|\.pfx$|"
     r"^id_(rsa|dsa|ecdsa|ed25519)|\.log$)", re.I)
+# The database and its side files, settings and FlowState's own state: never committed, even
+# inside projects/ (2.4.4, audit D1). The database goes into data-git only as the markdown
+# export `flowstate data-git sync` writes into export/.
+_NEVER = re.compile(
+    r"(\.db$|\.db-(wal|shm|journal)$|\.sqlite3?(-(wal|shm|journal))?$|-wal$|-shm$|-journal$|"
+    r"^remote-auth|^config\.json$|^update\.json$|^relay\.json$|^device-token|\.fsenc$)", re.I)
+# Only these top-level entries are ever committed: the rest of the data folder (the database,
+# backups/, relay/, config.json, remote-auth.db, update.json, review-page/, ...) stays out.
+ALLOWED_TOP = (".gitignore", "README.md", "projects", "export")
+
+GITIGNORE = """# Written by FlowState. Only README.md, projects/ (attachments) and export/ (the markdown
+# export `flowstate data-git sync` writes) are ever committed. The database, its -wal/-shm
+# files, backups/, relay/ (device token, TLS key), config.json, remote-auth.db and everything
+# else in this folder stay out. FlowState rewrites this file and checks every commit.
+/*
+!/.gitignore
+!/README.md
+!/projects/
+!/export/
+*.db
+*.db-*
+*.sqlite*
+*-wal
+*-shm
+*-journal
+*.pem
+*.key
+*.env
+*.log
+.DS_Store
+Thumbs.db
+*.tmp
+*.bak
+"""
 
 
 def is_secret_file(path: str) -> bool:
@@ -166,30 +205,495 @@ def is_secret_file(path: str) -> bool:
     return bool(_SECRET_FILE.search(path.replace("\\", "/").rsplit("/", 1)[-1]))
 
 
-def git_sync(commit_message: Optional[str] = None) -> dict:
+def may_commit(path: str) -> bool:
+    """Only README.md, .gitignore and files under projects/ or export/, and never a database,
+    settings, key, token or log file wherever it sits (audit D1)."""
+    path = path.replace("\\", "/").strip().strip("/")
+    name = path.rsplit("/", 1)[-1]
+    top = path.split("/", 1)[0]
+    if top not in ALLOWED_TOP or (top in (".gitignore", "README.md") and path != top):
+        return False
+    if name.lower() in (".gitattributes", ".gitmodules"):   # they change how git writes files
+        return False                                         # here (task 56, N6)
+    return not (is_secret_file(path) or _NEVER.search(name))
+
+
+def _required_ignore_lines() -> list:
+    return [ln for ln in GITIGNORE.splitlines() if ln.strip() and not ln.startswith("#")]
+
+
+def write_gitignore() -> None:
+    """Write FlowState's .gitignore. One that is already there keeps its own lines; if any line
+    FlowState needs is missing, FlowState's whole list is added at its end (later lines win in
+    git, so the list keeps its meaning whatever came before it). Audit N-F25."""
+    path = utils.data_dir() / ".gitignore"
+    if not os.path.lexists(path):
+        safe_write(path, GITIGNORE)
+        return
+    if path.is_symlink() or not path.is_file():
+        raise UnsafePath(".gitignore")
+    text = gitignore_text(path.read_text(encoding="utf-8", errors="replace"))
+    if text is not None:
+        safe_write(path, text)
+
+
+def gitignore_text(current: Optional[str]) -> Optional[str]:
+    """FlowState's .gitignore made from `current` (None: there is none): FlowState's list when
+    there is none, else `current` with the list added at its end when a line it needs is
+    missing. None when `current` already has every line."""
+    if current is None:
+        return GITIGNORE
+    have = {ln.strip() for ln in current.splitlines()}
+    need = _required_ignore_lines()
+    if all(ln in have for ln in need):
+        return None
+    sep = "" if current.endswith("\n") or not current else "\n"
+    return (current + sep + "\n# Added by FlowState: the files it never commits "
+            "(FlowState also checks every commit).\n" + "\n".join(need) + "\n")
+
+
+# ------------------------------------------------- what may be in the repository (audit N-F12, N-F14)
+OK_MODES = ("100644", "100755")   # plain files only: no links, no submodules
+
+
+class UnsafePath(Exception):
+    pass
+
+
+def safe_write(path: Path, text: str, private: bool = False) -> None:
+    """Write a whole file in the data folder without following a link: refused when `path` is
+    a link or not a plain file; written to a new file next to it (O_EXCL | O_NOFOLLOW) and moved
+    over it, so a link put there in the meantime is replaced, never written through. `private`:
+    owner-only (0600; the export, audit N-F28)."""
+    path = Path(path)
+    if path.is_symlink() or (os.path.lexists(path) and not path.is_file()):
+        raise UnsafePath(str(path))
+    if path.parent.is_symlink():
+        raise UnsafePath(str(path.parent))
+    tmp = path.with_name(f".{path.name}.flowstate-{os.getpid()}.tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) \
+        | getattr(os, "O_BINARY", 0)
+    try:
+        os.unlink(tmp)
+    except FileNotFoundError:
+        pass
+    fd = os.open(str(tmp), flags, 0o600 if private else 0o644)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(text.encode("utf-8"))
+        if private:
+            from .. import privatefs
+            privatefs.lock(tmp)   # Windows: this account only; elsewhere 0600 whatever the umask
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def unsafe_entries(folder: Path) -> list:
+    """Links and other non-plain entries where data-git writes or commits: README.md,
+    .gitignore, export/ and projects/ (and everything under them). Relative paths; empty when
+    all is well. A link there (pushed by anyone who can push to the remote) would make the next
+    sync or attachment write somewhere else on this computer (audit N-F12)."""
+    folder = Path(folder)
+    out = []
+    for top in (".gitignore", "README.md"):
+        p = folder / top
+        if p.is_symlink() or (os.path.lexists(p) and not p.is_file()):
+            out.append(top)
+    for top in ("export", "projects"):
+        p = folder / top
+        if not os.path.lexists(p):
+            continue
+        if p.is_symlink() or not p.is_dir():
+            out.append(top)
+            continue
+        for root, dirs, files in os.walk(p, followlinks=False):
+            for name in dirs + files:
+                q = Path(root) / name
+                if q.is_symlink() or not (q.is_dir() or q.is_file()):
+                    out.append(q.relative_to(folder).as_posix())
+            dirs[:] = [d for d in dirs if not (Path(root) / d).is_symlink()]
+    return out
+
+
+def tree_entries(rev: str, cwd: Optional[Path] = None) -> list:
+    """(mode, path) of every entry in commit `rev` ([] when there is no such commit)."""
+    ok, out, _ = _run_git_command(["ls-tree", "-r", "-z", "--full-tree", rev], cwd=cwd)
+    if not ok:
+        return []
+    entries = []
+    for rec in out.split("\0"):
+        if "\t" in rec:
+            meta, path = rec.split("\t", 1)
+            entries.append((meta.split()[0], path))
+    return entries
+
+
+def never_tracked_in(rev: str = "HEAD") -> list:
+    """Files commit `rev` holds that FlowState never commits (the database, settings, keys):
+    a repository from FlowState 2.4.3 or older, or something someone pushed."""
+    return [p for _m, p in tree_entries(rev) if not may_commit(p)]
+
+
+def enforce_index() -> list:
+    """Keep everything that may not be committed out of the next commit (it stays on disk).
+    A new file is taken out of git's index; a file the last commit already holds (an older
+    repository's database) stays exactly as committed: removing it from git would make git
+    delete it on every other computer that syncs (audit N-F14), which only `flowstate data-git
+    migrate` does, when the user asks. Returns the paths taken out."""
+    ok, out, _ = _run_git_command(["ls-files", "-z"])
+    bad = [p for p in (out.split("\0") if ok else []) if p and not may_commit(p)]
+    if not bad:
+        return []
+    held = set(never_tracked_in("HEAD"))
+    keep = [p for p in bad if p in held]
+    drop = [p for p in bad if p not in held]
+    for i in range(0, len(keep), 100):
+        _run_git_command(["reset", "-q", "HEAD", "--", *keep[i:i + 100]])
+    for i in range(0, len(drop), 100):
+        _run_git_command(["rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", *drop[i:i + 100]])
+    return drop
+
+
+def _list(paths: list, n: int = 8) -> str:
+    more = f" (+{len(paths) - n} more)" if len(paths) > n else ""
+    return ", ".join(paths[:n]) + more
+
+
+LEGACY = ("This data-git repository still holds files FlowState no longer commits, from FlowState "
+          "2.4.3 or older: {paths}. Taking them out of git would make git delete them (your "
+          "database) on any computer that still runs 2.4.3 and syncs this repository, so nothing "
+          "was committed, pulled or pushed. First update FlowState on every computer that syncs "
+          "it, then run `flowstate data-git migrate` once on each of them (it backs up the "
+          "database first and keeps it on disk).")
+INCOMING_NEVER = ("The remote holds files FlowState never syncs (a database, settings or keys): "
+                  "{paths}. Pulling them would overwrite this computer's own, so nothing was "
+                  "pulled or pushed{local}. If a computer that syncs this repository still runs "
+                  "FlowState 2.4.3 or older, update it; then run `flowstate data-git migrate` "
+                  "once here.")
+INCOMING_UNSAFE = ("The remote holds links or other special entries: {paths}. FlowState syncs "
+                   "plain files only (a link could make a later sync write somewhere else on this "
+                   "computer), so nothing was pulled or pushed{local}. Remove them from the remote "
+                   "repository by hand (git rm), then sync again.")
+INCOMING_OVERWRITE = ("The remote holds files that would replace files on this computer that git "
+                      "doesn't track: {paths}. Nothing was pulled or pushed{local}. Move those "
+                      "files away (or remove them from the remote), then sync again.")
+UNSAFE_HERE = ("There are links or other special entries where data-git writes: {paths}. "
+               "FlowState writes plain files only (a link could make it write somewhere else on "
+               "this computer), so nothing was written, committed or pushed. Look at them and "
+               "remove them (and from the remote, if they came from there), then try again.")
+
+
+def _incoming_problem(tip: str, local: str) -> Optional[dict]:
+    """What commit `tip` (the remote's, fetched, not merged) would do here that it must not:
+    bring in a database or settings file, a link, or replace a file git doesn't track here
+    (git overwrites ignored files without asking, the live database among them)."""
+    entries = tree_entries(tip)
+    odd = [p for m, p in entries if m not in OK_MODES]
+    if odd:
+        return {"unsafe": odd, "error": INCOMING_UNSAFE.format(paths=_list(odd), local=local)}
+    never = [p for _m, p in entries if not may_commit(p)]
+    if never:
+        return {"remote_tracks": never,
+                "error": INCOMING_NEVER.format(paths=_list(never), local=local)}
+    ok, out, _ = _run_git_command(["ls-files", "-z"])
+    tracked = set(out.split("\0")) if ok else set()
+    folder = utils.data_dir()
+    clash = [p for _m, p in entries if p not in tracked and os.path.lexists(folder / p)]
+    if clash:
+        return {"would_overwrite": clash,
+                "error": INCOMING_OVERWRITE.format(paths=_list(clash), local=local)}
+    return None
+
+
+def _safety_copy(db_path: Optional[Path]) -> Optional[str]:
+    """A safety copy of the database before git changes files in its folder. None when made
+    (or there is no database there); else the reason it failed."""
+    if not db_path or not Path(db_path).is_file():
+        return None
+    from .. import backup
+    try:
+        backup.backup_now(Path(db_path), label="pre-bulk")
+    except Exception as e:  # noqa: BLE001
+        return f"{type(e).__name__}: {e}"
+    return None
+
+
+def _tighten_export() -> None:
+    """Exports that came in with a pull are owner-only too (audit N-F28)."""
+    from .. import privatefs
+    out = utils.data_dir() / "export"
+    if out.is_dir() and not out.is_symlink():
+        privatefs.lock(out)
+        for f in out.glob("*.md"):
+            if f.is_file() and not f.is_symlink():
+                privatefs.lock(f)
+
+
+# -------------------------------------------------------------- remotes (the user's own)
+USER_ONLY = ("Only the user can {what}: it sends FlowState data off this computer. Tell the "
+             "user to run `flowstate data-git {cmd}` in their own terminal (it asks them to "
+             "confirm). Nothing was changed.")
+
+_GITHUB = re.compile(r"^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
+                     r"([A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}?)(?:\.git)?/?$")
+
+
+def github_repo(url: str) -> Optional[str]:
+    """owner/name for a github.com remote URL, else None."""
+    m = _GITHUB.match((url or "").strip())
+    return m.group(1) if m and ".." not in m.group(1) else None
+
+
+class RemoteRefused(Exception):
+    pass
+
+
+def check_remote(url: str, allow_unchecked: bool = False, checker=None) -> dict:
+    """Is `url` a remote data-git may push to? A github.com repository must be private (the
+    off-site backup's check: gh, or the GitHub API with the user's own credential). Any other
+    remote can't be checked, so only with allow_unchecked (the user's own --unchecked)."""
+    from .. import offsite
+    repo = github_repo(url)
+    if repo:
+        try:
+            offsite.require_private(repo, checker)
+        except offsite.OffsiteError as e:
+            raise RemoteRefused(str(e).replace("push a backup", "sync FlowState data")) from None
+        return {"remote": url.strip(), "checked": "github-private", "repo": repo}
+    if not allow_unchecked:
+        raise RemoteRefused(
+            "FlowState can only check that a github.com repository is private. For any other "
+            "remote, run the command again with --unchecked once you are sure only you can "
+            "read it.")
+    return {"remote": url.strip(), "checked": "user-said-private"}
+
+
+def _saved_remote() -> dict:
+    from .. import paths
+    return paths.load_config().get("data_git") or {}
+
+
+def git_set_remote(remote_url: str, allow_unchecked: bool = False, checker=None) -> dict:
+    """Set the remote (the user's own command, `flowstate data-git remote`; refused from
+    tools). Checked first (check_remote) and saved in config.json, which sync compares with
+    git's own remote every time."""
+    git_dir = utils.data_dir() / ".git"
+    if not git_dir.exists():
+        return {"success": False, "error": "Not a git repository. Run git_init first."}
+    try:
+        entry = check_remote(remote_url, allow_unchecked, checker)
+    except RemoteRefused as e:
+        return {"success": False, "refused": True, "error": str(e)}
+
+    # Check if remote exists
+    success, stdout, _ = _run_git_command(["remote", "-v"])
+    has_origin = "origin" in stdout
+
+    if has_origin:
+        success, stdout, stderr = _run_git_command(["remote", "set-url", "origin", remote_url])
+    else:
+        success, stdout, stderr = _run_git_command(["remote", "add", "origin", remote_url])
+
+    if not success:
+        return {"success": False, "error": stderr}
+    from .. import paths
+    paths.update_config(lambda cfg: cfg.__setitem__("data_git", entry))
+    return {"success": True, "remote_url": remote_url, "checked": entry["checked"]}
+
+
+def _remote_refusal(checker=None) -> Optional[dict]:
+    """None when origin is the remote the user set (`flowstate data-git remote`) and it is
+    still private; else the refusal."""
+    saved = _saved_remote()
+    ok, url, _ = _run_git_command(["remote", "get-url", "origin"])
+    url = url.strip()
+    if not ok or not saved.get("remote") or url != saved["remote"]:
+        return {"step": "remote", "refused": True,
+                "error": "This remote wasn't set (or was changed) outside `flowstate data-git "
+                         "remote`, so nothing was pushed. Set it again with that command; it "
+                         "checks that the repository is private."}
+    try:
+        check_remote(url, saved.get("checked") == "user-said-private", checker)
+    except RemoteRefused as e:
+        return {"step": "remote", "refused": True, "error": str(e)}
+    return None
+
+
+SPLIT = ("The remote has both `{this}` and `{other}`: a computer that started its data-git "
+         "repository on the other branch name syncs `{other}`, so its changes and this "
+         "computer's don't reach each other. Nothing was pulled or pushed{local}. Run `flowstate "
+         "data-git sync` (or `migrate`, if sync asks for it) with FlowState 2.4.4 or newer on the "
+         "computer that syncs `{other}`: it moves its changes to `{this}`. Then sync here again.")
+NO_BRANCH = ("The remote has the branches {heads} but not `{this}`, and doesn't say which one is "
+             "its main branch, so nothing was pulled or pushed{local}. Pick one by hand with git "
+             "(`git branch -m {this} <branch>` in the data folder), then sync again.")
+
+
+def _remote_branches() -> tuple:
+    """(ok, {branch: sha} on origin, the branch origin's HEAD names or None, error)."""
+    ok, out, err = _run_git_command(["ls-remote", "--symref", "origin", "HEAD", "refs/heads/*"])
+    if not ok:
+        return False, {}, None, err
+    heads, default = {}, None
+    for line in out.splitlines():
+        left, _tab, ref = line.partition("\t")
+        if ref == "HEAD" and left.startswith("ref: refs/heads/"):
+            default = left[len("ref: refs/heads/"):]
+        elif ref.startswith("refs/heads/"):
+            heads[ref[len("refs/heads/"):]] = left
+    return True, heads, default, ""
+
+
+def _has(sha: str, rev: str = "HEAD") -> bool:
+    return _run_git_command(["merge-base", "--is-ancestor", sha, rev])[0]
+
+
+def _pick_branch(here: str, local: str = "") -> dict:
+    """Which of origin's branches this computer (on branch `here`) syncs: origin's own (its
+    HEAD, else its only branch), so a computer whose repository started on `master` joins a
+    remote on `main` (and the other way round) instead of pushing a branch nobody else reads.
+    {"branch": ..., "drop": (old branch, its sha) or None}: `drop` is this computer's old branch
+    on the remote, all of it in this computer's history, removed in the same push. Else
+    {"offline": True, "error": git's} or {"refused": True, "error": ...}."""
+    ok, heads, default, err = _remote_branches()
+    if not ok:
+        return {"offline": True, "error": err}
+    if not heads:   # an empty remote: the first push makes the branch
+        return {"branch": here, "drop": None}
+    branch = default if default in heads else next(iter(heads)) if len(heads) == 1 else here
+    if branch not in heads:
+        return {"refused": True, "error": NO_BRANCH.format(
+            heads=", ".join(f"`{h}`" for h in sorted(heads)), this=here, local=local)}
+    drop = None
+    if branch != here and here in heads:
+        if not _has(heads[here]):
+            return {"refused": True, "error": SPLIT.format(this=branch, other=here, local=local)}
+        drop = (here, heads[here])
+    twin = next((t for t in TWINS if t != branch and t != here and t in heads), None)
+    if branch in TWINS and twin and not _has(heads[twin]):
+        return {"refused": True, "error": SPLIT.format(this=branch, other=twin, local=local)}
+    return {"branch": branch, "drop": drop}
+
+
+def _push_args(branch: str, drop: Optional[tuple], rev: str = "HEAD") -> list:
+    """Push `rev` to origin's `branch`; with `drop`, remove that old branch in the same push,
+    only if it still is where this computer saw it (else neither happens)."""
+    track = ["-u"] if rev == "HEAD" else []
+    if not drop:
+        return ["push", *track, "origin", f"{rev}:refs/heads/{branch}"]
+    old, sha = drop
+    return ["push", "--atomic", *track, "origin", f"--force-with-lease=refs/heads/{old}:{sha}",
+            f"{rev}:refs/heads/{branch}", f":refs/heads/{old}"]
+
+
+def _rename_branch(here: str, branch: str) -> Optional[str]:
+    """After a push to origin's `branch`: this computer's branch takes its name. None when
+    done (or nothing to do), else a note for the user."""
+    if here == branch:
+        return None
+    ok, _o, err = _run_git_command(["branch", "-m", here, branch])
+    if ok:
+        _run_git_command(["branch", "-q", f"--set-upstream-to=origin/{branch}"])
+        return None
+    return (f"This computer's branch is still called `{here}` (git said: {_last_line(err)}); "
+            f"FlowState syncs it with the remote's `{branch}`.")
+
+
+NO_HEAD_BRANCH = ("The remote's default branch points at a branch that doesn't exist, so a plain "
+                  "`git clone` of it checks out nothing. FlowState can't change that on this "
+                  "remote: set its default branch to `{branch}` in the host's repository "
+                  "settings. Your changes were pushed.")
+
+
+def _local_bare(url: str) -> Optional[str]:
+    """The path of a bare repository on this computer that `url` (a path or file:// URL) names;
+    None for anything else (ssh, https, ...)."""
+    path = url2pathname(urlsplit(url).path) if url.startswith("file://") else url
+    ok, out, _e = _run_git_command(["--git-dir", path, "rev-parse", "--is-bare-repository"])
+    return path if ok and out.strip() == "true" else None
+
+
+def _point_remote_head(branch: str) -> Optional[str]:
+    """After a push to origin's `branch`: a remote whose HEAD names a branch it doesn't have (a
+    bare repository made where git's default is `master`) lists no HEAD. One on this computer
+    gets its HEAD pointed at `branch`, so plain clones check it out; for any other, a warning
+    for the user. A HEAD on a branch that exists is listed, and never changed."""
+    ok, listed, _e = _run_git_command(["ls-remote", "origin", "HEAD"])
+    if not ok or listed.strip():
+        return None
+    ok, url, _e = _run_git_command(["remote", "get-url", "origin"])
+    bare = _local_bare(url.strip()) if ok else None
+    if bare and _run_git_command(["--git-dir", bare, "symbolic-ref", "HEAD",
+                                  f"refs/heads/{branch}"])[0]:
+        return None
+    return NO_HEAD_BRANCH.format(branch=branch)
+
+
+def _fetch(branch: str) -> tuple:
+    """(ok, tip sha or None, error). Fetches the remote's branch without merging it."""
+    ok, heads, err = _run_git_command(["ls-remote", "--heads", "origin", branch])
+    if not ok:
+        return False, None, err
+    if not heads.strip():
+        return True, None, ""
+    ok, _out, err = _run_git_command(["fetch", "-q", "origin", branch])
+    if not ok:
+        return False, None, err
+    ok, sha, err = _run_git_command(["rev-parse", "FETCH_HEAD^{commit}"])
+    return (True, sha.strip(), "") if ok and sha.strip() else (False, None, err)
+
+
+def git_sync(commit_message: Optional[str] = None, checker=None,
+             db_path: Optional[Path] = None) -> dict:
     """
-    Perform full sync: add all, commit, pull --rebase, push.
-    
+    Perform full sync: add all, commit, fetch, rebase onto the remote, push. The user's own
+    command (`flowstate data-git sync`); refused from tools.
+
+    Only README.md, projects/ and export/ are ever committed (may_commit). A push goes only to
+    the remote the user set with `flowstate data-git remote`, re-checked as private first.
+
+    Never deletes or overwrites the database on any computer (audit N-F14): a repository that
+    still holds it (FlowState 2.4.3 or older) is refused until the user runs `flowstate
+    data-git migrate`; the remote's commits are checked before they are merged (no database,
+    settings, keys, links or replacing files git doesn't track here), and `db_path` (the
+    database in this folder) gets a safety copy before git brings anything in.
+
     Args:
         commit_message: Custom commit message (default: timestamp)
-    
+
     Returns:
         Sync result with status info
     """
     git_dir = utils.data_dir() / ".git"
     if not git_dir.exists():
         return {"success": False, "error": "Not a git repository. Run git_init first."}
-    
+    legacy = never_tracked_in("HEAD")
+    if legacy:
+        return {"success": False, "step": "legacy", "refused": True, "committed": False,
+                "pushed": False, "still_tracked": legacy,
+                "error": LEGACY.format(paths=_list(legacy))}
+    unsafe = unsafe_entries(utils.data_dir())
+    if unsafe:
+        return {"success": False, "step": "unsafe", "refused": True, "committed": False,
+                "pushed": False, "unsafe": unsafe, "error": UNSAFE_HERE.format(paths=_list(unsafe))}
+
     # Check for remote
     status = git_status()
-    
+    write_gitignore()
+
     # Add all changes
-    success, stdout, stderr = _run_git_command(["add", "."])
+    success, stdout, stderr = _run_git_command(["add", "-A"])
     if not success:
         return {"success": False, "step": "add", "error": stderr}
+    enforce_index()
 
     # Never commit tokens, keys, .env files or logs, even if .gitignore misses them.
-    _, staged, _ = _run_git_command(["diff", "--cached", "--name-only"])
+    _, staged, _ = _run_git_command(["diff", "--cached", "--name-only", "--diff-filter=ACMR"])
     risky = [p for p in staged.splitlines() if p.strip() and is_secret_file(p.strip())]
     if risky:
         _run_git_command(["reset", "-q", "--", *risky])
@@ -198,51 +702,274 @@ def git_sync(commit_message: Optional[str] = None) -> dict:
                          "them out of the data folder or add them to .gitignore, then sync again."}
 
     # Check if there's anything to commit
-    success, stdout, _ = _run_git_command(["status", "--porcelain"])
+    success, stdout, _ = _run_git_command(["diff", "--cached", "--name-only"])
     has_changes = bool(stdout.strip())
-    
+
     # Commit if there are changes
     if has_changes:
         msg = commit_message or f"FlowState sync - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         success, stdout, stderr = _run_git_command(["commit", "-m", msg])
         if not success:
             return {"success": False, "step": "commit", "error": stderr}
-    
+
     if not status.get("has_remote"):
         return {"success": True, "committed": has_changes, "pushed": False,
                 "message": (commit_message or "FlowState sync") + " (no remote set: committed locally only)"}
 
-    # The remote's side, without changing anything: reachable? does the branch exist yet?
-    branch = status.get("branch") or "main"
+    # Only to the remote the user set and FlowState checked, and only while it is still private
     local_only = {"committed": has_changes, "pushed": False}
-    ok, heads, err = _run_git_command(["ls-remote", "--heads", "origin", branch])
+    refused = _remote_refusal(checker)
+    if refused:
+        return {"success": False, **local_only, **refused}
+
+    # The remote's side, fetched but not merged: reachable? which branch? does it exist yet?
+    local = " (your changes are committed locally)" if has_changes else ""
+    here = status.get("branch") or BRANCH
+    pick = _pick_branch(here, local)
+    if pick.get("refused"):
+        return {"success": False, "step": "branch", **local_only, **pick}
+    branch = pick.get("branch") or here
+    ok, tip, err = (False, None, pick["error"]) if pick.get("offline") else _fetch(branch)
     if not ok:
         return {"success": False, "step": "connect", **local_only, "offline": True,
                 "error": "Couldn't reach the remote, so nothing was pushed"
                          + (" (your changes are committed locally)" if has_changes else "")
                          + f". Sync again when it is reachable. Git said: {_last_line(err)}"}
-    if heads.strip():   # the remote has this branch: bring its commits in first
-        ok, out, err = _run_git_command(["pull", "--rebase", "origin", branch])
-        if not ok:
-            conflict = _rebasing() or "CONFLICT" in (out + err)
-            if conflict:
-                _run_git_command(["rebase", "--abort"])
-            return {"success": False, "step": "pull", **local_only, "conflict": conflict,
-                    "error": ("The remote has changes that clash with yours; nothing was pushed "
-                              "and your data folder is as it was. Resolve it by hand with git."
-                              if conflict else f"git pull failed: {_last_line(err)}")}
+    if tip:   # the remote has this branch: check what it would bring, then bring it in
+        problem = _incoming_problem(tip, local)
+        if problem:
+            return {"success": False, "step": "pull", "refused": True, **local_only, **problem}
+        behind = not _run_git_command(["merge-base", "--is-ancestor", tip, "HEAD"])[0]
+        if behind:
+            why = _safety_copy(db_path)
+            if why:
+                return {"success": False, "step": "pull", "refused": True, **local_only,
+                        "error": "Couldn't make a safety copy of the database before bringing in "
+                                 f"the remote's changes, so nothing was pulled or pushed ({why})."}
+            ok, out, err = _run_git_command(["rebase", tip])
+            if not ok and _rebasing():
+                # two computers wrote the same export file: this computer's own copy wins (it
+                # is made from this computer's database at every sync anyway); any other clash
+                # still stops (task 57, N3)
+                ok = _settle_export_clashes()
+            if not ok:
+                conflict = _rebasing() or "CONFLICT" in (out + err)
+                if conflict:
+                    _run_git_command(["rebase", "--abort"])
+                return {"success": False, "step": "pull", **local_only, "conflict": conflict,
+                        "error": ("The remote has changes that clash with yours; nothing was pushed "
+                                  "and your data folder is as it was. Resolve it by hand with git."
+                                  if conflict else f"git pull failed: {_last_line(err)}")}
+            _tighten_export()
+            unsafe = unsafe_entries(utils.data_dir())
+            if unsafe:   # (the check above makes this impossible; belt and braces)
+                return {"success": False, "step": "pull", "refused": True, **local_only,
+                        "unsafe": unsafe, "error": UNSAFE_HERE.format(paths=_list(unsafe))}
     # (an empty remote, or a new branch there: the first push creates it)
-    ok, out, err = _run_git_command(["push", "-u", "origin", branch])
+    ok, out, err = _run_git_command(_push_args(branch, pick["drop"]))
     if not ok:
         return {"success": False, "step": "push", **local_only,
                 "error": f"git push failed, so nothing is on the remote: {_last_line(err)}"}
-    return {
+    out = {
         "success": True,
         "committed": has_changes,
         "pushed": True,
-        "first_push": not heads.strip(),
+        "first_push": not tip,
         "message": commit_message or "FlowState sync"
     }
+    warning = _point_remote_head(branch)
+    if warning:
+        out["warning"] = warning
+    if branch != here:
+        out["branch"] = branch
+        out["moved_from"] = here
+        note = _rename_branch(here, branch)
+        if note:
+            out["note"] = note
+    return out
+
+
+def _clashing() -> list:
+    ok, out, _e = _run_git_command(["diff", "--name-only", "--diff-filter=U", "-z"])
+    return [p for p in out.split("\0") if p] if ok else []
+
+
+def _is_export(path: str) -> bool:
+    return path.startswith("export/") and path.endswith(".md") and "/" not in path[len("export/"):]
+
+
+def _settle_export_clashes(rounds: int = 200) -> bool:
+    """During `git rebase` onto the remote: settle every clash that is only about export/*.md
+    in favour of this computer's copy (in a rebase, "theirs" is the local commit being
+    replayed), and go on. False (the caller aborts) when another file clashes, or git fails."""
+    for _ in range(rounds):
+        if not _rebasing():
+            return True
+        clash = _clashing()
+        if not clash or not all(_is_export(p) for p in clash):
+            return False
+        for p in clash:
+            if _run_git_command(["checkout", "--theirs", "--", p])[0]:
+                if not _run_git_command(["add", "--", p])[0]:
+                    return False
+            elif not _run_git_command(["rm", "-q", "-f", "--", p])[0]:   # this side removed it
+                return False
+        env = {"GIT_EDITOR": "true"}
+        ok, out, err = _run_git_command(["rebase", "--continue"], env=env)
+        if not ok and _rebasing() and not _clashing():   # the commit had nothing else left
+            ok, out, err = _run_git_command(["rebase", "--skip"], env=env)
+        if not ok and not _rebasing():
+            return False
+    return not _rebasing()
+
+
+MIGRATE_MSG = ("FlowState data-git migrate: the database, settings and keys are no longer kept "
+               "in git (they stay on each computer)")
+
+
+def git_migrate(checker=None, db_path: Optional[Path] = None) -> dict:
+    """`flowstate data-git migrate` (the user's own command, after updating every computer that
+    syncs): take the files FlowState never commits (an older version's database, settings) out
+    of the repository once, without touching any file on this disk.
+
+    The new commit is the remote's newest one (or this computer's, without a remote) minus those
+    files; this computer's branch moves to it without changing the working folder, files it
+    holds that are missing here are restored, and it is pushed. This computer's own commits that
+    weren't pushed yet are left out (they may hold the database); their files stay on disk and
+    the next sync commits them. A safety copy of the database is made first."""
+    git_dir = utils.data_dir() / ".git"
+    if not git_dir.exists():
+        return {"success": False, "error": "Not a git repository. Run `flowstate data-git init` first."}
+    folder = utils.data_dir()
+    unsafe = unsafe_entries(folder)
+    if unsafe:
+        return {"success": False, "refused": True, "unsafe": unsafe,
+                "error": UNSAFE_HERE.format(paths=_list(unsafe))}
+    ok, head, _ = _run_git_command(["rev-parse", "--verify", "-q", "HEAD^{commit}"])
+    head = head.strip() if ok else ""
+    status = git_status()
+    here = branch = status.get("branch") or BRANCH
+    tip, old = None, None
+    if status.get("has_remote"):
+        refused = _remote_refusal(checker)
+        if refused:
+            return {"success": False, "pushed": False, **refused}
+        pick = _pick_branch(here)
+        if pick.get("refused"):
+            return {"success": False, "step": "branch", "pushed": False, **pick}
+        branch, old = pick.get("branch") or here, pick.get("drop")
+        ok, tip, err = (False, None, pick["error"]) if pick.get("offline") else _fetch(branch)
+        if not ok:
+            return {"success": False, "step": "connect", "offline": True, "pushed": False,
+                    "error": "Couldn't reach the remote, so nothing was changed. Run it again "
+                             f"when it is reachable. Git said: {_last_line(err)}"}
+        if tip:
+            odd = [p for m, p in tree_entries(tip) if m not in OK_MODES]
+            if odd:
+                return {"success": False, "refused": True, "unsafe": odd, "pushed": False,
+                        "error": INCOMING_UNSAFE.format(paths=_list(odd), local="")}
+    base = tip or head
+    if not base:
+        return {"success": True, "untracked": [], "pushed": False,
+                "message": "Nothing to migrate: the repository has no commits yet."}
+    drop = never_tracked_in(base)
+    if not drop and not never_tracked_in("HEAD"):
+        return {"success": True, "untracked": [], "pushed": False,
+                "message": "Nothing to migrate: the repository holds no database or settings files."}
+    why = _safety_copy(db_path)
+    if why:
+        return {"success": False, "refused": True, "pushed": False,
+                "error": f"Couldn't make a safety copy of the database first, so nothing was "
+                         f"changed ({why})."}
+    new = base
+    if drop:   # build the commit in a separate index: the working folder is never touched
+        idx = git_dir / "flowstate-migrate.index"
+        env = {"GIT_INDEX_FILE": str(idx)}
+        try:
+            idx.unlink(missing_ok=True)
+            # -f: this index is FlowState's own, freshly read from `base`; without it git compares
+            # it with the files on disk and refuses when this computer is behind (task 57, N1)
+            steps = [["read-tree", base]] + [
+                ["rm", "-r", "-q", "-f", "--cached", "--ignore-unmatch", "--", *drop[i:i + 100]]
+                for i in range(0, len(drop), 100)]
+            for args in steps:
+                ok, _o, err = _run_git_command(args, env=env)
+                if not ok:
+                    return {"success": False, "pushed": False, "error": f"git failed: {_last_line(err)}"}
+            # FlowState's .gitignore goes into the same commit, so an older FlowState that pulls
+            # it doesn't commit its database again (task 57, N2)
+            why = _commit_gitignore(base, env)
+            if why:
+                return {"success": False, "pushed": False, "error": f"git failed: {why}"}
+            ok, tree, err = _run_git_command(["write-tree"], env=env)
+            if not ok:
+                return {"success": False, "pushed": False, "error": f"git failed: {_last_line(err)}"}
+            ok, new, err = _run_git_command(["commit-tree", tree.strip(), "-p", base, "-m", MIGRATE_MSG])
+            if not ok:
+                return {"success": False, "pushed": False, "error": f"git failed: {_last_line(err)}"}
+            new = new.strip()
+        finally:
+            idx.unlink(missing_ok=True)
+    # the branch moves; the index follows; the files on disk stay exactly as they are
+    ok, _o, err = _run_git_command(["reset", "-q", new])
+    if not ok:
+        return {"success": False, "pushed": False, "error": f"git failed: {_last_line(err)}"}
+    missing = [p for _m, p in tree_entries(new) if not os.path.lexists(folder / p)]
+    for i in range(0, len(missing), 100):
+        _run_git_command(["checkout", new, "--", *missing[i:i + 100]])
+    write_gitignore()
+    out = {"success": True, "untracked": drop or (never_tracked_in(head) if head else []),
+           "pushed": False, "restored": missing}
+    if tip and (drop or old):
+        ok, _o, err = _run_git_command(_push_args(branch, old, new))
+        if not ok:
+            out.update(success=False, step="push",
+                       error="The remote changed while migrating, so nothing was pushed. Run "
+                             f"`flowstate data-git migrate` again. Git said: {_last_line(err)}")
+            return out
+        out["pushed"] = True
+    if tip and branch != here:
+        out["branch"] = branch
+        out["moved_from"] = here
+        note = _rename_branch(here, branch)
+        if note:
+            out["note"] = note
+    return out
+
+
+def _commit_gitignore(base: str, env: dict) -> Optional[str]:
+    """Put FlowState's .gitignore (base's own lines kept, FlowState's list added if a line is
+    missing) into the index `env` names. None when done or nothing was needed, else git's error."""
+    ok, kind, _e = _run_git_command(["cat-file", "-t", f"{base}:.gitignore"])
+    current = None
+    if ok and kind.strip() == "blob":
+        ok, current, err = _run_git_command(["cat-file", "blob", f"{base}:.gitignore"])
+        if not ok:
+            return _last_line(err)
+    text = gitignore_text(current)
+    if text is None:
+        return None
+    ok, sha, err = _run_git_command(["hash-object", "-w", "--stdin"], input_text=text)
+    if not ok:
+        return _last_line(err)
+    ok, _o, err = _run_git_command(["update-index", "--add", "--cacheinfo",
+                                    f"100644,{sha.strip()},.gitignore"], env=env)
+    return None if ok else _last_line(err)
+
+
+def _clone_branch(folder: Path) -> None:
+    """A clone whose HEAD has no commit: the remote is empty (start on BRANCH, not git's own
+    default), or its HEAD names a branch it doesn't have (a bare repository made where git's
+    default is `master`, then given `main`): take the branch it has."""
+    ok, out, _e = _run_git_command(["for-each-ref", "--format=%(refname:lstrip=3)",
+                                    "refs/remotes/origin/"], cwd=folder)
+    have = [b for b in out.split() if b != "HEAD"] if ok else []
+    branch = next((t for t in TWINS if t in have), have[0] if len(have) == 1 else BRANCH)
+    _run_git_command(["symbolic-ref", "HEAD", f"refs/heads/{branch}"], cwd=folder)
+    if branch in have:
+        _run_git_command(["update-ref", f"refs/heads/{branch}", f"refs/remotes/origin/{branch}"],
+                         cwd=folder)
+        _run_git_command(["branch", "-q", f"--set-upstream-to=origin/{branch}"], cwd=folder)
 
 
 def _last_line(text: str) -> str:
@@ -253,37 +980,6 @@ def _last_line(text: str) -> str:
 def _rebasing() -> bool:
     g = utils.data_dir() / ".git"
     return (g / "rebase-merge").exists() or (g / "rebase-apply").exists()
-
-
-def git_set_remote(remote_url: str) -> dict:
-    """
-    Add or update the remote URL.
-    
-    Args:
-        remote_url: Git remote URL (e.g., https://github.com/user/repo.git)
-    
-    Returns:
-        Status info
-    """
-    git_dir = utils.data_dir() / ".git"
-    if not git_dir.exists():
-        return {"success": False, "error": "Not a git repository. Run git_init first."}
-    
-    # Check if remote exists
-    success, stdout, _ = _run_git_command(["remote", "-v"])
-    has_origin = "origin" in stdout
-    
-    if has_origin:
-        # Update existing remote
-        success, stdout, stderr = _run_git_command(["remote", "set-url", "origin", remote_url])
-    else:
-        # Add new remote
-        success, stdout, stderr = _run_git_command(["remote", "add", "origin", remote_url])
-    
-    if not success:
-        return {"success": False, "error": stderr}
-    
-    return {"success": True, "remote_url": remote_url}
 
 
 def git_clone(remote_url: str, local_path: Optional[str] = None) -> dict:
@@ -303,17 +999,50 @@ def git_clone(remote_url: str, local_path: Optional[str] = None) -> dict:
     if target_path.exists() and any(target_path.iterdir()):
         return {"success": False, "error": f"Directory not empty: {target_path}"}
     
-    # Clone
-    target_path.parent.mkdir(parents=True, exist_ok=True)
+    # Clone without checking anything out, look at what it holds, then check it out
+    from .. import privatefs
+    made = not target_path.exists()
+    privatefs.private_dir(target_path.parent)
     success, stdout, stderr = _run_git_command(
-        ["clone", remote_url, str(target_path)],
+        ["clone", "--no-checkout", remote_url, str(target_path)],
         cwd=target_path.parent
     )
-    
+
     if not success:
         return {"success": False, "error": stderr}
-    
-    return {"success": True, "path": str(target_path), "remote_url": remote_url}
+
+    out = {"success": True, "path": str(target_path), "remote_url": remote_url}
+    if not _run_git_command(["rev-parse", "-q", "--verify", "HEAD"], cwd=target_path)[0]:
+        _clone_branch(target_path)
+    # links (they would make FlowState write elsewhere on this computer) and .gitattributes /
+    # .gitmodules are refused before anything is written (task 56, N6): nothing is checked out
+    entries = tree_entries("HEAD", cwd=target_path)
+    odd = [p for m, p in entries if m not in OK_MODES or
+           p.rsplit("/", 1)[-1].lower() in (".gitattributes", ".gitmodules")]
+    if odd:
+        import shutil
+        shutil.rmtree(target_path / ".git", ignore_errors=True)
+        if made:
+            shutil.rmtree(target_path, ignore_errors=True)
+        return {"success": False, "refused": True, "unsafe": odd,
+                "error": "The repository holds links or git settings files FlowState won't "
+                         f"write: {_list(odd)}. Nothing was cloned; remove them from the "
+                         "repository first."}
+    if entries:
+        ok, _o, err = _run_git_command(["checkout", "-q", "-f", "HEAD"], cwd=target_path)
+        if not ok:
+            return {"success": False, "error": f"git checkout failed: {_last_line(err)}"}
+    # owner-only at once, not only after the first sync (task 56, N-F28 gap)
+    privatefs.lock(target_path)
+    for sub in ("export", "projects"):
+        d = target_path / sub
+        if d.is_dir() and not d.is_symlink():
+            privatefs.lock(d)
+            for f in d.rglob("*"):
+                if not f.is_symlink():
+                    privatefs.lock(f)
+    return out
+
 
 
 def git_history(limit: int = 20) -> list[dict]:

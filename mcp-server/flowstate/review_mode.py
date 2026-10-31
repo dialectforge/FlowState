@@ -191,6 +191,43 @@ def history(db_path: Path, limit: int = 20) -> list[dict]:
         conn.close()
 
 
+def turns_off(db_path: Path, mode: Optional[str], project_id: Optional[int],
+              clear: bool = False) -> list:
+    """Which scopes this change turns review off for (their effective mode goes from something
+    else to off): None for the install itself, plus each affected project id. Mode off for a
+    project; mode off install-wide (every project without its own setting follows it);
+    clearing a project's own setting while the install is off."""
+    conn = _conn(db_path)
+    try:
+        if not available(conn):
+            return []
+        install = get_with(conn, None)["mode"]
+        if clear:
+            if project_id is None or install != "off":
+                return []
+            return [int(project_id)] if get_with(conn, project_id)["mode"] != "off" else []
+        if mode != "off":
+            return []
+        if project_id is not None:
+            return [int(project_id)] if get_with(conn, project_id)["mode"] != "off" else []
+        if install == "off":
+            return []
+        own = {r[0] for r in conn.execute("SELECT scope FROM review_settings "
+                                          "WHERE scope LIKE 'project:%'")}
+        return [None] + [r[0] for r in conn.execute("SELECT id FROM projects ORDER BY id")
+                         if f"project:{r[0]}" not in own]
+    finally:
+        conn.close()
+
+
+def off_needs_user(db_path: Path, mode: Optional[str], project_id: Optional[int],
+                   clear: bool = False) -> bool:
+    """Approvals on for any scope this change turns review off for (turns_off): then only the
+    user's own click or key may make it."""
+    from . import approvals
+    return any(approvals.is_on(db_path, pid) for pid in turns_off(db_path, mode, project_id, clear))
+
+
 def queue_if_off(db_path: Path, mode: Optional[str], kinds, project_id: Optional[int],
                  user_request: str, client: str, clear: bool = False) -> Optional[int]:
     """Approvals on: a change that turns review off (mode off, or clearing a project's

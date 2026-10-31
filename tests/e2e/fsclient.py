@@ -104,11 +104,12 @@ class StdioClient:
     """One app connection = one server process (that's how stdio MCP works)."""
 
     def __init__(self, env: dict, app: str, version: str = "1.0", log_path: Path = None, args=(),
-                 elicit=None, think: float = 1.2):
+                 elicit=None, think: float = 1.2, capabilities: dict = None):
         """`elicit(params) -> result dict` makes this app declare form elicitation and answer
         FlowState's popups (an MCP server-to-client request), like Claude Code or Cursor.
         Each answer comes `think` seconds after the box, like a person (FlowState treats an
-        answer within popup.HUMAN_SECONDS as a box no person saw); think=0 answers at once."""
+        answer within popup.HUMAN_SECONDS as a box no person saw); think=0 answers at once.
+        `capabilities` adds client capabilities (e.g. the MCP Apps extension)."""
         self.app = app
         self.elicit = elicit
         self.think = think
@@ -125,7 +126,7 @@ class StdioClient:
         self._reader.start()
         self.init = self.request("initialize", {
             "protocolVersion": "2025-06-18",
-            "capabilities": {"elicitation": {}} if elicit else {},
+            "capabilities": {**({"elicitation": {}} if elicit else {}), **(capabilities or {})},
             "clientInfo": {"name": app, "version": version}})
         self.notify("notifications/initialized", {})
 
