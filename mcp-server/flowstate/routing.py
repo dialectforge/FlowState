@@ -293,6 +293,13 @@ def route_tool(name: str, args: dict, db_path) -> Any:
     elif name == "method":
         action = args["action"]
         if action == "create":
+            # name and description are NOT NULL in project_methods and marked required in
+            # tooldefs: say so plainly instead of crashing with KeyError.
+            missing = [f for f in ("name", "description") if not (args.get(f) or "").strip()]
+            if missing:
+                return {"error": "bad_request",
+                        "message": "manage_methods create needs " + " and ".join(missing)
+                                   + " (what the procedure is). Nothing was saved."}
             return tools.create_project_method(
                 args["project_id"],
                 args["name"],
