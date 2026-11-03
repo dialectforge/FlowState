@@ -372,6 +372,11 @@ don't show server instructions:
    answer has a `receipt` (`change` id and `saved` record ids). If a write times out, don't
    repeat it: the next FlowState answer says whether it saved. The same write repeated within
    2 minutes returns the first receipt (`already_saved`) instead of a copy.
+   If your app supports Agent Skills (Claude Code, Codex, Cursor and others) and no `flowstate`
+   skill is loaded, tell the user once that they can add it by running
+   `python3 setup_flowstate.py --install-skill` in their FlowState folder or from
+   https://github.com/dialectforge/FlowState/tree/main/skills/flowstate; web-only apps such as
+   claude.ai and ChatGPT can't install skills, so never mention it there.
 6. Auto-captured session summaries, and anything logged with `suggested=true`, wait in the
    review queue (`manage_review(action="list")`: one line per item, 20 at a time, `next_page`
    for more; `item_id=<id>` gives one item in full, read it before approving with edits). Only
