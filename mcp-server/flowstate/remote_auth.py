@@ -45,7 +45,7 @@ from mcp.server.auth.provider import (AccessToken, AuthorizationCode, Authorizat
                                       TokenError, construct_redirect_uri)
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
-from . import paths
+from . import paths, site_style
 from .urls import no_trailing_slash
 
 log = logging.getLogger("flowstate.auth")
@@ -793,14 +793,20 @@ class TokenChecker:
 
 
 # ---------------------------------------------------------------- consent page
+_STYLE = site_style.restyle("""body{margin:0;font-size:16px;line-height:1.5}
+.wrap{max-width:32rem;margin:0 auto;padding:28px 16px 48px}
+.brand{font-weight:500;font-size:17px;margin:0 0 20px}.brand b{color:var(--accent);font-weight:700}
+h1{font-size:24px;line-height:1.25;margin:0 0 14px}
+.box{background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px 18px}.err{color:var(--danger)}
+label{display:block;margin:.6rem 0}input[type=password]{display:block;width:100%;margin-top:4px}
+button{padding:0 18px;margin:.5rem .5rem 0 0;border:1px solid var(--chip);background:#fff;color:var(--ink);font-size:15px;font-weight:500}
+button[value=approve]{background:var(--ink);border-color:var(--ink);color:#fff}
+code{overflow-wrap:anywhere}""").replace("{", "{{").replace("}", "}}")
 _PAGE = """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FlowState: allow access?</title>
-<style>body{{font-family:system-ui,sans-serif;max-width:32rem;margin:2rem auto;padding:0 1rem}}
-.box{{border:1px solid #ccc;border-radius:8px;padding:1rem}}.err{{color:#b00020}}
-label{{display:block;margin:.5rem 0}}input[type=password]{{width:100%;padding:.4rem}}
-button{{padding:.5rem 1rem;margin-right:.5rem}}</style></head><body>
-<h1>Allow access to your FlowState?</h1><div class="box">{body}</div></body></html>"""
+<style>""" + _STYLE + """</style></head><body><div class="wrap"><p class="brand">Flow<b>State</b></p>
+<h1>Allow access to your FlowState?</h1><div class="box">{body}</div></div></body></html>"""
 
 
 def consent_html(name: str, redirect_host: str, scopes: list[str], pid: str,

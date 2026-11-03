@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.4.7 - 2026-11-03
+
+### Changed
+
+- **The pages FlowState shows in a browser use the new FlowStateMCP look; no behavior changes.**
+  The review page, the phone approve and review pages reached through FlowState Relay, the
+  remote review sign-in and the remote access consent page now match flowstatemcp.com (light
+  palette, larger tap targets, 16px fields on phones). Forms, links, routes and security headers
+  are unchanged; a new test pins them to 2.4.6.
+
+### Tests
+
+- `test_display_name`: the wait for the fourth relay name message is longer (it timed out on
+  slow Windows CI runners).
+
 ## 2.4.6 - 2026-11-02
 
 ### Fixed

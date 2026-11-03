@@ -27,7 +27,7 @@ import json
 import secrets
 from datetime import datetime, timezone
 
-from . import approvals, install_name
+from . import approvals, install_name, site_style
 
 HEADERS = {
     "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; "
@@ -97,7 +97,13 @@ input{display:block;width:100%;margin-top:6px;font:inherit;padding:12px 14px;bor
 .recrow{display:flex;gap:10px;margin:6px 0 2px}
 .btn.rec{flex:none;font-size:15px;padding:8px 16px;min-height:44px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+.wrap{max-width:600px}
+@media (min-width:640px){.wrap{background:#fff;border:1px solid var(--line);border-radius:10px;margin:32px auto;padding:28px 32px 36px}}
+.brand{font-weight:500;font-size:17px;margin:0 0 24px}.brand b{color:var(--accent);font-weight:700}
+h1{font-size:24px;line-height:1.25}
 """
+
+CSS = site_style.restyle(CSS)
 
 # What a session saved, drawn on the phone pages (this one and review_phone.py): the first
 # `shown` records, then a "Show N more" button that opens the rest in place. Every record sent
