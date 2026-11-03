@@ -279,7 +279,9 @@ def test_a_set_name_is_sent_and_reset_clears_it(tmp_path, cfg, seeded_db):
         install_name.set_name("Desk", seeded_db)
         await _until(lambda: len(relay.names) == 3)
         install_name.set_name("Main FlowState", seeded_db)
-        await _until(lambda: len(relay.names) == 4)
+        # the 4th message (setting the default name is a reset) only goes out on a later ping,
+        # after the agent notices the change; slow Windows CI runners needed more than 10 s
+        await _until(lambda: len(relay.names) == 4, secs=60)
     relay = _run_agent(tmp_path, tunnel._display_name, steps)
     assert relay.hellos[0]["name"] == "Office laptop"
     assert relay.names == ["Home desk", None, "Desk", None]
