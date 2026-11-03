@@ -12,7 +12,7 @@ description: >
 license: MIT
 compatibility: Requires the FlowState MCP server v2.1+ to be connected (tools start_here, log_work, search, manage_links, manage_review). Older servers use the names todo, link, handoff, rules, review_list.
 metadata:
-  author: John Martin
+  author: DialectForge
   version: "2.5"
 ---
 
