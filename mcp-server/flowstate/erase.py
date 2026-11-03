@@ -20,7 +20,11 @@ y; never a tool, never piped input). For each deleted record it removes:
   the record blanked whole (task 71);
 - events in the automatic session log (auto_sessions) whose text matches a removed row (a
   short text only on an event of the record's own kind, NEW-4);
-- attached files FlowState copied into its own folder (projects/<p>.flowstate/attachments).
+- attached files FlowState copied into its own folder (projects/<p>.flowstate/attachments);
+- for an erased project, every other row in any table that refers to it, found by column
+  (activity log, run ledger, review items and their approvals, conflict pairs,
+  links, notes, claim history, its own settings, all its edit history; H11). Per-app trust,
+  the user's own settings and sign-ins are not project data and stay.
 
 A hard rule the user removed stays on record as removed; erase blanks its text (NEW-6).
 
@@ -789,6 +793,91 @@ def _linked(conn, rows: dict, pats: list) -> int:
     return n
 
 
+# Columns that name a project; any of them equal to an erased project's id puts the row in
+# that project (or makes it about it: a link or change alert from another project).
+_PROJECT_COLS = ("project_id", "from_project_id", "to_project_id", "source_project_id",
+                 "target_project_id")
+# (type column, id column) pairs that point at one record.
+_RECORD_COLS = (("record_type", "record_id"), ("content_type", "content_id"),
+                ("from_type", "from_id"), ("to_type", "to_id"), ("a_type", "a_id"),
+                ("b_type", "b_id"), ("by_type", "by_id"), ("source_type", "source_id"),
+                ("target_type", "target_id"))
+# Settings rows that belong to one project (scope or key "...project:<id>").
+_PROJECT_SCOPED = (("review_settings", "scope"), ("review_mode_log", "scope"),
+                   ("approval_settings", "key"))
+
+
+def _project_rows(conn, pids: set, rows: dict) -> int:
+    """H11: an erased project takes every row that still refers to it, in every table (the
+    activity log, run ledger, review items and their approvals, conflict pairs,
+    links, check-date notes, edit history...). Found by column, so a table a
+    later migration adds is covered without a list here. Shared rows that are not project
+    data stay: per-app trust and pause switches, the user's own settings, sign-in rows, the
+    schema version (see the module docstring)."""
+    if not pids:
+        return 0
+    n = 0
+    keys = set()   # (type, id) of every erased row, under each type name used for it
+    for (table, rid) in rows:
+        names = {k for k, v in TYPES.items() if v[0] == table} | set(_FTS_TYPES.get(table, ()))
+        names |= {table} | ({_MEANING_TYPES[table]} if table in _MEANING_TYPES else set())
+        keys |= {(k, rid) for k in names}
+    items = set()
+    if _has(conn, "review_items"):
+        q = ",".join("?" * len(pids))
+        items = {r[0] for r in conn.execute(
+            f"SELECT id FROM review_items WHERE project_id IN ({q})", tuple(pids))}
+    attachments = {rid for (t, rid) in rows if t == "attachments"}
+    conn.execute("CREATE TEMP TABLE IF NOT EXISTS _erase_keys (type TEXT, id TEXT)")
+    conn.execute("DELETE FROM temp._erase_keys")
+    conn.executemany("INSERT INTO temp._erase_keys VALUES (?, ?)",
+                     [(k, str(rid)) for k, rid in keys])
+    pid_text = [str(p) for p in pids]
+    tables = [r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")]
+    virtual = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND sql LIKE 'CREATE VIRTUAL%'")}
+    for t in tables:
+        if t == "projects" or any(t != v and t.startswith(v + "_") for v in virtual):
+            continue   # FTS shadow tables follow their virtual table
+        cols = {c[1] for c in conn.execute(f'PRAGMA table_info("{t}")')}
+        for c in _PROJECT_COLS:
+            if c in cols:
+                n += conn.execute(
+                    f'DELETE FROM "{t}" WHERE CAST("{c}" AS TEXT) IN '
+                    f'({",".join("?" * len(pid_text))})', pid_text).rowcount
+        for tc, ic in _RECORD_COLS:
+            if {tc, ic} <= cols and keys:
+                n += conn.execute(
+                    f'DELETE FROM "{t}" WHERE EXISTS (SELECT 1 FROM temp._erase_keys k WHERE '
+                    f'k.type = "{t}"."{tc}" AND k.id = CAST("{t}"."{ic}" AS TEXT))').rowcount
+        if {"table_name", "record_id"} <= cols:
+            for (table, rid) in rows:
+                n += conn.execute(f'DELETE FROM "{t}" WHERE table_name = ? AND record_id = ?',
+                                  (table, rid)).rowcount
+        if {"result_table", "result_id"} <= cols:
+            for (table, rid) in rows:
+                n += conn.execute(f'DELETE FROM "{t}" WHERE result_table = ? AND result_id = ?',
+                                  (table, rid)).rowcount
+        if "item_id" in cols and items:
+            n += conn.execute(f'DELETE FROM "{t}" WHERE item_id IN ({",".join("?" * len(items))})',
+                              tuple(items)).rowcount
+        if "attachment_id" in cols and attachments:
+            n += conn.execute(f'DELETE FROM "{t}" WHERE attachment_id IN '
+                              f'({",".join("?" * len(attachments))})', tuple(attachments)).rowcount
+        if "todo_id" in cols:
+            for (table, rid) in rows:
+                if table == "todos":
+                    n += conn.execute(f'DELETE FROM "{t}" WHERE todo_id = ?', (rid,)).rowcount
+    for t, col in _PROJECT_SCOPED:
+        if _has(conn, t):
+            for p in pids:
+                n += conn.execute(f'DELETE FROM "{t}" WHERE "{col}" = ? OR "{col}" LIKE ?',
+                                  (f"project:{p}", f"%:project:{p}")).rowcount
+    conn.execute("DROP TABLE temp._erase_keys")
+    return n
+
+
 def run(db_path: Path, p: dict, data_dir: Optional[Path] = None) -> dict:
     """Carry out a plan. Returns counts per place."""
     db_path = Path(db_path)
@@ -798,7 +887,7 @@ def run(db_path: Path, p: dict, data_dir: Optional[Path] = None) -> dict:
     texts = _texts(pairs)
     labels = _labels(pairs)   # session-log labels: whole-label matches, any length
     n = {"history": 0, "history_blanked": 0, "search_index": 0, "meaning_index": 0, "meta": 0,
-         "review_items": 0, "session_events": 0, "linked": 0, "files": 0, "rules": 0, "vacuumed": False}
+         "review_items": 0, "session_events": 0, "linked": 0, "files": 0, "rules": 0, "project_rows": 0, "vacuumed": False}
     conn = _conn(db_path)
     try:
         conn.execute("PRAGMA secure_delete = ON")   # freed pages are zeroed, not left as they were
@@ -874,6 +963,9 @@ def run(db_path: Path, p: dict, data_dir: Optional[Path] = None) -> dict:
                     n["session_events"] += sum(a != b for a, b in zip(new, events))
                     conn.execute("UPDATE auto_sessions SET events = ? WHERE session_id = ?",
                                  (json.dumps(new), r["session_id"]))
+        n["project_rows"] = _project_rows(   # an erased project: every row naming it (H11)
+            conn, {t["id"] for t in p["targets"] if t["type"] == "project"
+                   and t.get("whole", True)}, rows)
         conn.execute("COMMIT")
         live = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM projects")}
         if _has(conn, "memory_fts"):   # drop the index's old segments too
@@ -938,6 +1030,9 @@ def report(n: dict) -> list:
            f"search-index row(s), {n['meta']} note row(s), {n['review_items']} review item(s), "
            f"{n['session_events']} session-log event(s), {n.get('linked', 0)} linked row(s) "
            f"(evidence, claim history, card topics), {n['files']} attached file(s)."]
+    if n.get("project_rows"):   # an erased project's activity log, run ledger, ... (H11)
+        out.append(f"Removed {n['project_rows']} other row(s) that belonged to the erased "
+                   f"project(s) (activity log, run ledger, review items, links, settings).")
     if n.get("history_blanked"):   # other items keep their history, without the text (task 71)
         out.append(f"Blanked the erased text in {n['history_blanked']} edit-history row(s) of other "
                    f"items (review items that quoted it keep their history).")

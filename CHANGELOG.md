@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.4.6 - 2026-11-02
+
+### Fixed
+
+- **Creating a method without a description no longer crashes.** `manage_methods` create
+  without a name or description crashed with `KeyError: 'description'`. It now returns a clear
+  `bad_request` that says what is missing, and nothing is saved.
+- **Erasing a project now removes every row that refers to it.** `flowstate erase project:N`
+  left rows for the erased project in the activity log (`activity_log`), the run ledger
+  (`run_writes`, `run_views`) and the project's own approval and review settings
+  (`approval_settings`, `review_settings`, `review_mode_log`). These rows are now found by
+  column in every table and removed. Per-app settings, your own settings and sign-ins are not
+  project data and stay.
+
+### Tests
+
+- New `tests/test_h11_project_erase.py` checks both fixes.
+
 ## 2.4.5 - 2026-10-31
 
 ### Fixed
