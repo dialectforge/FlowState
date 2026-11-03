@@ -53,7 +53,7 @@ from pathlib import Path
 from typing import Callable, Optional, Union
 from urllib.parse import urlencode
 
-from . import dbconn
+from . import dbconn, site_style
 from . import activity, approvals, history, history_page, identity, install_name, paths, review, review_mode, updates, who
 
 HOST = "127.0.0.1"
@@ -111,6 +111,15 @@ button{min-height:44px;font-size:1rem}input,select,textarea{min-height:44px;font
 input[type=checkbox]{min-height:0;width:1.3rem;height:1.3rem;vertical-align:middle}
 .row{flex-wrap:wrap}.row>*{min-width:8rem}table{display:block;max-width:100%;overflow-x:auto}
 .set li button{min-height:44px}.diff,.fields{display:table}}"""
+_CSS = site_style.restyle(_CSS + """
+body{font-size:15px;line-height:1.5}
+.item,.disagree,.delcard,.set,.tl li{background:#fff;border:1px solid var(--line);border-radius:10px}
+.side{background:var(--bg);border-color:var(--line);border-radius:10px}
+h2{border-bottom-color:var(--line)}
+.set button,.confirm button{border-radius:8px;border-color:var(--ink);color:var(--ink)}
+.set button.go,.confirm button.go{background:var(--ink);border-color:var(--ink);color:#fff}
+.keep-row button,.delcard+form button,.recbtn button{border-radius:8px}
+""")
 
 
 def _e(v) -> str:

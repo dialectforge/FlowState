@@ -1,0 +1,199 @@
+{
+ "approve_page.py": {
+  "attrs": [
+   "[\"id\", \"approve\"]",
+   "[\"id\", \"confirm-name\"]",
+   "[\"id\", \"details\"]",
+   "[\"id\", \"foot\"]",
+   "[\"id\", \"item\"]",
+   "[\"id\", \"name-row\"]",
+   "[\"id\", \"project\"]",
+   "[\"id\", \"reject\"]",
+   "[\"id\", \"saved\"]",
+   "[\"id\", \"status\"]",
+   "[\"id\", \"summary\"]",
+   "[\"id\", \"title\"]",
+   "[\"id\", \"who\"]",
+   "[\"name\", \"referrer\"]",
+   "[\"name\", \"viewport\"]",
+   "[\"type\", \"button\"]"
+  ],
+  "cookies": [
+   "\"COOKIE, cookie, max_age=approvals.GRANT_SECONDS, path=path, secure=True,\\n                         httponly=True, samesite=\\\"strict\\\"\""
+  ],
+  "csp": [
+   "\"\\\"default-src '\""
+  ],
+  "headers": [
+   "[\"Cache-Control\", \"no-store\"]",
+   "[\"Referrer-Policy\", \"no-referrer\"]",
+   "[\"X-Content-Type-Options\", \"nosniff\"]",
+   "[\"X-Frame-Options\", \"DENY\"]"
+  ],
+  "routes": [
+   "\"/approve/assets/{name}\"",
+   "\"/approve/{item:int}\"",
+   "\"/approve/{item:int}/decide\"",
+   "\"/approve/{item:int}/open\"",
+   "\"/approve/{item:int}/record\""
+  ]
+ },
+ "remote_auth.py": {
+  "attrs": [
+   "[\"action\", \"consent\"]",
+   "[\"method\", \"post\"]",
+   "[\"name\", \"access\"]",
+   "[\"name\", \"decision\"]",
+   "[\"name\", \"passphrase\"]",
+   "[\"name\", \"req\"]",
+   "[\"name\", \"viewport\"]",
+   "[\"type\", \"hidden\"]",
+   "[\"type\", \"password\"]",
+   "[\"type\", \"radio\"]",
+   "[\"value\", \"\"]",
+   "[\"value\", \"approve\"]",
+   "[\"value\", \"deny\"]",
+   "[\"value\", \"read\"]",
+   "[\"value\", \"write\"]"
+  ],
+  "cookies": [],
+  "csp": [
+   "\"\\\"default-src '\""
+  ],
+  "headers": [
+   "[\"Cache-Control\", \"no-store\"]",
+   "[\"Referrer-Policy\", \"no-referrer\"]",
+   "[\"X-Frame-Options\", \"DENY\"]"
+  ],
+  "routes": [
+   "\"/consent\""
+  ]
+ },
+ "review_page.py": {
+  "attrs": [
+   "[\"action\", \"\"]",
+   "[\"action\", \"undo\"]",
+   "[\"action\", \"walk\"]",
+   "[\"method\", \"get\"]",
+   "[\"method\", \"post\"]",
+   "[\"name\", \"\"]",
+   "[\"name\", \"action\"]",
+   "[\"name\", \"app\"]",
+   "[\"name\", \"clear\"]",
+   "[\"name\", \"confirm_name\"]",
+   "[\"name\", \"csrf\"]",
+   "[\"name\", \"details\"]",
+   "[\"name\", \"item_id\"]",
+   "[\"name\", \"kind_\"]",
+   "[\"name\", \"mode\"]",
+   "[\"name\", \"move_to\"]",
+   "[\"name\", \"name\"]",
+   "[\"name\", \"op\"]",
+   "[\"name\", \"paused\"]",
+   "[\"name\", \"project\"]",
+   "[\"name\", \"project_id\"]",
+   "[\"name\", \"reason\"]",
+   "[\"name\", \"record\"]",
+   "[\"name\", \"record_id\"]",
+   "[\"name\", \"record_type\"]",
+   "[\"name\", \"scope\"]",
+   "[\"name\", \"setting\"]",
+   "[\"name\", \"signin\"]",
+   "[\"name\", \"state\"]",
+   "[\"name\", \"status\"]",
+   "[\"name\", \"summary\"]",
+   "[\"name\", \"token\"]",
+   "[\"name\", \"view\"]",
+   "[\"name\", \"viewport\"]",
+   "[\"type\", \"checkbox\"]",
+   "[\"type\", \"hidden\"]",
+   "[\"type\", \"text\"]",
+   "[\"value\", \"\"]",
+   "[\"value\", \"1\"]",
+   "[\"value\", \"add\"]",
+   "[\"value\", \"again\"]",
+   "[\"value\", \"left closed on the review page\"]",
+   "[\"value\", \"not allowed on the review page\"]",
+   "[\"value\", \"remove\"]",
+   "[\"value\", \"reset\"]",
+   "[\"value\", \"who\"]"
+  ],
+  "cookies": [
+   "\"RedirectResponse(f\\\"{page.base}/\\\", status_code=303, headers=headers\"",
+   "\"page.cookie, sess, httponly=True, samesite=\\\"strict\\\", path=f\\\"{page.base}/\\\"\"",
+   "\"page_html(request, sess\"",
+   "\"resp, sess: str\""
+  ],
+  "csp": [
+   "\"\\\"default-src '\""
+  ],
+  "headers": [
+   "[\"Cache-Control\", \"no-store\"]",
+   "[\"Referrer-Policy\", \"same-origin\"]",
+   "[\"X-Content-Type-Options\", \"nosniff\"]",
+   "[\"X-Frame-Options\", \"DENY\"]"
+  ],
+  "routes": [
+   "\"/\"",
+   "\"/app\"",
+   "\"/approve\"",
+   "\"/mode\"",
+   "\"/ping\"",
+   "\"/record\"",
+   "\"/reject\"",
+   "\"/settings/{name}\"",
+   "\"/undo\""
+  ]
+ },
+ "review_phone.py": {
+  "attrs": [
+   "[\"id\", \"foot\"]",
+   "[\"id\", \"list\"]",
+   "[\"id\", \"status\"]",
+   "[\"id\", \"title\"]",
+   "[\"name\", \"referrer\"]",
+   "[\"name\", \"viewport\"]"
+  ],
+  "cookies": [
+   "\"COOKIE, cookie, max_age=SESSION_SECONDS, path=\\\"/review\\\", secure=True,\\n                         httponly=True, samesite=\\\"strict\\\"\""
+  ],
+  "csp": [],
+  "headers": [],
+  "routes": [
+   "\"/review\"",
+   "\"/review/assets/{name}\"",
+   "\"/review/decide\"",
+   "\"/review/open\"",
+   "\"/review/record\"",
+   "\"/review/start\""
+  ]
+ },
+ "review_tunnel.py": {
+  "attrs": [
+   "[\"action\", \"\"]",
+   "[\"method\", \"post\"]",
+   "[\"name\", \"csrf\"]",
+   "[\"name\", \"passphrase\"]",
+   "[\"name\", \"viewport\"]",
+   "[\"type\", \"hidden\"]",
+   "[\"type\", \"password\"]",
+   "[\"value\", \"\"]"
+  ],
+  "cookies": [
+   "\"COOKIE, cookie, max_age=MAX_SECONDS, path=\\\"/\\\", secure=True,\\n                         httponly=True, samesite=\\\"strict\\\"\""
+  ],
+  "csp": [
+   "\"\\\"default-src '\""
+  ],
+  "headers": [
+   "[\"Cache-Control\", \"no-store\"]",
+   "[\"Referrer-Policy\", \"same-origin\"]",
+   "[\"X-Content-Type-Options\", \"nosniff\"]",
+   "[\"X-Frame-Options\", \"DENY\"]"
+  ],
+  "routes": [
+   "\"{PATH}/{n}\""
+  ]
+ },
+ "site_style": {}
+}
