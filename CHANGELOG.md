@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Agents check FlowState's learnings when something breaks.** The Agent Skill (version 2.5)
+  and the connect-time instructions now say: on an error, failing test, bug or when stuck,
+  first `search` the project's learnings, problems and solutions and try what's recorded;
+  after a non-obvious fix, log a `learning` (no secrets). AGENTS.md repeats the line.
+
 ## 2.4.7 - 2026-11-03
 
 ### Changed

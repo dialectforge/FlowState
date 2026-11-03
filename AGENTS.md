@@ -359,6 +359,9 @@ don't show server instructions:
 1. Call `start_here(project="<name>")` first in every conversation about a project
    (no arguments, or `folder="<working folder>"`, to list projects).
 2. Record work as you go with `log_work(project=..., kind=decision|change|problem|learning|todo, summary=...)`.
+   When you hit an error, failing test or bug, or get stuck, first
+   `search(query="<error or symptom>", project=..., content_types=["learning","problem","solution"])`
+   and try what is recorded; after a non-obvious fix, log a `learning` (symptom -> fix, no secrets).
 3. Every write must name the project. Never store secrets in text (writes that contain
    keys, tokens, passwords or card numbers are refused with `secret_detected`). If you know
    your model name, pass it as `model="<name>"` on writes; never guess or invent it.
