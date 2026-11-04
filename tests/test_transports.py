@@ -9,6 +9,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 import urllib.error
 import urllib.request
 
@@ -71,7 +72,10 @@ def test_stdio_session_opens_and_closes_on_disconnect(seeded_db):
 @pytest.fixture
 def http_server(seeded_db):
     port = free_port()
-    env = server_env(seeded_db, FLOWSTATE_TOKEN=TOKEN, FLOWSTATE_IDLE_MINUTES="0.02",
+    # Idle timeout far above any gap between calls, even on a very slow CI runner: with
+    # 1.2 s a slow gap between two calls made the next call close the session as 'stale'
+    # and open a second one. The idle test ages the session itself (below) instead.
+    env = server_env(seeded_db, FLOWSTATE_TOKEN=TOKEN, FLOWSTATE_IDLE_MINUTES="60",
                      FLOWSTATE_REAP_SECONDS="0.5")
     proc = subprocess.Popen([sys.executable, "-m", "flowstate", "--transport", "http",
                              "--host", "127.0.0.1", "--port", str(port)],
@@ -116,6 +120,18 @@ def test_http_auth_and_health(http_server):
     assert _status(base + "/other", {**hdr, "Authorization": f"Bearer {TOKEN}"}, ping)[0] == 404
 
 
+def _age_open_sessions(db, hours):
+    """Move open auto sessions' last activity `hours` into the past (UTC, the server's
+    format): deterministic idleness, no wall-clock race with the reaper."""
+    old = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+    conn = sqlite3.connect(db, timeout=10)
+    try:
+        conn.execute("UPDATE auto_sessions SET last_activity = ? WHERE closed_at IS NULL", (old,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def test_http_flow_and_idle_auto_close(http_server):
     base, db = http_server
 
@@ -126,8 +142,10 @@ def test_http_flow_and_idle_auto_close(http_server):
                 init = await s.initialize()
                 await _flow(s, init)
                 assert len(_rows(db, "SELECT 1 FROM auto_sessions WHERE closed_at IS NULL")) == 1
-                # stay connected but idle: the reaper (idle 1.2 s, every 0.5 s) closes it
-                deadline = time.time() + 15
+                # stay connected but idle: make the session's last activity 2 hours old
+                # (past the 60-minute timeout) and the reaper (every 0.5 s) closes it.
+                _age_open_sessions(db, hours=2)
+                deadline = time.time() + 60
                 while time.time() < deadline:
                     rows = _rows(db, "SELECT close_reason FROM auto_sessions")
                     if rows and rows[0][0]:
