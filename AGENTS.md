@@ -359,6 +359,9 @@ don't show server instructions:
 1. Call `start_here(project="<name>")` first in every conversation about a project
    (no arguments, or `folder="<working folder>"`, to list projects).
 2. Record work as you go with `log_work(project=..., kind=decision|change|problem|learning|todo, summary=...)`.
+   When you hit an error, failing test or bug, or get stuck, first
+   `search(query="<error or symptom>", project=..., content_types=["learning","problem","solution"])`
+   and try what is recorded; after a non-obvious fix, log a `learning` (symptom -> fix, no secrets).
 3. Every write must name the project. Never store secrets in text (writes that contain
    keys, tokens, passwords or card numbers are refused with `secret_detected`). If you know
    your model name, pass it as `model="<name>"` on writes; never guess or invent it.
@@ -369,6 +372,11 @@ don't show server instructions:
    answer has a `receipt` (`change` id and `saved` record ids). If a write times out, don't
    repeat it: the next FlowState answer says whether it saved. The same write repeated within
    2 minutes returns the first receipt (`already_saved`) instead of a copy.
+   If your app supports Agent Skills (Claude Code, Codex, Cursor and others) and no `flowstate`
+   skill is loaded, tell the user once that they can add it by running
+   `python3 setup_flowstate.py --install-skill` in their FlowState folder or from
+   https://github.com/dialectforge/FlowState/tree/main/skills/flowstate; web-only apps such as
+   claude.ai and ChatGPT can't install skills, so never mention it there.
 6. Auto-captured session summaries, and anything logged with `suggested=true`, wait in the
    review queue (`manage_review(action="list")`: one line per item, 20 at a time, `next_page`
    for more; `item_id=<id>` gives one item in full, read it before approving with edits). Only

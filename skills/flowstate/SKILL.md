@@ -12,8 +12,8 @@ description: >
 license: MIT
 compatibility: Requires the FlowState MCP server v2.1+ to be connected (tools start_here, log_work, search, manage_links, manage_review). Older servers use the names todo, link, handoff, rules, review_list.
 metadata:
-  author: John Martin
-  version: "2.4"
+  author: DialectForge
+  version: "2.5"
 ---
 
 # FlowState routine
@@ -164,6 +164,11 @@ Before going against an earlier decision, look it up (`search(query="<question>"
 answer=true, project=...)`), tell the user, and if they agree, record the new decision with `replaces=`.
 When the brief says facts need re-checking (paths, ports, config), check the ones you rely
 on: still true -> `manage_memory(action="mark_checked", ...)`; changed -> log the change.
+
+When something breaks (an error, a failing test, a bug, or you're stuck), first look for
+what was learned before: `search(query="<error or symptom>", project=..., content_types=["learning",
+"problem", "solution"])`, and try what's recorded. After you fix something non-obvious, save
+it: `log_work(project=..., kind="learning", summary="<symptom -> fix>")`, without secrets.
 
 ## 7. Close with a summary, or leave a handoff
 

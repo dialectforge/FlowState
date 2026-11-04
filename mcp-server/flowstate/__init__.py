@@ -9,7 +9,7 @@ A project-centric memory system with:
 - Story generation for project narratives
 """
 
-__version__ = "2.4.7"
+__version__ = "2.4.8"
 
 from .database import Database, init_db
 from .models import (
