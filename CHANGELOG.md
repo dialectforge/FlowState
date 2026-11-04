@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Agents point you to the FlowState skill once.** In apps that support Agent Skills
+  (Claude Code, Codex, Cursor and others), if the `flowstate` skill isn't loaded, the connect-time
+  instructions tell the agent to mention once where to get it (`setup_flowstate.py --install-skill`
+  or the GitHub folder). Web-only apps (claude.ai, ChatGPT) are never nagged.
+- **Agents check FlowState's learnings when something breaks.** The Agent Skill (version 2.5)
+  and the connect-time instructions now say: on an error, failing test, bug or when stuck,
+  first `search` the project's learnings, problems and solutions and try what's recorded;
+  after a non-obvious fix, log a `learning` (no secrets). AGENTS.md repeats the line.
+
 ## 2.4.7 - 2026-11-03
 
 ### Changed
