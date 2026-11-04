@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.4.8 - 2026-11-04
 
 ### Changed
 
@@ -12,6 +12,11 @@
   and the connect-time instructions now say: on an error, failing test, bug or when stuck,
   first `search` the project's learnings, problems and solutions and try what's recorded;
   after a non-obvious fix, log a `learning` (no secrets). AGENTS.md repeats the line.
+- **The Agent Skill's author is now DialectForge** instead of a personal name.
+
+### Tests
+
+- The HTTP idle auto-close test no longer fails at random on slow CI runners.
 
 ## 2.4.7 - 2026-11-03
 
