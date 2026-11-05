@@ -209,6 +209,29 @@ snippets for every app, if you'd rather edit configs by hand, are in [AGENTS.md]
 
 ---
 
+## Guides and tools
+
+Short public pages on [flowstatemcp.com](https://flowstatemcp.com). The tools are free, need no
+sign-up, and run in the browser. Nothing you type there is sent to a server.
+
+**Tools**
+
+- [MCP Config Builder](https://flowstatemcp.com/tools/mcp-config)
+- [CLAUDE.md Builder](https://flowstatemcp.com/tools/claude-md-builder)
+
+**Guides**
+
+- [How to give Claude Code memory between sessions](https://flowstatemcp.com/guides/claude-code-memory)
+- [One memory for Claude, ChatGPT, Cursor and Grok](https://flowstatemcp.com/guides/one-memory-all-ai-apps)
+- [What is an MCP server?](https://flowstatemcp.com/guides/what-is-an-mcp-server)
+
+**Comparisons**
+
+- [FlowState compared](https://flowstatemcp.com/compare): Mem0, the official MCP memory server,
+  and Basic Memory. Each page uses what that project publishes about itself.
+
+---
+
 ## What you can ask FlowState
 
 You don't need commands. Talk to your AI app in plain words, and it uses FlowState for you:
@@ -427,9 +450,9 @@ prompt `flowstate-start`.
 
 ## Why FlowState
 
-Many AI memory tools now put their best features behind subscriptions: [Mem0](https://mem0.ai/pricing) ($19 to $249/mo), [Zep](https://www.getzep.com/pricing) ($125/mo and up), [Supermemory](https://supermemory.ai/pricing) ($19/mo and up). Some have dropped their free or self-hosted options entirely, like Zep's self-hosted edition and Pieces' free tier. FlowState is MIT-licensed and runs on your own machine. Local FlowState is free and MIT forever. An optional paid relay and hosting service is at [flowstatemcp.com](https://flowstatemcp.com); paid plans charge for hosting, never for features.
+Many AI memory tools now put their best features behind subscriptions: [Zep](https://www.getzep.com/pricing) ($125/mo and up), [Supermemory](https://supermemory.ai/pricing) ($19/mo and up). [Mem0](https://mem0.ai/pricing) no longer sells Starter, Growth or Pro to new accounts (people already on those plans keep their old prices; see the [pricing FAQ](https://docs.mem0.ai/platform/pricing)). New accounts get Free, or Custom, which is sales-led and has no published price. On Free, Mem0 pays the model calls for the first 30 days (10,000 adds and 1,000 retrievals a month). After that you connect your own LLM key (you can connect one during the first 30 days too) for 50,000 adds and 10,000 retrievals a month at no charge from Mem0. Past those limits you can turn on usage-based billing, with a monthly cap you set. Some have dropped their free or self-hosted options entirely, like Zep's self-hosted edition and Pieces' free tier. FlowState is MIT-licensed and runs on your own machine. Local FlowState is free and MIT forever. An optional paid relay and hosting service is at [flowstatemcp.com](https://flowstatemcp.com); paid plans charge for hosting, never for features.
 
-*Prices as listed on each vendor's pricing page, October 2026.*
+*Prices as listed on each vendor's pricing page, November 2026.*
 
 ## Add your own features
 
