@@ -14,6 +14,32 @@ Ground rules while installing:
 
 (If instead you are working on FlowState's own code, see "Working on this repo" at the end.)
 
+## Install the server with uvx
+
+This is the usual path. The PyPI package is `flowstatemcp` (`pip install flowstate` is a different
+project). You need [uv](https://docs.astral.sh/uv/getting-started/installation/).
+
+```bash
+uvx flowstatemcp
+```
+
+`pipx run flowstatemcp` does the same. After `pip install flowstatemcp`, both `flowstatemcp` and
+`flowstate` start the stdio server.
+
+Cursor and VS Code can add that command from a link. The buttons and the exact URLs are in the
+repository [README](README.md#add-the-local-server)
+([Cursor install links](https://cursor.com/docs/mcp/install-links),
+[VS Code install URL](https://code.visualstudio.com/api/extension-guides/ai/mcp)).
+
+Claude Code ([MCP](https://code.claude.com/docs/en/mcp)):
+
+```bash
+claude mcp add --scope user --transport stdio flowstate -- uvx flowstatemcp
+```
+
+The numbered steps below are the git-clone fallback: a venv in this folder, app config files,
+nightly backups, and the FlowState skill.
+
 ## 1. Detect the OS and Python
 
 ```bash
@@ -114,6 +140,53 @@ The app should call `start_here` (in Grok Build the tool shows as
 Tell the user, in one line: "Session summaries FlowState writes on its own wait in a review
 queue; ask me to show it any time, and tell me which to approve, edit or reject."
 
+## Make your AI use FlowState
+
+FlowState only helps if the AI reads it at the start and writes as it goes. Paste these three
+lines into the app's own rules:
+
+```text
+Call start_here at the start of a conversation about a project.
+Call log_work right after each decision, change, fix or lesson.
+Call log_work again before you end the session or hand back.
+```
+
+| App | Where | Format |
+|---|---|---|
+| Claude Code | `CLAUDE.md`, `.claude/CLAUDE.md`, or `~/.claude/CLAUDE.md` | the three lines as plain markdown ([docs](https://code.claude.com/docs/en/memory)) |
+| Codex | `AGENTS.md` in the project, or `~/.codex/AGENTS.md` | the three lines as plain markdown ([docs](https://developers.openai.com/codex/guides/agents-md)) |
+| Cursor | `.cursor/rules/flowstate.mdc` | the block below ([docs](https://cursor.com/docs/rules)) |
+| Windsurf | `.windsurf/rules/flowstate.md` | the block below ([docs](https://docs.windsurf.com/windsurf/cascade/memories)) |
+| VS Code Copilot | `.github/copilot-instructions.md` | the three lines as plain markdown ([docs](https://code.visualstudio.com/docs/agent-customization/custom-instructions)) |
+| Claude Projects / claude.ai | the project's instructions ("Set project instructions") | the three lines ([docs](https://support.claude.com/en/articles/9519177-how-can-i-create-and-manage-projects)) |
+| ChatGPT | Settings, Personalization, Custom instructions | the three lines ([docs](https://help.openai.com/en/articles/8096356-chatgpt-custom-instructions)) |
+
+Cursor (a plain `.md` file in `.cursor/rules` is ignored):
+
+```markdown
+---
+description: Keep FlowState project memory up to date
+alwaysApply: true
+---
+
+Call start_here at the start of a conversation about a project.
+Call log_work right after each decision, change, fix or lesson.
+Call log_work again before you end the session or hand back.
+```
+
+Windsurf (`trigger: always_on` includes the whole file every message; the same front matter
+works in `.devin/rules/` when that is the folder in use):
+
+```markdown
+---
+trigger: always_on
+---
+
+Call start_here at the start of a conversation about a project.
+Call log_work right after each decision, change, fix or lesson.
+Call log_work again before you end the session or hand back.
+```
+
 ## 6. Backups
 
 All commands run with the venv Python: `<venv python> -m flowstate <command>`.
@@ -165,6 +238,21 @@ Windows `<REPO>\.venv\Scripts\python.exe`, macOS/Linux `<REPO>/.venv/bin/python`
 
 ### Claude Desktop (stdio; also Cursor `~/.cursor/mcp.json`, Windsurf `~/.codeium/windsurf/mcp_config.json`)
 
+Prefer the PyPI command when `uv` is installed. It does not need this clone:
+
+```json
+{
+  "mcpServers": {
+    "flowstate": {
+      "command": "uvx",
+      "args": ["flowstatemcp"]
+    }
+  }
+}
+```
+
+The clone's venv is the fallback (Claude Desktop ignores `cwd`, which is why `PYTHONPATH` is set):
+
 ```json
 {
   "mcpServers": {
@@ -181,23 +269,33 @@ Windows `<REPO>\.venv\Scripts\python.exe`, macOS/Linux `<REPO>/.venv/bin/python`
 ```
 
 Merge the `flowstate` entry into the existing `mcpServers` object; keep everything else.
-Claude Desktop ignores `cwd`, which is why `PYTHONPATH` is set.
+Claude Desktop ignores `cwd`, which is why the venv snippet sets `PYTHONPATH`.
 
 ### Claude Code
 
+Usual path ([MCP](https://code.claude.com/docs/en/mcp)):
+
 ```bash
-claude mcp add --scope user flowstate -e FLOWSTATE_DB=<DB> -e PYTHONPATH=<REPO>/mcp-server -- <venv python> -m flowstate
+claude mcp add --scope user --transport stdio flowstate -- uvx flowstatemcp
 claude mcp list
+```
+
+Clone fallback. Put `--env` after the server name and before `--` (`-e` is the short form):
+
+```bash
+claude mcp add --scope user --transport stdio flowstate --env FLOWSTATE_DB=<DB> --env PYTHONPATH=<REPO>/mcp-server -- <venv python> -m flowstate
 ```
 
 ### Codex CLI (`~/.codex/config.toml`)
 
 ```toml
 [mcp_servers.flowstate]
-command = "<venv python>"
-args = ["-m", "flowstate"]
-env = { FLOWSTATE_DB = "<DB>", PYTHONPATH = "<REPO>/mcp-server" }
+command = "uvx"
+args = ["flowstatemcp"]
 ```
+
+Clone fallback: `command = "<venv python>"`, `args = ["-m", "flowstate"]`,
+`env = { FLOWSTATE_DB = "<DB>", PYTHONPATH = "<REPO>/mcp-server" }`.
 
 ### Grok Build
 
@@ -222,7 +320,21 @@ and record decisions, changes and problems with flowstate__log_work."
 
 VS Code reads `.vscode/mcp.json` in a workspace, or the user-level `mcp.json` (open it with
 the Command Palette: **MCP: Open User Configuration**). Its top-level key is `servers`, not
-`mcpServers`, so the Claude Desktop snippet does not work as is:
+`mcpServers`, so the Claude Desktop snippet does not work as is. Prefer `uvx`:
+
+```json
+{
+  "servers": {
+    "flowstate": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["flowstatemcp"]
+    }
+  }
+}
+```
+
+Clone fallback:
 
 ```json
 {
@@ -358,7 +470,9 @@ don't show server instructions:
 
 1. Call `start_here(project="<name>")` first in every conversation about a project
    (no arguments, or `folder="<working folder>"`, to list projects).
-2. Record work as you go with `log_work(project=..., kind=decision|change|problem|learning|todo, summary=...)`.
+2. Call `log_work` right after each decision, change, fix or lesson, and again before you
+   end the session or hand back
+   (`log_work(project=..., kind=decision|change|problem|learning|todo, summary=...)`).
    When you hit an error, failing test or bug, or get stuck, first
    `search(query="<error or symptom>", project=..., content_types=["learning","problem","solution"])`
    and try what is recorded; after a non-obvious fix, log a `learning` (symptom -> fix, no secrets).

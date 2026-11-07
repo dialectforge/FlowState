@@ -44,6 +44,20 @@ def test_every_tool_and_parameter_has_a_description():
     assert missing == []
 
 
+def test_write_tools_say_when_to_call():
+    from flowstate import agent_guide as guide
+    when = "right after each decision, change, fix or lesson"
+    assert when in guide.LOG_WORK_DESCRIPTION
+    assert "before you end or hand back" in guide.LOG_WORK_DESCRIPTION
+    assert when in guide.INSTRUCTIONS
+    assert "before you end the session or hand back" in guide.INSTRUCTIONS
+    assert when in guide.prompt_text("Atlas")
+    assert "right after you finish" in guide.TODOS_DESCRIPTION
+    assert "right after a try" in guide.PROBLEMS_DESCRIPTION
+    assert "right after the fix" in guide.PROBLEMS_DESCRIPTION
+    assert "before you stop mid-task or hand back" in guide.HANDOFFS_DESCRIPTION
+
+
 def test_descriptions_say_what_they_return_and_names_start_with_a_verb():
     verbs = ("start_", "log_", "search", "manage_")
     for tool in ALL_TOOLS:

@@ -176,8 +176,9 @@ updating to 2.4.4 means quitting your AI apps and running `flowstate update` in 
 terminal, because it replaces the Python packages those apps are using. An app still using them
 stops the update, and the old version is put back. On Windows, or with a version older
 than 2.4.0, you update by hand: see "Upgrading" in the [README](../README.md#upgrading). FlowState
-is not on PyPI, so never use `pip install --upgrade flowstate`: that name is an unrelated
-project.
+is on PyPI as `flowstatemcp`, so never use `pip install --upgrade flowstate`: that name is an
+unrelated project. Upgrade a PyPI install with `pip install --upgrade flowstatemcp`. A git clone
+still uses `flowstate update`.
 
 ## Wording matters
 

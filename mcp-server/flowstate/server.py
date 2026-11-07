@@ -53,7 +53,7 @@ from .guard import EXEMPT_ACTIONS, GuardError, check_write, explicit_project, is
 log = logging.getLogger("flowstate")
 
 # Create server instance; instructions reach every client at initialize.
-server = Server("flowstate", version="2.4.9", instructions=guide.INSTRUCTIONS)
+server = Server("flowstate", version="2.5.0", instructions=guide.INSTRUCTIONS)
 
 
 from .tooldefs import ALL_TOOLS  # noqa: E402 - the public tools (surface.py maps their calls)
@@ -564,7 +564,7 @@ def _start_here(args: dict, client: str, meta: Optional[dict] = None) -> str:
     try:
         since = _safe_call(ledger.since_line, db_path, project, identity.current(), sid, meta)
         text = build_brief(db_path, project, session, size=args.get("size") or "standard",
-                           shown=(meta or {}).get("shown"), since=since)
+                           shown=(meta or {}).get("shown"), since=since, remind=_safe_call(ledger.log_reminder, db_path, project, sid))
     except Exception as e:  # noqa: BLE001 - brief problems must not break the agent
         return (f"FlowState: project '{project['name']}' (#{project['id']}) found, but the brief "
                 f"could not be built ({type(e).__name__}). Carry on; use search if needed.")
