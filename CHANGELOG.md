@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.4.9 - 2026-11-07
+
+### Fixed
+
+- **A confirmation belongs to the words you approved.** Confirming that you said something
+  (the "confirmed by the user" mark) is now tied to those words. If the words change later,
+  the mark is cleared and FlowState asks you again. An approval that was for older words is
+  refused, so it cannot be applied to text you never saw. Changing a to-do's status, priority
+  or completion time, what it is blocked by, resolving a problem or changing how serious it
+  is, marking a variable as sensitive, pointing a method at a component, or moving a record
+  to another project or component keeps the confirmation. Confirmations already in your
+  database stay valid: migration 025 records a fingerprint of the words as they are now.
+
+### Tests
+
+- Confirmations, content edits, the small set of edits that keep a confirmation, and stale
+  approvals (the review tools, the review page and the same approve path the command line,
+  phone page, popup and cards use).
+
 ## 2.4.8 - 2026-11-04
 
 ### Changed

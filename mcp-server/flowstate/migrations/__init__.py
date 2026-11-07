@@ -1,5 +1,6 @@
-"""Numbered, additive schema migrations. Standard library only (setup_flowstate.py
-imports this before any package is installed).
+"""Numbered, additive schema migrations. The module itself is the standard library only
+(setup_flowstate.py imports it before any package is installed). migrate() then fills
+confirmation hashes, and that import happens only when migrate runs.
 
 Each `NNN_name.sql` file in this folder runs once, inside one transaction, and is
 recorded in `schema_migrations`. Rules for new files: add tables, indexes or rows only;
@@ -102,6 +103,7 @@ def migrate(db_path: Path, backup_dir: Optional[Path] = None, backup_first: bool
     todo = pending(db_path)
     result = {"applied": [], "backup": None}
     if not todo:
+        _backfill_confirmations(db_path)
         return result
     if backup_first and _has_data(db_path):
         from ..backup import backup_now  # stdlib only as well
@@ -136,4 +138,12 @@ def migrate(db_path: Path, backup_dir: Optional[Path] = None, backup_first: bool
                 log(f"[migrate] applied {version:03d}_{name}")
     finally:
         conn.close()
+    _backfill_confirmations(db_path)
     return result
+
+
+def _backfill_confirmations(db_path: Path) -> None:
+    """Tie confirmations made before migration 025 to the words as they are now, so they
+    stay valid until those words change. No-op until that column exists."""
+    from ..provenance import backfill_confirmed_hashes
+    backfill_confirmed_hashes(db_path)

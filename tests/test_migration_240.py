@@ -1,8 +1,8 @@
-"""A v2.3.0 database upgrades cleanly to 2.4.0: built by the real v2.3.0 code (git archive
-of the v2.3.0 commit into a temp folder), then migrated by this code. Only new tables
-arrive (015-019, 021), plus three NULL columns on FlowState's own record_meta (020, who set a
-source tag) and two on the new review_open_nonces (022, the start ticket); every other table
-keeps its schema, and every table its rows."""
+"""A v2.3.0 database upgrades cleanly to the current release: built by the real v2.3.0 code
+(git archive of the v2.3.0 commit into a temp folder), then migrated by this code. Only new
+tables arrive (015-019, 021), plus three NULL columns on FlowState's own record_meta (020,
+who set a source tag), confirmed_hash (025), and two on the new review_open_nonces (022, the
+start ticket); every other table keeps its schema, and every table its rows."""
 
 import json
 import shutil
@@ -78,15 +78,16 @@ def test_v230_database_upgrades_with_new_tables_only(v230_db, tmp_path):
     assert res["applied"] == ["015_session_runs", "016_write_receipts", "017_run_views",
                               "018_run_views_upto", "019_approvals", "020_source_stamps",
                               "021_review_links", "022_review_start_tickets", "023_conflict_cards",
-                              "024_rule_confirmations"]
+                              "024_rule_confirmations", "025_confirmed_hash"]
     assert res["backup"] and "pre-migration" in res["backup"]
     after = _schemas(db)
     changed = {k for k in before if after.get(k) != before[k]}
-    assert changed == {"record_meta", "project_rules"}      # nothing else altered (024: one column)
+    assert changed == {"record_meta", "project_rules"}      # nothing else altered (024, 025: columns)
     now = cols()
-    assert now[:-3] == meta_before                          # only added at the end
-    assert [c[0] for c in now[-3:]] == ["source_set_by", "source_set_model", "source_set_at"]
-    assert all(c[1] == "TEXT" and c[2] == 0 and c[3] == "NULL" for c in now[-3:])
+    assert now[:-4] == meta_before                          # only added at the end
+    assert [c[0] for c in now[-4:]] == ["source_set_by", "source_set_model", "source_set_at",
+                                        "confirmed_hash"]
+    assert all(c[1] == "TEXT" and c[2] == 0 and c[3] == "NULL" for c in now[-4:])
     assert {n for n in after if n not in before} >= NEW
     old_rules = [c[1] for c in _rows(db, "PRAGMA table_info(project_rules)")][:-1]
     assert {t: _rows(db, f'SELECT {", ".join(old_rules) if t == "project_rules" else "*"} '

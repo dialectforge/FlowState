@@ -21,10 +21,15 @@ def approve(db_path: Path, item: dict, args: dict, user_request: str, client: st
     a clean-up's resolved target project id.
     `done` collects extra answer fields (safety_copy, note, deleted). `path` names how the
     decision was made for a disagreement's own log (the card: "card"). Raises ReviewError,
-    deletes.DeleteError, safety.SafetyError."""
+    deletes.DeleteError, safety.SafetyError.
+
+    A "did you say this?" approval is checked here, before the item is claimed, so every
+    path that approves (MCP tools, the command line, the review page, the phone page, a
+    popup and a card) refuses one whose words changed after it was queued."""
     from . import card_offer, cleanup, conflict_cards, conflict_reopen, conflicts, deletes, \
         history, provenance, handoffs, review_mode, rules, safety
     from . import server as S
+    provenance.guard_revision(db_path, item)   # stale confirmation: closed, nothing confirmed
     conflict_reopen.check(item, client, path == "card")   # "Reopen?": the user's alone
 
     def apply(item: dict, payload: dict):   # a source tag is the queuing app's say-so
