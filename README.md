@@ -1,5 +1,7 @@
 # FlowState
 
+[![mcptry](https://mcptry.com/badge/io.github.dialectforge/flowstate-hosted)](https://mcptry.com/servers/io.github.dialectforge/flowstate-hosted)
+
 **A shared project memory for your AI apps. Free, open source, and stored on your own machine.**
 
 > **Don't want to run a server? Try FlowState Hosted.**
