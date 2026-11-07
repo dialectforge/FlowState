@@ -216,6 +216,10 @@ class Edit:
                     "tool": self.tool, "old_row": json.dumps(old) if old is not None else None,
                     "new_row": json.dumps(new) if new is not None else None,
                     "client": (client or "")[:80], "created_at": now}, client)
+            # A user confirmation belongs to the words that were approved: a change to those
+            # words drops it and closes a question that was about the old words.
+            from . import provenance
+            provenance.on_record_edits(conn, self.before, after, client, edit_id)
             conn.commit()
             return edit_id
         finally:
@@ -360,17 +364,21 @@ def _user_only(g) -> Optional[str]:
 
 
 def record_side(conn, table: str, rtype: str, rid: int, before: dict, tool: str,
-                client: str = "unknown", project_id: Optional[int] = None) -> Optional[str]:
+                client: str = "unknown", project_id: Optional[int] = None,
+                edit_id: Optional[str] = None) -> Optional[str]:
     """Record a change to a record's side rows made on `conn` (the caller commits): each row
     before and after, as one edit of the current write (so evidence saved with a new record
-    is part of its create edit). `before` is side_rows() taken before the change."""
+    is part of its create edit). `before` is side_rows() taken before the change.
+    `edit_id` joins this to an edit already being recorded (a confirmation cleared because
+    the words changed belongs to that edit, so undo restores the words and leaves the
+    confirmation for the user)."""
     if table not in SIDE or not _has(conn, "record_history"):
         return None
     after = side_rows(conn, table, rtype, rid)
     keys = [k for k in dict.fromkeys([*before, *after]) if before.get(k) != after.get(k)]
     if not keys:
         return None
-    edit_id, now = new_edit_id(), _now()
+    edit_id, now = edit_id or new_edit_id(), _now()
     for k in keys:
         old, new = before.get(k), after.get(k)
         identity.insert(conn, "record_history", {
@@ -711,6 +719,18 @@ def undo(db_path: Path, project_id: int, record_type: str, record_id: int,
             conn.execute("UPDATE record_history SET undone_at = ?, undone_by_edit = ? WHERE id = ?",
                          (now, undo_id, g["id"]))
         asked = _ask_reopen(conn, restored, client)
+        # Restoring the words can make a queued confirmation stale, or clear one that no
+        # longer matches. Same rules as any other edit of the words.
+        from . import provenance
+        provenance.on_record_edits(
+            conn,
+            {(g["table_name"], g["record_id"]): before
+             for g, before, after, _old in restored
+             if isinstance(before, dict) and isinstance(after, dict)},
+            {(g["table_name"], g["record_id"]): after
+             for g, before, after, _old in restored
+             if isinstance(before, dict) and isinstance(after, dict)},
+            client)
         conn.commit()
         out = {"undone": last["edit_id"], "tool": last["tool"], "rows": rows,
                "undo_edit_id": undo_id, "note": "Recorded in history; undo again to redo."}

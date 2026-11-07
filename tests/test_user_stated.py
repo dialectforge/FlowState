@@ -93,7 +93,7 @@ def on(backend):
 # ---------------------------------------------------------------- rules 1 and 2
 def test_migration_020_adds_the_stamp_columns(backend):
     cols = [r[1] for r in _q(backend.backend.db_path, "PRAGMA table_info(record_meta)")]
-    assert cols[-3:] == ["source_set_by", "source_set_model", "source_set_at"]
+    assert cols[-4:] == ["source_set_by", "source_set_model", "source_set_at", "confirmed_hash"]
 
 
 def test_log_time_tag_is_stamped_with_app_and_model(backend):

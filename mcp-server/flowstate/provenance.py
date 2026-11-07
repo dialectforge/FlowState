@@ -19,8 +19,18 @@ Stale facts: learnings, changes, decisions, variables and methods that mention p
 ports, hosts, URLs or config files (all server/config/endpoint/environment variables), not
 verified (or, if never verified, not created/updated) for STALE_DAYS. They are listed for
 re-checking; nothing is changed or hidden because of it.
+
+A confirmation belongs to the words that were approved (2.4.9, migration 025). Approving a
+"did you say this?" item stores a hash of those words (`confirmed_hash`) and the same hash
+on the review item. A later edit of the words drops the confirmation back to an AI guess
+and queues a fresh question; status, priority, completion, blockers, resolving a problem or
+its severity, marking a variable sensitive, pointing a method at a component, and moving a
+record to another project or component do not. Approving a question whose words have since
+changed is refused and the question is closed.
 """
 
+import hashlib
+import json
 import os
 import re
 from datetime import datetime, timedelta, timezone
@@ -33,6 +43,22 @@ SOURCES = ("user_stated", "ai_inferred", "from_code")
 TAGS = {"user_stated": "user", "ai_inferred": "AI", "from_code": "code"}
 USER = "user"   # source_set_by when the user confirmed the tag themselves
 STAMPS = ("source_set_by", "source_set_model", "source_set_at")
+# The words a confirmation is bound to. Anything not listed here can change and the
+# confirmation stays: a to-do's status, priority, completed_at and blockers; resolving a
+# problem or changing its severity; marking a variable sensitive (is_secret); pointing a
+# method at a component; moving a record to another project or component.
+CONTENT = {
+    "todo": ("title", "description", "due_date"),
+    "learning": ("category", "insight", "context"),
+    "decision": ("user_prompt_summary", "assistant_response_summary", "key_decisions"),
+    "change": ("field_name", "old_value", "new_value", "reason"),
+    "problem": ("title", "description", "root_cause"),
+    "variable": ("category", "name", "value", "description"),
+    "method": ("name", "description", "category", "steps", "code_example"),
+}
+STALE_MESSAGE = ("This confirmation was for different words. The record changed after it was "
+                 "queued, so it was closed and nothing was marked as confirmed by you.")
+WORDS_CHANGED = "The words changed after this was queued, so this confirmation was closed."
 TABLES = {"todo": "todos", "decision": "conversations", "change": "changes",
           "learning": "learnings", "problem": "problems", "variable": "project_variables",
           "method": "project_methods"}
@@ -105,9 +131,11 @@ def check_record(conn, pid: int, rtype: str, rid) -> int:
     return rid
 
 
-def _upsert(conn, rtype: str, rid: int, tool: str, client: Optional[str] = None, **cols) -> None:
+def _upsert(conn, rtype: str, rid: int, tool: str, client: Optional[str] = None,
+            edit_id: Optional[str] = None, **cols) -> None:
     """Set a record's source tag / checked date; the row before and after goes into the edit
-    history (task 67), so the earlier tag is kept and undo can put it back."""
+    history (task 67), so the earlier tag is kept and undo can put it back. `edit_id` joins
+    the history row to an edit already in progress."""
     from . import history
     before = history.side_rows(conn, "record_meta", rtype, rid)
     conn.execute("INSERT OR IGNORE INTO record_meta (record_type, record_id) VALUES (?, ?)",
@@ -116,12 +144,53 @@ def _upsert(conn, rtype: str, rid: int, tool: str, client: Optional[str] = None,
     conn.execute(f"UPDATE record_meta SET {sets}, updated_at = ? WHERE record_type = ? "
                  f"AND record_id = ?", (*cols.values(), _now(), rtype, rid))
     history.record_side(conn, "record_meta", rtype, rid, before, tool, client or "unknown",
-                        owner(conn, rtype, rid))
+                        owner(conn, rtype, rid), edit_id=edit_id)
 
 
 def stamped(conn) -> bool:
     """Migration 020 has run (who set the source is stored)."""
     return "source_set_by" in {r[1] for r in conn.execute("PRAGMA table_info(record_meta)")}
+
+
+def has_confirmed_hash(conn) -> bool:
+    """Migration 025 has run (a confirmation is tied to the words that were approved)."""
+    return "confirmed_hash" in {r[1] for r in conn.execute("PRAGMA table_info(record_meta)")}
+
+
+def content_hash(rtype: str, row: dict) -> str:
+    """Hash of the words a confirmation is bound to, for this record as it is now."""
+    payload = {k: row.get(k) for k in CONTENT[rtype]}
+    blob = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+                      default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _content_changed(rtype: str, old: dict, new: dict) -> bool:
+    return any(old.get(k) != new.get(k) for k in CONTENT[rtype])
+
+
+def _row(conn, rtype: str, rid) -> Optional[dict]:
+    table = TABLES.get(rtype or "")
+    if not table:
+        return None
+    try:
+        rid = int(rid)
+    except (TypeError, ValueError):
+        return None
+    cur = conn.execute(f'SELECT * FROM "{table}" WHERE id = ?', (rid,))
+    row = cur.fetchone()
+    if row is None:
+        return None
+    if hasattr(row, "keys"):
+        return {k: row[k] for k in row.keys()}
+    return dict(zip([d[0] for d in cur.description], row))
+
+
+def _hash_row(conn, rtype: str, rid) -> Optional[str]:
+    if rtype not in CONTENT:
+        return None
+    row = _row(conn, rtype, rid)
+    return content_hash(rtype, row) if row else None
 
 
 def _source_cols(conn, source: str, by: Optional[tuple] = None,
@@ -170,8 +239,12 @@ def _open_confirm(conn, pid: int, rtype: str, rid: int) -> Optional[int]:
     return row[0] if row else None
 
 
-def request_user_stated(conn, pid: int, rtype: str, rid: int, client: str) -> tuple[int, bool]:
-    """Queue (or find the open) "did you say this yourself?" item: (item id, reused?)."""
+def request_user_stated(conn, pid: int, rtype: str, rid: int, client: str,
+                        because: Optional[str] = None) -> tuple[int, bool]:
+    """Queue (or find the open) "did you say this yourself?" item: (item id, reused?).
+
+    The item stores a hash of the words as they are now. Approving it later is refused if
+    those words have changed (`guard_revision`)."""
     from . import review
     from .deletes import _title
     found = _open_confirm(conn, pid, rtype, rid)
@@ -179,12 +252,18 @@ def request_user_stated(conn, pid: int, rtype: str, rid: int, client: str) -> tu
         return found, True
     was = current_source(conn, rtype, rid)
     title = _title(conn, rtype, rid)
+    details = (f"An AI app asked to tag this {rtype} user_stated (the user said so). Only you can "
+               f"confirm that. Approve if you said it; reject to leave it {was or 'untagged'}.")
+    if because:
+        details = because.rstrip() + " " + details
+    payload = {"record_type": rtype, "record_id": rid, "source": "user_stated", "was": was,
+               "title": title, "user_only": True}
+    hashed = _hash_row(conn, rtype, rid)
+    if hashed:
+        payload["content_hash"] = hashed
     item = review.add_item(
-        None, pid, "source", f'Did you say this yourself? {rtype} #{rid} "{title}"',
-        f"An AI app asked to tag this {rtype} user_stated (the user said so). Only you can "
-        f"confirm that. Approve if you said it; reject to leave it {was or 'untagged'}.",
-        {"record_type": rtype, "record_id": rid, "source": "user_stated", "was": was,
-         "title": title, "user_only": True}, (client or "unknown")[:80], conn=conn)
+        None, pid, "source", f'Did you say this yourself? {rtype} #{rid} "{title}"', details,
+        payload, (client or "unknown")[:80], conn=conn)
     return item, False
 
 
@@ -230,8 +309,9 @@ def mark(db_path: Path, pid: int, rtype: str, rid, client: str, source: Optional
 
 
 def confirm(db_path: Path, item: dict) -> tuple[str, int]:
-    """The user approved a `source` review item: tag the record user_stated, stamped 'user'."""
-    import json
+    """The user approved a `source` review item: tag the record user_stated, stamped 'user',
+    bound to a hash of the words as they are now. Refused when those words are not the ones
+    the question was queued for (see `guard_revision`, which also closes the question)."""
     p = json.loads(item.get("payload") or "{}")
     rtype, rid = p.get("record_type"), p.get("record_id")
     conn = links.connect(db_path)
@@ -240,12 +320,172 @@ def confirm(db_path: Path, item: dict) -> tuple[str, int]:
         if rtype not in TABLES or rid is None or owner(conn, rtype, rid) is None:
             from .review import ReviewError
             raise ReviewError("record_not_found", f"The {rtype or 'record'} #{rid} no longer exists.")
-        _upsert(conn, rtype, int(rid), "source/confirm", USER,
-                **_source_cols(conn, "user_stated", (USER, None)))
+        actual = _hash_row(conn, rtype, int(rid))
+        expected = p.get("content_hash")
+        if expected and actual and expected != actual:
+            from .review import ReviewError
+            raise ReviewError("stale_approval", STALE_MESSAGE)
+        cols = _source_cols(conn, "user_stated", (USER, None))
+        if actual and has_confirmed_hash(conn):
+            cols["confirmed_hash"] = actual
+        _upsert(conn, rtype, int(rid), "source/confirm", USER, **cols)
         conn.commit()
     finally:
         conn.close()
     return TABLES[rtype], int(rid)
+
+
+def _pending_source(conn, rtype: str, rid: int) -> list:
+    """Open "did you say this?" items for this record: [{id, hash}]."""
+    from . import review
+    if not review.available(conn):
+        return []
+    out = []
+    for iid, payload in conn.execute(
+            """SELECT id, payload FROM review_items WHERE kind = 'source' AND status = 'pending'
+               AND json_extract(payload, '$.record_type') = ?
+               AND json_extract(payload, '$.record_id') = ?""",
+            (rtype, int(rid))):
+        try:
+            body = json.loads(payload or "{}")
+        except ValueError:
+            body = {}
+        out.append({"id": iid, "hash": body.get("content_hash")})
+    return out
+
+
+def _meta(conn, rtype: str, rid: int) -> Optional[dict]:
+    if not available(conn):
+        return None
+    cols = ["source", "source_set_by"] + (["confirmed_hash"] if has_confirmed_hash(conn) else [])
+    row = conn.execute(
+        f"SELECT {', '.join(cols)} FROM record_meta WHERE record_type = ? AND record_id = ?",
+        (rtype, int(rid))).fetchone()
+    if row is None:
+        return None
+    if hasattr(row, "keys"):
+        return {k: row[k] for k in row.keys()}
+    return dict(zip(cols, row))
+
+
+def _void_source(conn, item_id: int, reason: str) -> None:
+    """Close one pending source question (rejected by FlowState). The caller commits."""
+    from . import identity, review
+    who = identity.fields(conn, "review_items", prefix="decided_", ident=identity.SYSTEM)
+    sets = "".join(f", {k} = ?" for k in who)
+    conn.execute(
+        f"""UPDATE review_items SET status = 'rejected', decided_at = ?,
+            decided_by = 'flowstate (automatic)', reject_reason = ?{sets}
+            WHERE id = ? AND kind = 'source' AND status = 'pending'""",
+        (review._now(), reason[:500], *who.values(), int(item_id)))
+
+
+def guard_revision(db_path: Path, item: dict) -> None:
+    """Refuse an approval of a source question whose words changed after it was queued, and
+    close that question. Every approve path calls this (review_apply.approve) before the
+    question is claimed: the MCP tools, the command line, the review page, the phone page,
+    a popup and a card."""
+    if not item or item.get("kind") != "source":
+        return
+    try:
+        body = json.loads(item.get("payload") or "{}")
+    except ValueError:
+        return
+    expected = body.get("content_hash")
+    if not expected:
+        return   # queued before confirmations were tied to the words
+    rtype, rid = body.get("record_type"), body.get("record_id")
+    conn = links.connect(db_path)
+    try:
+        actual = _hash_row(conn, rtype, rid) if rtype in CONTENT and rid is not None else None
+        if actual is None or actual == expected:
+            return
+        _void_source(conn, int(item["id"]), WORDS_CHANGED)
+        conn.commit()
+    finally:
+        conn.close()
+    from .review import ReviewError
+    raise ReviewError("stale_approval", STALE_MESSAGE)
+
+
+def on_record_edits(conn, before: dict, after: dict, client: str,
+                    edit_id: Optional[str] = None) -> None:
+    """After a tracked edit: a change to the words of a user-confirmed record drops that
+    confirmation back to an AI guess and queues a new question. A pending question whose
+    words no longer match is closed, and a new one is queued for the words as they are now.
+    The caller commits. `edit_id` attaches the cleared confirmation to that edit, so undo
+    puts the words back and leaves the confirmation for the user."""
+    if not available(conn):
+        return
+    from . import history
+    for (table, rid), new in after.items():
+        old = before.get((table, rid))
+        if not isinstance(old, dict) or not isinstance(new, dict):
+            continue
+        rtype = history.TYPE_OF.get(table)
+        if rtype not in CONTENT or not _content_changed(rtype, old, new):
+            continue
+        _refresh_confirmation(conn, rtype, int(rid), new, client, edit_id)
+
+
+def _refresh_confirmation(conn, rtype: str, rid: int, new_row: dict, client: str,
+                          edit_id: Optional[str] = None) -> None:
+    new_hash = content_hash(rtype, new_row)
+    meta = _meta(conn, rtype, rid)
+    confirmed = bool(meta and meta.get("source") == "user_stated" and meta.get("source_set_by") == USER
+                     and meta.get("confirmed_hash") != new_hash)
+    pending = _pending_source(conn, rtype, rid)
+    stale = [it for it in pending if it["hash"] != new_hash]
+    if not confirmed and not stale:
+        return
+    if confirmed:
+        cols = _source_cols(conn, "ai_inferred", client=client)
+        if has_confirmed_hash(conn):
+            cols["confirmed_hash"] = None
+        _upsert(conn, rtype, rid, "source/words_changed", client, edit_id=edit_id, **cols)
+    for it in stale:
+        _void_source(conn, it["id"], WORDS_CHANGED)
+    if any(it["hash"] == new_hash for it in pending):
+        return
+    pid = owner(conn, rtype, rid)
+    if pid is None:
+        return
+    if confirmed:
+        because = ("The words changed after you confirmed them, so that confirmation was cleared.")
+    else:
+        because = "The words changed after this was queued."
+    request_user_stated(conn, pid, rtype, rid, client or "unknown", because=because)
+
+
+def backfill_confirmed_hashes(db_path: Path) -> int:
+    """Fill confirmed_hash for confirmations made before migration 025, from the words as
+    they are now, so those confirmations stay valid until the words change. Returns how
+    many rows were filled."""
+    conn = links.connect(db_path)
+    try:
+        if not available(conn) or not stamped(conn) or not has_confirmed_hash(conn):
+            return 0
+        rows = conn.execute(
+            "SELECT record_type, record_id FROM record_meta "
+            "WHERE source = 'user_stated' AND source_set_by = ? AND confirmed_hash IS NULL",
+            (USER,)).fetchall()
+        n = 0
+        for rtype, rid in rows:
+            if rtype not in CONTENT:
+                continue
+            row = _row(conn, rtype, rid)
+            if row is None:
+                continue
+            conn.execute(
+                "UPDATE record_meta SET confirmed_hash = ? "
+                "WHERE record_type = ? AND record_id = ? AND confirmed_hash IS NULL",
+                (content_hash(rtype, row), rtype, rid))
+            n += 1
+        if n:
+            conn.commit()
+        return n
+    finally:
+        conn.close()
 
 
 # the text cleanup's duplicate check compares, per log_work kind
