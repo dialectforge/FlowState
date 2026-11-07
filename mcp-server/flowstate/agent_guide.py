@@ -7,7 +7,7 @@ meanings are in the schemas (tooldefs.py)."""
 
 INSTRUCTIONS = """FlowState is the user's project memory (todos, changes, decisions, problems, learnings).
 1. At the start of every conversation about a project, call start_here(project="<name>") first and read the brief. If you don't know the project, call start_here() with no arguments (or with folder="<working folder>") to see the list, then pick one.
-2. As you work, record what matters with log_work(project="<name>", kind=..., summary=...): kind=decision for choices made, change for things changed, problem for bugs/blockers, learning for lessons, todo for follow-ups. One short line each; add details only when useful. Look things up with search (answer=true for a question). When you hit an error, failing test or bug, or get stuck, first search(query="<error or symptom>", project=..., content_types=["learning","problem","solution"]) and try what is recorded; after a non-obvious fix, log_work kind=learning (symptom -> fix, no secrets).
+2. As you work, call log_work right after each decision, change, fix or lesson, and again before you end the session or hand back: log_work(project="<name>", kind=..., summary=...). kind=decision for choices made, change for things changed, problem for bugs/blockers, learning for lessons, todo for follow-ups. One short line each; add details only when useful. Look things up with search (answer=true for a question). When you hit an error, failing test or bug, or get stuck, first search(query="<error or symptom>", project=..., content_types=["learning","problem","solution"]) and try what is recorded; after a non-obvious fix, log_work kind=learning (symptom -> fix, no secrets).
 3. Every write must name the project. Never put passwords, tokens or keys in any text. If you know your model name, pass it as model="<name>" on writes; never guess or invent it (leave it out).
 4. A session is opened and closed for you automatically; you don't need to manage it. Its auto-captured summary (none when it only read, undid or decided review items), and anything you log with suggested=true, waits in a review queue for the user. Never approve or reject review items unless the user explicitly asks you to in this chat. Delete (manage_projects or manage_memory action=delete) only when the user asks: it goes through after a safety copy and manage_history undo brings it back; if the user turned approvals on, it waits for them and the answer's next line says what to tell them. The user's review mode (shown in the brief) decides what else waits; never change it unless the user asks you to in this chat.
 5. Things shared between projects (a protocol, a library) are linked with manage_links; log changes to a shared component by its name and the other projects are alerted.
@@ -24,11 +24,13 @@ START_HERE_DESCRIPTION = (
 
 LOG_WORK_DESCRIPTION = (
     "Record one new decision (a choice and why), change (code or setup), problem (bug or "
-    "blocker), learning (reusable lesson) or todo in a project. To update todos or problems: "
-    "manage_todos / manage_problems. Only adds. Review mode or suggested=true may queue it for "
-    "the user. A change on a shared component alerts linked projects. A decision close to a "
-    "current one gets a possible-conflict note; act on it. conflicts_with opens a disagreement "
-    "card. Secrets are refused. Returns {logged, record, note} or {queued_for_review}."
+    "blocker), learning (reusable lesson) or todo in a project. Call it right after each "
+    "decision, change, fix or lesson, and before you end or hand back. To update todos or "
+    "problems: manage_todos / manage_problems. Only adds. Review mode or suggested=true may "
+    "queue it. A change on a shared component alerts linked projects. A decision close to a "
+    "current one gets a possible-conflict note. conflicts_with opens a disagreement card. "
+    "Secrets are refused. Returns {logged, "
+    "record, note} or {queued_for_review}."
 )
 
 SEARCH_DESCRIPTION = (
@@ -40,15 +42,16 @@ SEARCH_DESCRIPTION = (
 
 TODOS_DESCRIPTION = (
     "Todos. list; next: top unblocked (others' claims last). update: status (done/cancelled), "
-    "priority, title, description. block / unblock: waits on todos or a problem. add: "
-    "subtask, blocker or due date only (else log_work). claim before you start (fails if "
-    "someone has it); renew; release or handoff (with a note). Returns rows."
+    "priority, title, description, right after you finish one. block / unblock: waits on todos "
+    "or a problem. add: subtask, blocker or due date only (else log_work). claim before you "
+    "start (fails if someone has it); renew; release or handoff (with a note). "
+    "Returns rows."
 )
 
 PROBLEMS_DESCRIPTION = (
     "Work on a project's existing problems (bugs, blockers). list: open problems. tree: "
-    "one problem with every attempt and its solution. add_attempt: record a try. "
-    "end_attempt: how a try ended. solve: close it with what fixed it (manage_history undo "
+    "one problem with every attempt and its solution. add_attempt: right after a try. "
+    "end_attempt: how a try ended. solve: right after the fix (manage_history undo "
     "reopens it). Open a new problem with log_work kind=problem. Reads: list, tree. Writes "
     "need project. Returns problem rows, the tree, or the saved attempt or solution."
 )
@@ -70,10 +73,11 @@ REVIEW_DESCRIPTION = (
 )
 
 HANDOFFS_DESCRIPTION = (
-    "Notes from one AI to the next. leave: when you must stop mid-task, save where_i_was and "
-    "next_step; the next start_here shows it after the hard rules. pickup: once you continue "
-    "from a note, mark it so it stops showing. list: open notes. Not a session summary and "
-    "not a todo. Adds or marks notes; never deletes. Returns the note or {notes}."
+    "Notes from one AI to the next. leave: before you stop mid-task or hand back, save "
+    "where_i_was and next_step; the next start_here shows it after the hard rules. pickup: "
+    "once you continue from a note, mark it so it stops showing. list: open notes. Not a "
+    "session summary and not a todo. Adds or marks notes; never deletes. Returns the note "
+    "or {notes}."
 )
 
 RULES_DESCRIPTION = (

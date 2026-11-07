@@ -137,13 +137,15 @@ def _exposure_lines() -> list:
 
 def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
                 cap: Optional[int] = None, size: str = "standard",
-                shown: Optional[list] = None, since: Optional[str] = None) -> str:
+                shown: Optional[list] = None, since: Optional[str] = None,
+                remind: Optional[str] = None) -> str:
     """Plain-text brief: hard rules, handoff notes, open todos, open problems, recent changes
     and decisions, key learnings. Sections are filled within budgets; the result never
     exceeds the size's cap, except that the hard rules are never cut: if they alone would not
     fit, the cap grows just enough to show them (they are bounded at 2,000 characters).
     `shown` (a list) receives "type:id" of every record the brief shows (the run ledger);
-    `since` is the one "since your last visit" line (ledger.since_line), if any."""
+    `since` is the one "since your last visit" line (ledger.since_line), if any.
+    `remind` is the one line when the previous session read this project and saved nothing."""
     shown = shown if shown is not None else []
     from . import claims, conflicts, handoffs, links, priority, provenance, review_mode, rules
     size = size if size in SIZES else "standard"
@@ -259,6 +261,8 @@ def build_brief(db_path: Path, project: dict, session: Optional[dict] = None,
         b.add(f"Session #{session['session_id']} is open for you (opened automatically; "
               f"closes itself when idle). Log as you work: "
               f"log_work(project=\"{name}\", kind=decision|change|problem|learning|todo, summary=...).")
+    if remind:
+        b.add(remind)
     if since:
         b.add(since)
     if pending is not None:

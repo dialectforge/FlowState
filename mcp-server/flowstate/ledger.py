@@ -219,3 +219,54 @@ def since_line(db_path: Path, project: dict, ident, session_id: Optional[int],
         if len(line) <= SINCE_MAX:
             return line
     return line[:SINCE_MAX - 3] + "..."
+
+
+# ---------------------------------------------------------------- log as you go
+# One line, shown when the previous session on this project read FlowState and saved
+# nothing. Local ledger only (run_views / run_writes). No network call.
+REMINDER = (
+    "Last session read this project and logged nothing. Log each decision, change, fix or "
+    "lesson with log_work as you go, and before you finish."
+)
+
+
+def log_reminder(db_path: Path, project: dict, session_id: Optional[int]) -> Optional[str]:
+    """The reminder line, or None.
+
+    The previous session is the other session (not this one) with the newest read or saved
+    write on this project. A read is any run_views row (start_here, search, a list). A saved
+    write is a run_writes row with status 'saved'. Remind only when that session read and
+    saved nothing. An open session counts: the next chat often starts before idle close."""
+    me = session_id if session_id is not None else -1
+    conn = _conn(db_path)
+    try:
+        if not available(conn):
+            return None
+        prev = conn.execute(
+            """SELECT session_id FROM (
+                   SELECT session_id, at AS t FROM run_views
+                    WHERE project_id = ? AND session_id IS NOT NULL AND session_id != ?
+                   UNION ALL
+                   SELECT session_id, finished_at AS t FROM run_writes
+                    WHERE project_id = ? AND session_id IS NOT NULL AND session_id != ?
+                      AND status = 'saved'
+               )
+               ORDER BY t DESC, session_id DESC LIMIT 1""",
+            (project["id"], me, project["id"], me)).fetchone()
+        if prev is None:
+            return None
+        sid = prev[0]
+        read = conn.execute(
+            "SELECT 1 FROM run_views WHERE project_id = ? AND session_id = ? LIMIT 1",
+            (project["id"], sid)).fetchone()
+        if read is None:
+            return None
+        wrote = conn.execute(
+            """SELECT 1 FROM run_writes WHERE project_id = ? AND session_id = ?
+               AND status = 'saved' LIMIT 1""",
+            (project["id"], sid)).fetchone()
+        if wrote is not None:
+            return None
+        return REMINDER
+    finally:
+        conn.close()
