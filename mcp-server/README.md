@@ -1,33 +1,52 @@
-# FlowState MCP server
+# flowstatemcp
 
-The Python package behind FlowState: a local MCP server that gives AI apps a shared project
-memory in a SQLite file. Setup, features and app configs are in the repository's
-[README.md](../README.md) and [AGENTS.md](../AGENTS.md); the easiest install is
-`python setup_flowstate.py` from the repository root.
+Local-first shared project memory for AI apps. One SQLite file on your computer holds the
+todos, changes, decisions, problems, and lessons your AI apps share. The import package is
+`flowstate`. The PyPI name is `flowstatemcp`, because `flowstate` is a different project.
 
-## Install (Python 3.11+)
+- Site: https://flowstatemcp.com
+- Hosted (no install): https://flowstatemcp.com/hosted
+- Source: https://github.com/dialectforge/FlowState
+
+## Install
+
+You need Python 3.11+ and [uv](https://docs.astral.sh/uv/getting-started/installation/) for the
+one-command form.
 
 ```bash
-pip install -e .            # the server
-pip install -e ".[dev]"     # plus pytest, pytest-asyncio, httpx for the tests
+uvx flowstatemcp
 ```
 
-A plain `pip install .` (or of a built wheel) works too from 2.4.1 on: the base schema
-(`flowstate/schema.sql`), the migrations and `release_signers` are part of the package.
-`flowstate update` only works in a git clone set up by `setup_flowstate.py`. Like every
-FlowState 2.4.0 or later, it checks GitHub once a day for a newer release (nothing about you or
-your projects is sent); `flowstate update check off` or `FLOWSTATE_UPDATE_CHECK=0` turns that off.
+That starts the stdio MCP server. These do the same thing:
 
-Search by meaning is optional; see "Honest limits" in the main README.
+```bash
+pipx run flowstatemcp
+pip install flowstatemcp
+flowstatemcp
+flowstate
+```
+
+`pip install flowstate` does not install this project.
+
+The git clone is the fallback when you want `setup_flowstate.py` to write app configs, schedule
+backups, and install the FlowState skill. See the repository
+[README](https://github.com/dialectforge/FlowState/blob/main/README.md).
 
 ## Run
 
 ```bash
-python -m flowstate                                   # stdio (what desktop apps start)
-python -m flowstate --transport http --host 127.0.0.1 --port 8766   # HTTP, needs a bearer token
-python -m flowstate --help                            # all server options
-python -m flowstate <command> -h                      # maintenance commands: backup, restore, review-page, ...
+flowstatemcp                                 # stdio (what desktop apps start)
+flowstate                                    # the same server
+python -m flowstate --transport http --host 127.0.0.1 --port 8766
+flowstate --help
 ```
 
-The `flowstate` command does the same as `python -m flowstate`. The database is `FLOWSTATE_DB`
-if set, else the per-OS default listed in AGENTS.md.
+The database is `FLOWSTATE_DB` if set, otherwise the per-OS default in the repository AGENTS.md.
+
+A plain `pip install flowstatemcp` (or of a built wheel) includes the base schema
+(`flowstate/schema.sql`), the migrations, and `release_signers`. `flowstate update` only works
+in a git clone set up by `setup_flowstate.py`. Like every FlowState 2.4.0 or later, it checks
+GitHub once a day for a newer release (nothing about you or your projects is sent);
+`flowstate update check off` or `FLOWSTATE_UPDATE_CHECK=0` turns that off.
+
+Search by meaning is optional; see "Honest limits" in the repository README.

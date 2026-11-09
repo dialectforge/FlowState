@@ -144,10 +144,41 @@ I built FlowState v1 in January 2026 as a gift to the vibe coder community, back
 
 ---
 
-## Quick start: point your AI at this repo
+## Quick start
 
-Paste this into an AI app that can run commands on your computer (Claude Code, Cursor,
-Windsurf, Codex CLI, Grok Build, ...):
+### Add the local server
+
+The PyPI package is `flowstatemcp`. `pip install flowstate` is a different project, so don't
+use that name. You need [uv](https://docs.astral.sh/uv/getting-started/installation/).
+
+**Cursor.** Cursor asks before it saves the server
+([install links](https://cursor.com/docs/mcp/install-links)).
+
+[![Add flowstate to Cursor](https://cursor.com/deeplink/mcp-install-dark.png)](cursor://anysphere.cursor-deeplink/mcp/install?name=flowstate&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJmbG93c3RhdGVtY3AiXX0=)
+[![Add flowstate to Cursor](https://cursor.com/deeplink/mcp-install-light.png)](cursor://anysphere.cursor-deeplink/mcp/install?name=flowstate&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJmbG93c3RhdGVtY3AiXX0=)
+
+If this page will not open a `cursor://` link, use the same install on the web:
+[cursor.com/link/mcp/install](https://cursor.com/link/mcp/install?name=flowstate&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJmbG93c3RhdGVtY3AiXX0=).
+
+**VS Code.** VS Code opens the server so you can review it before you install
+([install URL](https://code.visualstudio.com/api/extension-guides/ai/mcp)).
+
+[Add to VS Code](https://vscode.dev/redirect?url=vscode%3Amcp%2Finstall%3F%257B%2522name%2522%253A%2522flowstate%2522%252C%2522type%2522%253A%2522stdio%2522%252C%2522command%2522%253A%2522uvx%2522%252C%2522args%2522%253A%255B%2522flowstatemcp%2522%255D%257D)
+
+**Claude Code** ([MCP](https://code.claude.com/docs/en/mcp)):
+
+```bash
+claude mcp add --scope user --transport stdio flowstate -- uvx flowstatemcp
+```
+
+Or start the server yourself with `uvx flowstatemcp`. `pipx run flowstatemcp` does the same.
+After `pip install flowstatemcp`, both `flowstatemcp` and `flowstate` start it.
+
+### Git clone (backups, the skill, and written app configs)
+
+The clone is the fallback. Use it when you want `setup_flowstate.py` to create the venv, write
+each app's config, schedule backups, and install the skill. Paste this into an AI app that can
+run commands on your computer (Claude Code, Cursor, Windsurf, Codex CLI, Grok Build, ...):
 
 > Set up FlowState for me from https://github.com/dialectforge/FlowState by following its AGENTS.md.
 
@@ -189,11 +220,10 @@ JSON config with an `mcpServers` object), `--db <file>`, `--python <path>`.
 
 ### Manual install
 
-Needs Python 3.11+ and git.
+Needs Python 3.11+. The usual install is `uvx flowstatemcp` (above). `pip install flowstate`
+does not install this project.
 
-FlowState is not published on PyPI: install it from this repository as shown here. The
-`flowstate` package on PyPI is an unrelated project, so `pip install flowstate` does not
-install this.
+The rest of this section is the git clone, for `setup_flowstate.py`, backups, and the skill.
 
 ```bash
 git clone https://github.com/dialectforge/FlowState.git FlowState
@@ -211,7 +241,8 @@ python setup_flowstate.py --clients claude-desktop --schedule-backups --no-offsi
 if you want the test tools or manage the venv yourself (then add `--skip-install`). For the exact,
 hash-checked test set CI uses: `pip install --require-hashes -r requirements-dev.lock`, then
 `pip install --no-deps -e mcp-server`. A plain,
-non-editable `pip install mcp-server` (or of a built wheel) works too from 2.4.1 on; in 2.4.0 it
+non-editable `pip install ./mcp-server` (or of a built wheel; on PyPI the name is
+`flowstatemcp`) works too from 2.4.1 on; in 2.4.0 it
 left out the database schema, so every FlowState call failed, and the failed start left an empty
 database file behind. 2.4.1 sets up such an empty file as a new database, so reinstalling is
 enough. `flowstate update` needs the git clone set up by `setup_flowstate.py`. Config
@@ -268,12 +299,74 @@ items, leave a handoff if you stop mid-task). Apps that load skills follow it wi
 - **Claude apps and ChatGPT:** zip the `skills/flowstate` folder yourself and upload the ZIP in
   the app's Skills settings. (FlowState doesn't build the ZIP for you.)
 
-No skill support in your app? Paste this once per chat, or into its custom instructions:
-
-> Use FlowState as my project memory. First call start_here for the project we're working on (ask me which if unsure). As we work, log decisions, changes, problems, lessons and todos to that project with log_work. If something is shared between projects, link it with manage_links instead of copying it. Never approve or reject review items, and never change my review mode, unless I ask you to in this chat. At the end, log a short summary of what we did and what's next.
+No skill support in your app? Paste the three lines in
+[Make your AI use FlowState](#make-your-ai-use-flowstate).
 
 The server also sends these rules to every app when it connects, and offers them as the MCP
 prompt `flowstate-start`.
+
+## Make your AI use FlowState
+
+FlowState only helps if the AI reads it at the start and writes as it goes. The server already
+says so when an app connects. Paste the same three lines into the app's own rules so it keeps
+doing it:
+
+```text
+Call start_here at the start of a conversation about a project.
+Call log_work right after each decision, change, fix or lesson.
+Call log_work again before you end the session or hand back.
+```
+
+**CLAUDE.md and Claude Code.** Plain markdown, no front matter. Put it in `CLAUDE.md` or
+`.claude/CLAUDE.md` in the project, or in `~/.claude/CLAUDE.md` for every project.
+[How Claude remembers your project](https://code.claude.com/docs/en/memory).
+
+**AGENTS.md and Codex.** Plain markdown. Put it in `AGENTS.md` in the project, or in
+`~/.codex/AGENTS.md` for every repository.
+[Custom instructions with AGENTS.md](https://developers.openai.com/codex/guides/agents-md).
+
+**Cursor.** Save this as `.cursor/rules/flowstate.mdc`. `alwaysApply: true` puts it in every
+chat. A plain `.md` file in that folder is ignored.
+[Rules](https://cursor.com/docs/rules).
+
+```markdown
+---
+description: Keep FlowState project memory up to date
+alwaysApply: true
+---
+
+Call start_here at the start of a conversation about a project.
+Call log_work right after each decision, change, fix or lesson.
+Call log_work again before you end the session or hand back.
+```
+
+**Windsurf.** Save this as `.windsurf/rules/flowstate.md`. `trigger: always_on` includes the
+whole file in every message. The same front matter works in `.devin/rules/` if that is the
+folder your build uses. Current docs still import `.windsurf/rules`.
+[Memories and rules](https://docs.windsurf.com/windsurf/cascade/memories).
+
+```markdown
+---
+trigger: always_on
+---
+
+Call start_here at the start of a conversation about a project.
+Call log_work right after each decision, change, fix or lesson.
+Call log_work again before you end the session or hand back.
+```
+
+**VS Code Copilot.** Plain markdown in `.github/copilot-instructions.md`. Copilot adds that
+file to chat requests in the repository.
+[Custom instructions in VS Code](https://code.visualstudio.com/docs/agent-customization/custom-instructions)
+and [GitHub Copilot custom instructions](https://docs.github.com/en/copilot/concepts/prompting-and-context/custom-instructions).
+
+**Claude Projects and claude.ai.** Open the project, choose **Set project instructions**, and
+paste the three lines. They apply to every chat in that project.
+[How to create and manage projects](https://support.claude.com/en/articles/9519177-how-can-i-create-and-manage-projects).
+
+**ChatGPT.** Settings, Personalization, Custom instructions (on a phone: Settings, Customize
+ChatGPT). Turn customization on and paste the three lines. They apply to your chats.
+[ChatGPT custom instructions](https://help.openai.com/en/articles/8096356-chatgpt-custom-instructions).
 
 ---
 
@@ -985,8 +1078,10 @@ one line on top of the brief; your AI tells you once. Nothing updates on its own
 `flowstate update check off` (or the setting `FLOWSTATE_UPDATE_CHECK=0`) turns the check off
 completely: no request, no line. `flowstate update check on` turns it back on.
 
-FlowState is not on PyPI. Never use `pip install --upgrade flowstate`: that name is an unrelated
-project. Update with `flowstate update` or by hand, as shown here.
+On PyPI the package is `flowstatemcp`. Never use `pip install flowstate` or
+`pip install --upgrade flowstate`: that name is an unrelated project. A `uvx` or `pip install
+flowstatemcp` copy updates when you install a newer release. A git clone updates with
+`flowstate update` or by hand, as shown here.
 
 **From 2.4.0 on: `flowstate update`.** Ask your AI to "update FlowState" (it needs an app that can
 run terminal commands on the computer where FlowState runs; there is no tool for this). It runs

@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.5.0 - 2026-11-07
+
+### Added
+
+- **The free server is the PyPI package `flowstatemcp`.** The import name stays `flowstate`.
+  `uvx flowstatemcp` and `pipx run flowstatemcp` start the stdio server. `pip install flowstatemcp`
+  also installs the existing `flowstate` command. `pip install flowstate` is still a different
+  project. A GitHub release publishes the sdist and wheel with PyPI Trusted Publishing. This
+  commit does not publish, tag, or cut a release.
+- **The next brief reminds an agent that logged nothing.** If the previous session on a project
+  read FlowState and saved no record, the next `start_here` adds one line telling the agent to
+  log decisions and changes as it works. It uses the run ledger already stored on this computer.
+  No new table, no telemetry, no network call.
+- **Copy-paste rules and one-click install.** The README and AGENTS.md have a three-line rule
+  for CLAUDE.md, AGENTS.md, Cursor, Windsurf, VS Code Copilot, Claude Projects, and ChatGPT
+  custom instructions, plus Add to Cursor and Add to VS Code links that install
+  `uvx flowstatemcp`.
+
+### Changed
+
+- **Agents are told when to write, not only what to write.** `log_work`, and the todo, problem,
+  and handoff tools, say to record a decision, change, fix, or lesson right after it happens,
+  and again before the session ends. The connect-time instructions and the FlowState skill
+  (version 2.6) say the same thing.
+
 ## 2.4.9 - 2026-11-07
 
 ### Fixed

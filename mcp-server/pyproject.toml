@@ -3,8 +3,8 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "flowstate"
-version = "2.4.9"
+name = "flowstatemcp"
+version = "2.5.0"
 description = "Local-first shared project memory for AI apps (MCP server)"
 readme = "README.md"
 license = "MIT"
@@ -12,9 +12,10 @@ requires-python = ">=3.11"
 authors = [
     { name = "John Martin" }
 ]
-keywords = ["mcp", "model-context-protocol", "ai", "memory", "sqlite", "local-first"]
+keywords = ["mcp", "model-context-protocol", "ai", "memory", "sqlite", "local-first", "flowstatemcp"]
 classifiers = [
     "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
@@ -22,6 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Software Development",
+    "Environment :: Console",
 ]
 dependencies = [
     "mcp>=1.30,<2",
@@ -29,9 +31,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://dialectforge.com/flowstate/"
+Homepage = "https://flowstatemcp.com"
 Repository = "https://github.com/dialectforge/FlowState"
 Changelog = "https://github.com/dialectforge/FlowState/blob/main/CHANGELOG.md"
+Hosted = "https://flowstatemcp.com/hosted"
 
 [project.optional-dependencies]
 # The off-site encryption needs `cryptography`. `mcp` already brings it, so it is listed here, not
@@ -53,6 +56,7 @@ embeddings = [
 
 [project.scripts]
 flowstate = "flowstate.server:main"
+flowstatemcp = "flowstate.server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["flowstate"]

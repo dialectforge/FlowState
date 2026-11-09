@@ -109,12 +109,22 @@ CHECK = textwrap.dedent(r'''
         return json.loads(res.content[0].text)
 
     async def go():
-        params = StdioServerParameters(command=sys.executable, args=["-m", "flowstate"],
-                                       env=dict(os.environ), cwd=os.getcwd())
+        script = os.environ.get("FLOWSTATE_SCRIPT")
+        if script:
+            params = StdioServerParameters(command=script, args=[], env=dict(os.environ),
+                                           cwd=os.getcwd())
+        else:
+            params = StdioServerParameters(command=sys.executable, args=["-m", "flowstate"],
+                                           env=dict(os.environ), cwd=os.getcwd())
         async with stdio_client(params) as (r, w):
             async with ClientSession(r, w) as s:
                 init = await s.initialize()
                 assert init.serverInfo.version == flowstate.__version__, init.serverInfo.version
+                listed = await s.list_tools()
+                names = [t.name for t in listed.tools]
+                assert "start_here" in names and "log_work" in names, names
+                log_work = next(t for t in listed.tools if t.name == "log_work")
+                assert "right after each decision, change, fix or lesson" in (log_work.description or "")
                 first = await s.call_tool("start_here", {})
                 assert not first.isError, first.content[0].text
                 assert "flowstate_unavailable" not in first.content[0].text
@@ -159,7 +169,7 @@ def _build_wheel(out: Path) -> Path:
     r = subprocess.run([sys.executable, "-m", "pip", "wheel", "--no-deps", *extra, "-w", str(out),
                         str(SERVER_DIR)], capture_output=True, text=True, timeout=600, env=env,
                        cwd=str(out))
-    wheels = list(out.glob("flowstate-*.whl"))
+    wheels = list(out.glob("flowstatemcp-*.whl"))
     if r.returncode != 0 or len(wheels) != 1:
         _skip("building a wheel", r)
     return wheels[0]
@@ -240,16 +250,48 @@ def test_borrowed_pywin32_pth_is_repeated_in_the_temp_venv(tmp_path):
     assert r.returncode == 0 and "PTH-OK" in r.stdout, r.stdout + r.stderr
 
 
+def _build_sdist(out: Path) -> Path:
+    """An sdist next to the wheel. `build` is installed into this interpreter if it is missing
+    (the wheel test already allows a download for hatchling when it is not installed)."""
+    env = dict(os.environ, PIP_NO_INPUT="1", PIP_DISABLE_PIP_VERSION_CHECK="1")
+    env.pop("PYTHONPATH", None)
+    try:
+        import build  # noqa: F401
+    except ImportError:
+        r = subprocess.run([sys.executable, "-m", "pip", "install", "build"],
+                           capture_output=True, text=True, timeout=300, env=env)
+        if r.returncode != 0:
+            _skip("installing the build tool", r)
+    r = subprocess.run([sys.executable, "-m", "build", "--sdist", "--outdir", str(out), str(SERVER_DIR)],
+                       capture_output=True, text=True, timeout=600, env=env, cwd=str(out))
+    sdists = list(out.glob("flowstatemcp-*.tar.gz"))
+    if r.returncode != 0 or len(sdists) != 1:
+        _skip("building an sdist", r)
+    return sdists[0]
+
+
 def test_wheel_installs_and_works_without_the_repository(tmp_path):
     import flowstate
+    from flowstate import migrations
     work = tmp_path / "wheel-test"
     (work / "dist").mkdir(parents=True)
     wheel = _build_wheel(work / "dist")
-    assert wheel.name == f"flowstate-{flowstate.__version__}-py3-none-any.whl"
+    sdist = _build_sdist(work / "dist")
+    assert wheel.name == f"flowstatemcp-{flowstate.__version__}-py3-none-any.whl"
+    assert sdist.name == f"flowstatemcp-{flowstate.__version__}.tar.gz"
     import zipfile
-    names = set(zipfile.ZipFile(wheel).namelist())
+    zf = zipfile.ZipFile(wheel)
+    names = set(zf.namelist())
     assert "flowstate/schema.sql" in names and "flowstate/release_signers" in names
-    assert "flowstate/migrations/001_auto_sessions.sql" in names
+    assert "flowstate/agent_guide.py" in names
+    shipped = {n for n in names if n.startswith("flowstate/migrations/") and n.endswith(".sql")}
+    expected = {f"flowstate/migrations/{p.name}" for p in (PKG / "migrations").glob("[0-9][0-9][0-9]_*.sql")}
+    assert shipped == expected
+    assert [v for v, _n, _p in migrations.available()] == list(range(1, migrations.latest_version() + 1))
+    entry = next(n for n in names if n.endswith(".dist-info/entry_points.txt"))
+    scripts = zf.read(entry).decode("utf-8")
+    assert "flowstatemcp = flowstate.server:main" in scripts
+    assert "flowstate = flowstate.server:main" in scripts
 
     env_dir = work / "venv"
     try:
@@ -275,7 +317,10 @@ def test_wheel_installs_and_works_without_the_repository(tmp_path):
     data.mkdir(parents=True)
     (run_dir / "check.py").write_text(CHECK, encoding="utf-8")
     env = {k: v for k, v in clean.items() if not k.startswith("FLOWSTATE_")}
-    env.update({"PYTHONPATH": str(GUARD_SITE),   # the real-data guard only; no source folder
+    script = env_dir / ("Scripts/flowstatemcp.exe" if os.name == "nt" else "bin/flowstatemcp")
+    assert script.is_file(), script
+    env.update({"FLOWSTATE_SCRIPT": str(script),
+                "PYTHONPATH": str(GUARD_SITE),   # the real-data guard only; no source folder
                 "FLOWSTATE_UPDATE_CHECK": "0", "FLOWSTATE_HOME": str(data),
                 "FLOWSTATE_DB": str(data / "flowstate.db"),
                 "FLOWSTATE_BACKUP_DIR": str(data / "backups"), "FLOWSTATE_CONFIG_DIR": str(data / "config"),
