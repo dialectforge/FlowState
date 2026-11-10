@@ -49,6 +49,7 @@ def test_fresh_install_all_clients(home):
         assert cfg["mcp_servers"]["flowstate"]["command"] == sys.executable
     tables = {r[0] for r in sqlite3.connect(db).execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"projects", "todos", "auto_sessions"} <= tables
+    assert "[hosted] " + setup.HOSTED_NOTE in r.stdout
 
 
 def test_existing_config_preserved_backed_up_and_idempotent(home):
@@ -119,6 +120,7 @@ def test_dry_run_writes_nothing(home):
     assert r.returncode == 0 and "would be added" in r.stdout
     assert not db.exists()
     assert not any(p.is_file() for p in home.rglob("*"))
+    assert "[hosted]" not in r.stdout
 
 
 def test_existing_db_kept_and_migrated(home, seeded_db):
@@ -129,6 +131,7 @@ def test_existing_db_kept_and_migrated(home, seeded_db):
     conn.close()
     r = run_setup(home, "--clients", "none", "--db", str(seeded_db))
     assert r.returncode == 0 and "existing database kept" in r.stdout
+    assert "[hosted]" not in r.stdout
     conn = sqlite3.connect(seeded_db)
     assert conn.execute("SELECT COUNT(*) FROM todos").fetchone()[0] == before
     assert conn.execute("SELECT name FROM sqlite_master WHERE name='auto_sessions'").fetchone()

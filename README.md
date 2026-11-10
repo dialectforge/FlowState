@@ -142,6 +142,8 @@ I built FlowState v1 in January 2026 as a gift to the vibe coder community, back
 
 *John Martin, DialectForge*
 
+FlowState MCP is not related to other products that share the FlowState name, such as a Markdown prompt framework, an academic research paper, or an image tool.
+
 ---
 
 ## Quick start
@@ -173,6 +175,8 @@ claude mcp add --scope user --transport stdio flowstate -- uvx flowstatemcp
 
 Or start the server yourself with `uvx flowstatemcp`. `pipx run flowstatemcp` does the same.
 After `pip install flowstatemcp`, both `flowstatemcp` and `flowstate` start it.
+
+Want it on all your devices without running anything? Try [FlowState Hosted](https://flowstatemcp.com/hosted).
 
 ### Git clone (backups, the skill, and written app configs)
 

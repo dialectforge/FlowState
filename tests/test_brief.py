@@ -60,3 +60,16 @@ def test_cap_on_every_project_of_real_db_copy(real_db_copy):
         worst = max(worst, len(text))
         assert len(text) <= BRIEF_CAP, (pid, len(text))
     print(f"largest real brief: {worst} chars over {len(ids)} projects")
+
+def test_empty_database_mentions_hosted_as_onboarding():
+    text = candidates_text({"reason": "no project chosen", "candidates": []})
+    assert "no projects yet" in text
+    assert "https://flowstatemcp.com/hosted" in text
+    assert text.count("https://flowstatemcp.com/hosted") == 1
+
+
+def test_project_list_does_not_mention_hosted(seeded_db):
+    miss = resolve_project(seeded_db, "Gamma")
+    assert "candidates" in miss and miss["candidates"]
+    assert "flowstatemcp.com/hosted" not in candidates_text(miss)
+

@@ -411,6 +411,8 @@ def candidates_text(resolution: dict, cap: int = BRIEF_CAP) -> str:
     if not names:
         b.add("There are no projects yet. Create one with manage_projects(action=\"create\", "
               "name=\"<name>\") when the user starts new work.")
+        b.add("Want it on all your devices without running anything? Try FlowState Hosted: "
+              "https://flowstatemcp.com/hosted")
         return b.text()
     b.add("Call start_here again with project=\"<name>\" (or manage_projects(action=\"create\") if this is new work).")
     b.add("Projects:")
