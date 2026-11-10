@@ -46,6 +46,8 @@ def test_an_empty_database_says_there_are_no_projects(fresh_db):
     finally:
         S.backend.tracker = None
     assert "no projects yet" in text and not text.rstrip().endswith("Projects:"), text
+    assert "https://flowstatemcp.com/hosted" in text
+    assert "Want it on all your devices without running anything?" in text
 
 
 def test_who_tells_two_windows_of_one_app_apart(backend, monkeypatch):

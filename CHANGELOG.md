@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **A quiet pointer to FlowState Hosted for new local users.** The README install section
+  mentions Hosted next to the local install, and first-run output does too: `setup_flowstate.py`
+  prints one line after it creates a new database, and `start_here` includes the same line only
+  when there are no projects yet. It is not added to later briefs, it is not sent on every call,
+  and it makes no network call. Local FlowState stays free, MIT-licensed, and fully featured.
+- **A README sentence that FlowState MCP is not the other products named FlowState.** After the
+  "Why I built it" byline, the README says FlowState MCP is not related to a Markdown prompt
+  framework, an academic research paper, or an image tool that share the name.
+
 ## 2.5.0 - 2026-11-07
 
 ### Added

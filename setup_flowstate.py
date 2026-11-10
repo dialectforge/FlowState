@@ -62,6 +62,10 @@ UPDATE_CHECK_NOTE = (
     "release. It sends nothing about you or your projects (only what any web request reveals: "
     "your IP address). Turn it off with `flowstate update check off`.")
 
+HOSTED_NOTE = (
+    "Want it on all your devices without running anything? Try FlowState Hosted: "
+    "https://flowstatemcp.com/hosted")
+
 
 def say(msg: str) -> None:
     print(msg, flush=True)
@@ -719,7 +723,7 @@ def main(argv=None) -> int:
     say(f"[python] server runs with {py}")
 
     db = Path(a.db).expanduser().resolve() if a.db else places.default_db()
-    ensure_db(db, a.dry_run)
+    db_status = ensure_db(db, a.dry_run)
     failures = 0
     if not run_migrations(py, db, places, a.dry_run):
         say("[db] FAILED to apply migrations (see above); your data was not changed")
@@ -754,6 +758,8 @@ def main(argv=None) -> int:
         failures += not ok
 
     say("[updates] " + UPDATE_CHECK_NOTE)
+    if db_status == "created" and not a.dry_run:
+        say("[hosted] " + HOSTED_NOTE)
     say("Done. Restart each app you registered (fully quit it, then reopen) so it loads FlowState."
         if not failures else "Finished with problems; see the lines marked refused/FAILED above.")
     return 1 if failures else 0
