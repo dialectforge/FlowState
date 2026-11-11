@@ -254,6 +254,12 @@ snippets for every app, if you'd rather edit configs by hand, are in [AGENTS.md]
 
 ---
 
+## Questions, or just saying hi
+
+If you are using FlowState and want setup help, or just want to say you are here, email [hello@flowstatemcp.com](mailto:hello@flowstatemcp.com) or post in [Discussions](https://github.com/dialectforge/FlowState/discussions). Local FlowState does not send us usage data or anything about your projects. The only automatic network call is a daily check of GitHub's public releases, which you can turn off. Don't want to install or keep a computer on? [FlowState Hosted](https://flowstatemcp.com/hosted) is the no-install option.
+
+---
+
 ## Guides and tools
 
 Short public pages on [flowstatemcp.com](https://flowstatemcp.com). The tools are free, need no
