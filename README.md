@@ -1,6 +1,7 @@
 # FlowState
 
 [![mcptry](https://mcptry.com/badge/io.github.dialectforge/flowstate-hosted)](https://mcptry.com/servers/io.github.dialectforge/flowstate-hosted)
+[![dialectforge/FlowState MCP server](https://glama.ai/mcp/servers/dialectforge/FlowState/badges/score.svg)](https://glama.ai/mcp/servers/dialectforge/FlowState)
 
 **A shared project memory for your AI apps. Free, open source, and stored on your own machine.**
 
